@@ -1,0 +1,6 @@
+{
+  "name": "LedgerCalc",
+  "description": "Installable mobile business calculator for profit margin, markup, tax, discounts, break-even, and loan estimates.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,1209 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Reusable Hardened Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerified() && (
+        request.auth.token.email == 'dicksonpetroj1@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidRegCode(code) {
+      return code is string && code.size() >= 6 && code.size() <= 32 && code.matches('^[A-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function schoolOwnerId(schoolId) {
+      return get(/databases/$(database)/documents/schools/$(schoolId)).data.ownerId;
+    }
+
+    function isSchoolOwner(schoolId) {
+      return isVerified() && (
+        isAdmin() ||
+        schoolOwnerId(schoolId) == request.auth.uid
+      );
+    }
+
+    function staffAccessKey(email) {
+      return 'stf_' + email.lower().replace('[^a-z0-9]', '_');
+    }
+
+    function hasStaffAccess(schoolId) {
+      return isVerified()
+        && 'email' in request.auth.token
+        && request.auth.token.email is string
+        && request.auth.token.email.size() >= 3
+        && exists(/databases/$(database)/documents/schools/$(schoolId)/staffAccess/$(staffAccessKey(request.auth.token.email)))
+        && get(/databases/$(database)/documents/schools/$(schoolId)/staffAccess/$(staffAccessKey(request.auth.token.email))).data.staffEmail == request.auth.token.email.lower()
+        && get(/databases/$(database)/documents/schools/$(schoolId)/staffAccess/$(staffAccessKey(request.auth.token.email))).data.status == 'Active';
+    }
+
+    function staffRole(schoolId) {
+      return get(/databases/$(database)/documents/schools/$(schoolId)/staffAccess/$(staffAccessKey(request.auth.token.email))).data.roleTitle;
+    }
+
+    function isSchoolHead(schoolId) {
+      return isSchoolOwner(schoolId) || (
+        hasStaffAccess(schoolId) && staffRole(schoolId) in ['Head Teacher', 'Deputy Head']
+      );
+    }
+
+    function isAcademicStaff(schoolId) {
+      return isSchoolOwner(schoolId) || (
+        hasStaffAccess(schoolId) && staffRole(schoolId) in [
+          'Head Teacher', 'Deputy Head', 'Head of Department', 'Form Master', 'Subject Teacher'
+        ]
+      );
+    }
+
+    function isBursarStaff(schoolId) {
+      return isSchoolOwner(schoolId) || (
+        hasStaffAccess(schoolId) && staffRole(schoolId) in ['Head Teacher', 'School Bursar']
+      );
+    }
+
+    function isLibraryStaff(schoolId) {
+      return isSchoolOwner(schoolId) || (
+        hasStaffAccess(schoolId) && staffRole(schoolId) in [
+          'Head Teacher', 'Deputy Head', 'School Librarian',
+          'Head of Department', 'Form Master', 'Subject Teacher'
+        ]
+      );
+    }
+
+    function isAnySchoolStaff(schoolId) {
+      return isSchoolOwner(schoolId) || hasStaffAccess(schoolId);
+    }
+
+    // --- Validation Blueprints ---
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'activeSchoolId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'activeSchoolId', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == request.auth.uid
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && isValidId(data.activeSchoolId)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSchool(data) {
+      return data.keys().hasAll([
+          'ownerId', 'name', 'district', 'schoolType', 'motto',
+          'academicYear', 'currentTerm', 'defaultTuitionMWK', 'defaultGpfMWK',
+          'defaultExamFeeMWK', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'name', 'district', 'schoolType', 'motto',
+          'academicYear', 'currentTerm', 'defaultTuitionMWK', 'defaultGpfMWK',
+          'defaultExamFeeMWK', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 60
+        && data.schoolType in ['Government Day', 'Government Boarding', 'Grant-Aided', 'Private']
+        && data.motto is string && data.motto.size() <= 140
+        && data.academicYear is string && data.academicYear.size() >= 4 && data.academicYear.size() <= 20
+        && data.currentTerm in ['Term 1', 'Term 2', 'Term 3']
+        && data.defaultTuitionMWK is number && data.defaultTuitionMWK >= 0 && data.defaultTuitionMWK <= 100000000
+        && data.defaultGpfMWK is number && data.defaultGpfMWK >= 0 && data.defaultGpfMWK <= 100000000
+        && data.defaultExamFeeMWK is number && data.defaultExamFeeMWK >= 0 && data.defaultExamFeeMWK <= 100000000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStudent(data) {
+      return data.keys().hasAll([
+          'ownerId', 'admissionNo', 'fullName', 'gender', 'formLevel', 'stream',
+          'boardingStatus', 'guardianName', 'guardianPhone', 'studentEmail',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'admissionNo', 'fullName', 'gender', 'formLevel', 'stream',
+          'entryYear', 'boardingStatus', 'guardianName', 'guardianPhone', 'guardianSecondaryPhone',
+          'guardianRelationship', 'emergencyContactName', 'emergencyContactPhone',
+          'emergencyNotes', 'studentEmail', 'registrationCode', 'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 40
+        && data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 120
+        && data.gender in ['Male', 'Female']
+        && data.formLevel is int && data.formLevel >= 1 && data.formLevel <= 4
+        && data.stream is string && data.stream.size() >= 1 && data.stream.size() <= 20
+        && (!('entryYear' in data) || (data.entryYear is int && data.entryYear >= 2000 && data.entryYear <= 2100))
+        && data.boardingStatus in ['Day Scholar', 'Boarder']
+        && data.guardianName is string && data.guardianName.size() >= 1 && data.guardianName.size() <= 120
+        && data.guardianPhone is string && data.guardianPhone.size() <= 30
+        && (!('guardianSecondaryPhone' in data) || (data.guardianSecondaryPhone is string && data.guardianSecondaryPhone.size() <= 30))
+        && (!('guardianRelationship' in data) || (data.guardianRelationship is string && data.guardianRelationship.size() <= 40))
+        && (!('emergencyContactName' in data) || (data.emergencyContactName is string && data.emergencyContactName.size() <= 120))
+        && (!('emergencyContactPhone' in data) || (data.emergencyContactPhone is string && data.emergencyContactPhone.size() <= 30))
+        && (!('emergencyNotes' in data) || (data.emergencyNotes is string && data.emergencyNotes.size() <= 240))
+        && data.studentEmail is string && data.studentEmail.size() <= 160
+        && (!('registrationCode' in data) || (data.registrationCode is string && data.registrationCode.size() <= 32))
+        && data.status in ['Active', 'Transferred', 'Suspended', 'Graduated']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTeacher(data) {
+      return data.keys().hasAll([
+          'ownerId', 'staffCode', 'fullName', 'roleTitle', 'subjects',
+          'assignedForm', 'phone', 'staffEmail', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'staffCode', 'fullName', 'roleTitle', 'subjects',
+          'assignedForm', 'phone', 'staffEmail', 'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && data.staffCode is string && data.staffCode.size() >= 1 && data.staffCode.size() <= 40
+        && data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 120
+        && data.roleTitle in [
+          'Head Teacher', 'Deputy Head', 'Head of Department',
+          'Form Master', 'Subject Teacher', 'School Librarian', 'School Bursar'
+        ]
+        && data.subjects is list && data.subjects.size() >= 1 && data.subjects.size() <= 8
+        && data.subjects[0] is string && data.subjects[0].size() <= 60
+        && data.assignedForm is string && data.assignedForm.size() >= 1 && data.assignedForm.size() <= 30
+        && data.phone is string && data.phone.size() <= 30
+        && data.staffEmail is string && data.staffEmail.size() <= 120
+        && data.status in ['Active', 'On Leave']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStaffAccess(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'teacherId', 'staffEmail', 'roleTitle',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'teacherId', 'staffEmail', 'roleTitle',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && isValidId(data.teacherId)
+        && data.staffEmail is string && data.staffEmail.size() >= 3 && data.staffEmail.size() <= 120
+        && data.roleTitle in [
+          'Head Teacher', 'Deputy Head', 'Head of Department',
+          'Form Master', 'Subject Teacher', 'School Librarian', 'School Bursar'
+        ]
+        && data.status in ['Active', 'On Leave']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStaffLink(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'schoolName', 'schoolDistrict', 'schoolType',
+          'academicYear', 'currentTerm', 'teacherId', 'staffName', 'staffCode',
+          'roleTitle', 'subjects', 'assignedForm', 'staffEmail', 'status',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'schoolName', 'schoolDistrict', 'schoolType',
+          'academicYear', 'currentTerm', 'teacherId', 'staffName', 'staffCode',
+          'roleTitle', 'subjects', 'assignedForm', 'staffEmail', 'status',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && data.schoolName is string && data.schoolName.size() >= 2 && data.schoolName.size() <= 120
+        && data.schoolDistrict is string && data.schoolDistrict.size() >= 2 && data.schoolDistrict.size() <= 60
+        && data.schoolType in ['Government Day', 'Government Boarding', 'Grant-Aided', 'Private']
+        && data.academicYear is string && data.academicYear.size() >= 4 && data.academicYear.size() <= 20
+        && data.currentTerm in ['Term 1', 'Term 2', 'Term 3']
+        && isValidId(data.teacherId)
+        && data.staffName is string && data.staffName.size() >= 2 && data.staffName.size() <= 120
+        && data.staffCode is string && data.staffCode.size() >= 1 && data.staffCode.size() <= 40
+        && data.roleTitle in [
+          'Head Teacher', 'Deputy Head', 'Head of Department',
+          'Form Master', 'Subject Teacher', 'School Librarian', 'School Bursar'
+        ]
+        && data.subjects is list && data.subjects.size() >= 1 && data.subjects.size() <= 8
+        && data.subjects[0] is string && data.subjects[0].size() <= 60
+        && data.assignedForm is string && data.assignedForm.size() >= 1 && data.assignedForm.size() <= 30
+        && data.staffEmail is string && data.staffEmail.size() >= 3 && data.staffEmail.size() <= 120
+        && data.status in ['Active', 'On Leave']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAssessment(data) {
+      return data.keys().hasAll([
+          'ownerId', 'studentId', 'studentName', 'studentEmail', 'formLevel', 'stream', 'term',
+          'academicYear', 'subject',
+          'ca1Raw', 'ca1Max', 'ca1Score',
+          'ca2Raw', 'ca2Max', 'ca2Score',
+          'caScore',
+          'examRaw', 'examMax', 'examScore',
+          'totalScore', 'grade', 'gradePoint', 'remark', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'studentId', 'studentName', 'studentEmail', 'formLevel', 'stream', 'term',
+          'academicYear', 'subject',
+          'ca1Raw', 'ca1Max', 'ca1Score',
+          'ca2Raw', 'ca2Max', 'ca2Score',
+          'caScore',
+          'examRaw', 'examMax', 'examScore',
+          'totalScore', 'grade', 'gradePoint', 'remark', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.studentId)
+        && data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 120
+        && data.studentEmail is string && data.studentEmail.size() <= 160
+        && data.formLevel is int && data.formLevel >= 1 && data.formLevel <= 4
+        && data.stream is string && data.stream.size() >= 1 && data.stream.size() <= 20
+        && data.term in ['Term 1', 'Term 2', 'Term 3']
+        && data.academicYear is string && data.academicYear.size() >= 4 && data.academicYear.size() <= 20
+        && data.subject is string && data.subject.size() >= 2 && data.subject.size() <= 60
+        && data.ca1Raw is number && data.ca1Raw >= 0 && data.ca1Raw <= 1000
+        && data.ca1Max is number && data.ca1Max >= 0 && data.ca1Max <= 1000 && data.ca1Raw <= data.ca1Max
+        && data.ca1Score is number && data.ca1Score >= 0 && data.ca1Score <= 20
+        && data.ca2Raw is number && data.ca2Raw >= 0 && data.ca2Raw <= 1000
+        && data.ca2Max is number && data.ca2Max >= 0 && data.ca2Max <= 1000 && data.ca2Raw <= data.ca2Max
+        && data.ca2Score is number && data.ca2Score >= 0 && data.ca2Score <= 20
+        && data.caScore is number && data.caScore >= 0 && data.caScore <= 40
+        && data.examRaw is number && data.examRaw >= 0 && data.examRaw <= 1000
+        && data.examMax is number && data.examMax >= 0 && data.examMax <= 1000 && data.examRaw <= data.examMax
+        && data.examScore is number && data.examScore >= 0 && data.examScore <= 60
+        && data.totalScore is number && data.totalScore >= 0 && data.totalScore <= 100
+        && data.grade is string && data.grade.size() >= 1 && data.grade.size() <= 10
+        && data.gradePoint is int && data.gradePoint >= 1 && data.gradePoint <= 9
+        && data.remark is string && data.remark.size() >= 1 && data.remark.size() <= 40
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStudentLink(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'schoolName', 'schoolDistrict', 'schoolType',
+          'motto', 'academicYear', 'currentTerm', 'studentId', 'studentName',
+          'admissionNo', 'formLevel', 'stream', 'boardingStatus', 'studentEmail',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'schoolName', 'schoolDistrict', 'schoolType',
+          'motto', 'academicYear', 'currentTerm', 'studentId', 'studentName',
+          'admissionNo', 'formLevel', 'stream', 'boardingStatus', 'studentEmail',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && data.schoolName is string && data.schoolName.size() >= 2 && data.schoolName.size() <= 120
+        && data.schoolDistrict is string && data.schoolDistrict.size() >= 2 && data.schoolDistrict.size() <= 60
+        && data.schoolType in ['Government Day', 'Government Boarding', 'Grant-Aided', 'Private']
+        && data.motto is string && data.motto.size() <= 140
+        && data.academicYear is string && data.academicYear.size() >= 4 && data.academicYear.size() <= 20
+        && data.currentTerm in ['Term 1', 'Term 2', 'Term 3']
+        && isValidId(data.studentId)
+        && data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 120
+        && data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 40
+        && data.formLevel is int && data.formLevel >= 1 && data.formLevel <= 4
+        && data.stream is string && data.stream.size() >= 1 && data.stream.size() <= 20
+        && data.boardingStatus in ['Day Scholar', 'Boarder']
+        && data.studentEmail is string && data.studentEmail.size() >= 3 && data.studentEmail.size() <= 160
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStudentPortal(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'schoolName', 'schoolDistrict', 'schoolType',
+          'motto', 'academicYear', 'currentTerm', 'studentId', 'studentName',
+          'admissionNo', 'formLevel', 'stream', 'boardingStatus', 'registrationCode',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'schoolName', 'schoolDistrict', 'schoolType',
+          'motto', 'academicYear', 'currentTerm', 'studentId', 'studentName',
+          'admissionNo', 'formLevel', 'stream', 'boardingStatus', 'registrationCode',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && data.schoolName is string && data.schoolName.size() >= 2 && data.schoolName.size() <= 120
+        && data.schoolDistrict is string && data.schoolDistrict.size() >= 2 && data.schoolDistrict.size() <= 60
+        && data.schoolType in ['Government Day', 'Government Boarding', 'Grant-Aided', 'Private']
+        && data.motto is string && data.motto.size() <= 140
+        && data.academicYear is string && data.academicYear.size() >= 4 && data.academicYear.size() <= 20
+        && data.currentTerm in ['Term 1', 'Term 2', 'Term 3']
+        && isValidId(data.studentId)
+        && data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 120
+        && data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 40
+        && data.formLevel is int && data.formLevel >= 1 && data.formLevel <= 4
+        && data.stream is string && data.stream.size() >= 1 && data.stream.size() <= 20
+        && data.boardingStatus in ['Day Scholar', 'Boarder']
+        && isValidRegCode(data.registrationCode)
+        && data.status in ['Active', 'Transferred', 'Suspended', 'Graduated']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPortalResult(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'registrationCode', 'studentId', 'studentName',
+          'formLevel', 'stream', 'term', 'academicYear', 'subject',
+          'ca1Raw', 'ca1Max', 'ca1Score',
+          'ca2Raw', 'ca2Max', 'ca2Score',
+          'caScore',
+          'examRaw', 'examMax', 'examScore',
+          'totalScore', 'grade', 'gradePoint', 'remark', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'registrationCode', 'studentId', 'studentName',
+          'formLevel', 'stream', 'term', 'academicYear', 'subject',
+          'ca1Raw', 'ca1Max', 'ca1Score',
+          'ca2Raw', 'ca2Max', 'ca2Score',
+          'caScore',
+          'examRaw', 'examMax', 'examScore',
+          'totalScore', 'grade', 'gradePoint', 'remark', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && isValidRegCode(data.registrationCode)
+        && isValidId(data.studentId)
+        && data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 120
+        && data.formLevel is int && data.formLevel >= 1 && data.formLevel <= 4
+        && data.stream is string && data.stream.size() >= 1 && data.stream.size() <= 20
+        && data.term in ['Term 1', 'Term 2', 'Term 3']
+        && data.academicYear is string && data.academicYear.size() >= 4 && data.academicYear.size() <= 20
+        && data.subject is string && data.subject.size() >= 2 && data.subject.size() <= 60
+        && data.ca1Raw is number && data.ca1Raw >= 0 && data.ca1Raw <= 1000
+        && data.ca1Max is number && data.ca1Max >= 0 && data.ca1Max <= 1000 && data.ca1Raw <= data.ca1Max
+        && data.ca1Score is number && data.ca1Score >= 0 && data.ca1Score <= 20
+        && data.ca2Raw is number && data.ca2Raw >= 0 && data.ca2Raw <= 1000
+        && data.ca2Max is number && data.ca2Max >= 0 && data.ca2Max <= 1000 && data.ca2Raw <= data.ca2Max
+        && data.ca2Score is number && data.ca2Score >= 0 && data.ca2Score <= 20
+        && data.caScore is number && data.caScore >= 0 && data.caScore <= 40
+        && data.examRaw is number && data.examRaw >= 0 && data.examRaw <= 1000
+        && data.examMax is number && data.examMax >= 0 && data.examMax <= 1000 && data.examRaw <= data.examMax
+        && data.examScore is number && data.examScore >= 0 && data.examScore <= 60
+        && data.totalScore is number && data.totalScore >= 0 && data.totalScore <= 100
+        && data.grade is string && data.grade.size() >= 1 && data.grade.size() <= 10
+        && data.gradePoint is int && data.gradePoint >= 1 && data.gradePoint <= 9
+        && data.remark is string && data.remark.size() >= 1 && data.remark.size() <= 40
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFeeInvoice(data) {
+      return data.keys().hasAll([
+          'ownerId', 'studentId', 'studentName', 'formLevel', 'stream', 'term',
+          'academicYear', 'tuitionFee', 'gpfFee', 'examFee', 'otherFee',
+          'totalBilled', 'totalPaid', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'studentId', 'studentName', 'formLevel', 'stream', 'term',
+          'academicYear', 'tuitionFee', 'gpfFee', 'examFee', 'otherFee',
+          'totalBilled', 'totalPaid', 'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.studentId)
+        && data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 120
+        && data.formLevel is int && data.formLevel >= 1 && data.formLevel <= 4
+        && data.stream is string && data.stream.size() >= 1 && data.stream.size() <= 20
+        && data.term in ['Term 1', 'Term 2', 'Term 3']
+        && data.academicYear is string && data.academicYear.size() >= 4 && data.academicYear.size() <= 20
+        && data.tuitionFee is number && data.tuitionFee >= 0 && data.tuitionFee <= 100000000
+        && data.gpfFee is number && data.gpfFee >= 0 && data.gpfFee <= 100000000
+        && data.examFee is number && data.examFee >= 0 && data.examFee <= 100000000
+        && data.otherFee is number && data.otherFee >= 0 && data.otherFee <= 100000000
+        && data.totalBilled is number && data.totalBilled >= 0 && data.totalBilled <= 400000000
+        && data.totalPaid is number && data.totalPaid >= 0 && data.totalPaid <= 400000000
+        && data.status in ['Unpaid', 'Partial', 'Paid']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFeePayment(data) {
+      return data.keys().hasAll([
+          'ownerId', 'invoiceId', 'studentId', 'studentName', 'receiptNo',
+          'amount', 'method', 'reference', 'term', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'invoiceId', 'studentId', 'studentName', 'receiptNo',
+          'amount', 'method', 'reference', 'term', 'createdAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.invoiceId)
+        && isValidId(data.studentId)
+        && data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 120
+        && data.receiptNo is string && data.receiptNo.size() >= 2 && data.receiptNo.size() <= 40
+        && data.amount is number && data.amount > 0 && data.amount <= 100000000
+        && data.method in ['Cash (Bursar)', 'Bank Deposit', 'Airtel Money', 'TNM Mpamba']
+        && data.reference is string && data.reference.size() <= 80
+        && data.term in ['Term 1', 'Term 2', 'Term 3']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidLibraryLoan(data) {
+      return data.keys().hasAll([
+          'ownerId', 'studentId', 'studentName', 'admissionNo', 'formLevel', 'stream',
+          'bookTitle', 'materialType', 'subject', 'bookCode', 'quantity',
+          'checkoutDate', 'dueDate', 'returnedDate', 'status', 'conditionOnReturn',
+          'notes', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'studentId', 'studentName', 'admissionNo', 'formLevel', 'stream',
+          'bookTitle', 'materialType', 'subject', 'bookCode', 'quantity',
+          'checkoutDate', 'dueDate', 'returnedDate', 'status', 'conditionOnReturn',
+          'notes', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.studentId)
+        && data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 120
+        && data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 40
+        && data.formLevel is int && data.formLevel >= 1 && data.formLevel <= 4
+        && data.stream is string && data.stream.size() >= 1 && data.stream.size() <= 20
+        && data.bookTitle is string && data.bookTitle.size() >= 2 && data.bookTitle.size() <= 140
+        && data.materialType in ['Textbook', 'Set Book', 'Reference Book', 'Past Papers', 'Reader / Novel', 'Science Manual']
+        && data.subject is string && data.subject.size() <= 60
+        && data.bookCode is string && data.bookCode.size() >= 1 && data.bookCode.size() <= 40
+        && data.quantity is int && data.quantity >= 1 && data.quantity <= 20
+        && data.checkoutDate is string && data.checkoutDate.size() == 10 && data.checkoutDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.dueDate is string && data.dueDate.size() == 10 && data.dueDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.returnedDate is string && (data.returnedDate == '' || (data.returnedDate.size() == 10 && data.returnedDate.matches('^\\d{4}-\\d{2}-\\d{2}$')))
+        && data.status in ['Checked Out', 'Returned']
+        && data.conditionOnReturn in ['Good', 'Fair', 'Damaged', 'Lost']
+        && data.notes is string && data.notes.size() <= 240
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPortalLibraryLoan(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'registrationCode', 'studentId', 'studentName',
+          'formLevel', 'stream', 'bookTitle', 'materialType', 'subject', 'bookCode',
+          'quantity', 'checkoutDate', 'dueDate', 'returnedDate', 'status',
+          'conditionOnReturn', 'notes', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'registrationCode', 'studentId', 'studentName',
+          'formLevel', 'stream', 'bookTitle', 'materialType', 'subject', 'bookCode',
+          'quantity', 'checkoutDate', 'dueDate', 'returnedDate', 'status',
+          'conditionOnReturn', 'notes', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && isValidRegCode(data.registrationCode)
+        && isValidId(data.studentId)
+        && data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 120
+        && data.formLevel is int && data.formLevel >= 1 && data.formLevel <= 4
+        && data.stream is string && data.stream.size() >= 1 && data.stream.size() <= 20
+        && data.bookTitle is string && data.bookTitle.size() >= 2 && data.bookTitle.size() <= 140
+        && data.materialType in ['Textbook', 'Set Book', 'Reference Book', 'Past Papers', 'Reader / Novel', 'Science Manual']
+        && data.subject is string && data.subject.size() <= 60
+        && data.bookCode is string && data.bookCode.size() >= 1 && data.bookCode.size() <= 40
+        && data.quantity is int && data.quantity >= 1 && data.quantity <= 20
+        && data.checkoutDate is string && data.checkoutDate.size() == 10 && data.checkoutDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.dueDate is string && data.dueDate.size() == 10 && data.dueDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.returnedDate is string && (data.returnedDate == '' || (data.returnedDate.size() == 10 && data.returnedDate.matches('^\\d{4}-\\d{2}-\\d{2}$')))
+        && data.status in ['Checked Out', 'Returned']
+        && data.conditionOnReturn in ['Good', 'Fair', 'Damaged', 'Lost']
+        && data.notes is string && data.notes.size() <= 240
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAttendance(data) {
+      return data.keys().hasAll([
+          'ownerId', 'date', 'formLevel', 'stream', 'studentId',
+          'studentName', 'status', 'note', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'date', 'formLevel', 'stream', 'studentId',
+          'studentName', 'status', 'note', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && data.date is string && data.date.size() == 10 && data.date.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.formLevel is int && data.formLevel >= 1 && data.formLevel <= 4
+        && data.stream is string && data.stream.size() >= 1 && data.stream.size() <= 20
+        && isValidId(data.studentId)
+        && data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 120
+        && data.status in ['Present', 'Absent', 'Late', 'Excused']
+        && data.note is string && data.note.size() <= 140
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSmsConfig(data) {
+      return data.keys().hasAll([
+          'ownerId', 'autoPaymentSms', 'autoLowBalanceSms',
+          'lowBalanceThresholdMWK', 'senderLabel', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'autoPaymentSms', 'autoLowBalanceSms',
+          'lowBalanceThresholdMWK', 'senderLabel', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && data.autoPaymentSms is bool
+        && data.autoLowBalanceSms is bool
+        && data.lowBalanceThresholdMWK is number
+        && data.lowBalanceThresholdMWK >= 0
+        && data.lowBalanceThresholdMWK <= 100000000
+        && data.senderLabel is string && data.senderLabel.size() >= 1 && data.senderLabel.size() <= 40
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSmsLog(data) {
+      return data.keys().hasAll([
+          'ownerId', 'invoiceId', 'studentId', 'studentName',
+          'guardianName', 'guardianPhone', 'type', 'message',
+          'amountMWK', 'balanceAfterMWK', 'status', 'provider',
+          'providerRef', 'errorReason', 'term', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'invoiceId', 'studentId', 'studentName',
+          'guardianName', 'guardianPhone', 'type', 'message',
+          'amountMWK', 'balanceAfterMWK', 'status', 'provider',
+          'providerRef', 'errorReason', 'term', 'createdAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.invoiceId)
+        && isValidId(data.studentId)
+        && data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 120
+        && data.guardianName is string && data.guardianName.size() >= 1 && data.guardianName.size() <= 120
+        && data.guardianPhone is string && data.guardianPhone.size() <= 30
+        && data.type in ['Payment Confirmation', 'Low Balance Alert']
+        && data.message is string && data.message.size() >= 1 && data.message.size() <= 320
+        && data.amountMWK is number && data.amountMWK >= 0 && data.amountMWK <= 400000000
+        && data.balanceAfterMWK is number && data.balanceAfterMWK >= 0 && data.balanceAfterMWK <= 400000000
+        && data.status in ['Sent', 'Simulated', 'Failed', 'Skipped']
+        && data.provider is string && data.provider.size() <= 40
+        && data.providerRef is string && data.providerRef.size() <= 100
+        && data.errorReason is string && data.errorReason.size() <= 160
+        && data.term in ['Term 1', 'Term 2', 'Term 3']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSchoolSubject(data) {
+      return data.keys().hasAll([
+          'ownerId', 'name', 'code', 'formLevels', 'isCore', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'name', 'code', 'formLevels', 'isCore', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 60
+        && data.code is string && data.code.size() <= 16
+        && data.formLevels is list && data.formLevels.size() >= 1 && data.formLevels.size() <= 4
+        && data.formLevels[0] is int
+        && data.formLevels.hasOnly([1, 2, 3, 4])
+        && data.isCore is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+
+    // Admins collection: read-only self or admin, no client writes
+    match /admins/{adminId} {
+      allow get: if isVerified() && (request.auth.uid == adminId || isAdmin());
+      allow list, create, update, delete: if false;
+    }
+
+    // User Profiles: strict owner-only isolation
+    match /users/{userId} {
+      allow get: if isVerified() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isVerified() && (existing().uid == request.auth.uid || isAdmin());
+      allow create: if isVerified() && isValidId(userId)
+        && request.auth.uid == userId
+        && isValidUserProfile(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerified() && isValidId(userId)
+        && (request.auth.uid == userId || isAdmin())
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'activeSchoolId', 'updatedAt']);
+      allow delete: if isVerified() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+    }
+
+    // Student Registration Code Portals: non-enumerable code lookup (zero PII)
+    match /studentPortals/{registrationCode} {
+      allow get: if isValidRegCode(registrationCode);
+      allow list: if isVerified() && (
+        existing().ownerId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isVerified() && isValidRegCode(registrationCode)
+        && isValidStudentPortal(incoming())
+        && incoming().registrationCode == registrationCode
+        && isSchoolHead(incoming().schoolId)
+        && incoming().ownerId == schoolOwnerId(incoming().schoolId)
+        && existsAfter(/databases/$(database)/documents/schools/$(incoming().schoolId)/students/$(incoming().studentId))
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerified() && isValidRegCode(registrationCode)
+        && isValidStudentPortal(incoming())
+        && isSchoolHead(existing().schoolId)
+        && incoming().ownerId == existing().ownerId
+        && incoming().schoolId == existing().schoolId
+        && incoming().studentId == existing().studentId
+        && incoming().registrationCode == existing().registrationCode
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'schoolName', 'schoolDistrict', 'schoolType', 'motto',
+            'academicYear', 'currentTerm', 'studentName', 'admissionNo',
+            'formLevel', 'stream', 'boardingStatus', 'status', 'updatedAt'
+          ])
+        );
+      allow delete: if isVerified() && isValidRegCode(registrationCode) && (
+        existing().ownerId == request.auth.uid ||
+        isAdmin() ||
+        isSchoolHead(existing().schoolId)
+      );
+
+      match /results/{assessmentId} {
+        allow get: if isValidRegCode(registrationCode) && isValidId(assessmentId);
+        allow list: if isValidRegCode(registrationCode)
+          && existing().registrationCode == registrationCode;
+        allow create: if isVerified() && isValidRegCode(registrationCode) && isValidId(assessmentId)
+          && isValidPortalResult(incoming())
+          && incoming().registrationCode == registrationCode
+          && isAcademicStaff(incoming().schoolId)
+          && incoming().ownerId == schoolOwnerId(incoming().schoolId)
+          && exists(/databases/$(database)/documents/schools/$(incoming().schoolId)/students/$(incoming().studentId))
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerified() && isValidRegCode(registrationCode) && isValidId(assessmentId)
+          && isValidPortalResult(incoming())
+          && isAcademicStaff(existing().schoolId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().registrationCode == existing().registrationCode
+          && incoming().studentId == existing().studentId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'studentName', 'formLevel', 'stream', 'term', 'academicYear', 'subject',
+              'ca1Raw', 'ca1Max', 'ca1Score',
+              'ca2Raw', 'ca2Max', 'ca2Score',
+              'caScore',
+              'examRaw', 'examMax', 'examScore',
+              'totalScore', 'grade', 'gradePoint', 'remark', 'updatedAt'
+            ])
+          );
+        allow delete: if isVerified() && isValidRegCode(registrationCode) && isValidId(assessmentId) && (
+          existing().ownerId == request.auth.uid ||
+          isAdmin() ||
+          isAcademicStaff(existing().schoolId)
+        );
+      }
+
+      match /libraryLoans/{loanId} {
+        allow get: if isValidRegCode(registrationCode) && isValidId(loanId);
+        allow list: if isValidRegCode(registrationCode)
+          && existing().registrationCode == registrationCode;
+        allow create: if isVerified() && isValidRegCode(registrationCode) && isValidId(loanId)
+          && isValidPortalLibraryLoan(incoming())
+          && incoming().registrationCode == registrationCode
+          && isLibraryStaff(incoming().schoolId)
+          && incoming().ownerId == schoolOwnerId(incoming().schoolId)
+          && exists(/databases/$(database)/documents/schools/$(incoming().schoolId)/students/$(incoming().studentId))
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerified() && isValidRegCode(registrationCode) && isValidId(loanId)
+          && isValidPortalLibraryLoan(incoming())
+          && isLibraryStaff(existing().schoolId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().registrationCode == existing().registrationCode
+          && incoming().studentId == existing().studentId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'studentName', 'formLevel', 'stream', 'bookTitle', 'materialType',
+              'subject', 'bookCode', 'quantity', 'checkoutDate', 'dueDate',
+              'returnedDate', 'status', 'conditionOnReturn', 'notes', 'updatedAt'
+            ])
+          );
+        allow delete: if isVerified() && isValidRegCode(registrationCode) && isValidId(loanId) && (
+          existing().ownerId == request.auth.uid ||
+          isAdmin() ||
+          isLibraryStaff(existing().schoolId)
+        );
+      }
+    }
+
+    // Student Portal Links: verified students locate their enrolled school(s)
+    match /studentLinks/{linkId} {
+      allow get: if isVerified() && isValidId(linkId) && (
+        existing().ownerId == request.auth.uid ||
+        isAdmin() ||
+        isSchoolHead(existing().schoolId) ||
+        existing().studentEmail == request.auth.token.email.lower()
+      );
+      allow list: if isVerified() && (
+        existing().ownerId == request.auth.uid ||
+        isAdmin() ||
+        existing().studentEmail == request.auth.token.email.lower()
+      );
+      allow create: if isVerified() && isValidId(linkId)
+        && isValidStudentLink(incoming())
+        && isSchoolHead(incoming().schoolId)
+        && incoming().ownerId == schoolOwnerId(incoming().schoolId)
+        && existsAfter(/databases/$(database)/documents/schools/$(incoming().schoolId)/students/$(incoming().studentId))
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerified() && isValidId(linkId)
+        && isValidStudentLink(incoming())
+        && isSchoolHead(existing().schoolId)
+        && incoming().ownerId == existing().ownerId
+        && incoming().schoolId == existing().schoolId
+        && incoming().studentId == existing().studentId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'schoolName', 'schoolDistrict', 'schoolType', 'motto',
+            'academicYear', 'currentTerm', 'studentName', 'admissionNo',
+            'formLevel', 'stream', 'boardingStatus', 'studentEmail', 'updatedAt'
+          ])
+        );
+      allow delete: if isVerified() && isValidId(linkId) && (
+        existing().ownerId == request.auth.uid ||
+        isAdmin() ||
+        isSchoolHead(existing().schoolId)
+      );
+    }
+
+    // Staff Portal Links: verified teachers, bursars, and deputy heads locate their school & role
+    match /staffLinks/{linkId} {
+      allow get: if isVerified() && isValidId(linkId) && (
+        existing().ownerId == request.auth.uid ||
+        isAdmin() ||
+        existing().staffEmail == request.auth.token.email.lower()
+      );
+      allow list: if isVerified() && (
+        existing().ownerId == request.auth.uid ||
+        isAdmin() ||
+        existing().staffEmail == request.auth.token.email.lower()
+      );
+      allow create: if isVerified() && isValidId(linkId)
+        && isValidStaffLink(incoming())
+        && incoming().ownerId == request.auth.uid
+        && isSchoolOwner(incoming().schoolId)
+        && existsAfter(/databases/$(database)/documents/schools/$(incoming().schoolId)/teachers/$(incoming().teacherId))
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerified() && isValidId(linkId)
+        && isValidStaffLink(incoming())
+        && isSchoolOwner(existing().schoolId)
+        && incoming().ownerId == existing().ownerId
+        && incoming().schoolId == existing().schoolId
+        && incoming().teacherId == existing().teacherId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'schoolName', 'schoolDistrict', 'schoolType', 'academicYear', 'currentTerm',
+            'staffName', 'staffCode', 'roleTitle', 'subjects', 'assignedForm',
+            'staffEmail', 'status', 'updatedAt'
+          ])
+        );
+      allow delete: if isVerified() && isValidId(linkId) && (
+        existing().ownerId == request.auth.uid || isAdmin()
+      );
+    }
+
+    // Schools: Master workspace document
+    match /schools/{schoolId} {
+      allow get: if isVerified() && isValidId(schoolId) && (
+        existing().ownerId == request.auth.uid ||
+        isAdmin() ||
+        hasStaffAccess(schoolId)
+      );
+      allow list: if isVerified() && (existing().ownerId == request.auth.uid || isAdmin());
+      allow create: if isVerified() && isValidId(schoolId)
+        && isValidSchool(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerified() && isValidId(schoolId)
+        && (existing().ownerId == request.auth.uid || isAdmin())
+        && isValidSchool(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'district', 'schoolType', 'motto', 'academicYear',
+            'currentTerm', 'defaultTuitionMWK', 'defaultGpfMWK',
+            'defaultExamFeeMWK', 'updatedAt'
+          ])
+        );
+      allow delete: if isVerified() && isValidId(schoolId) && (existing().ownerId == request.auth.uid || isAdmin());
+
+      // Staff RBAC access documents: strictly managed by School Owner / System Admin
+      match /staffAccess/{staffKey} {
+        allow get: if isVerified() && isValidId(staffKey) && (
+          isSchoolOwner(schoolId) ||
+          ('email' in request.auth.token && staffKey == staffAccessKey(request.auth.token.email))
+        );
+        allow list: if isVerified() && (existing().ownerId == request.auth.uid || isAdmin());
+        allow create: if isVerified() && isValidId(staffKey)
+          && isSchoolOwner(schoolId)
+          && isValidStaffAccess(incoming())
+          && incoming().ownerId == request.auth.uid
+          && incoming().schoolId == schoolId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerified() && isValidId(staffKey)
+          && isSchoolOwner(schoolId)
+          && isValidStaffAccess(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().teacherId == existing().teacherId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'staffEmail', 'roleTitle', 'status', 'updatedAt'
+            ])
+          );
+        allow delete: if isVerified() && isValidId(staffKey) && isSchoolOwner(schoolId);
+      }
+
+      // Students subcollection: readable by active school staff, writable by Head Teacher / Deputy Head / Owner
+      match /students/{studentId} {
+        allow get: if isValidId(schoolId) && isValidId(studentId) && isAnySchoolStaff(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isAnySchoolStaff(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(studentId)
+          && isSchoolHead(schoolId)
+          && isValidStudent(incoming())
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && isValidId(studentId)
+          && isSchoolHead(schoolId)
+          && isValidStudent(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'admissionNo', 'fullName', 'gender', 'formLevel', 'stream', 'entryYear',
+              'boardingStatus', 'guardianName', 'guardianPhone', 'guardianSecondaryPhone',
+              'guardianRelationship', 'emergencyContactName', 'emergencyContactPhone',
+              'emergencyNotes', 'studentEmail', 'registrationCode', 'status', 'updatedAt'
+            ])
+          );
+        allow delete: if isValidId(schoolId) && isValidId(studentId) && isSchoolHead(schoolId);
+      }
+
+      // Teachers subcollection: readable by Head/Deputy, writable strictly by School Owner / Admin
+      match /teachers/{teacherId} {
+        allow get: if isValidId(schoolId) && isValidId(teacherId) && isSchoolHead(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isSchoolHead(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(teacherId)
+          && isSchoolOwner(schoolId)
+          && isValidTeacher(incoming())
+          && incoming().ownerId == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && isValidId(teacherId)
+          && isSchoolOwner(schoolId)
+          && isValidTeacher(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'staffCode', 'fullName', 'roleTitle', 'subjects',
+              'assignedForm', 'phone', 'staffEmail', 'status', 'updatedAt'
+            ])
+          );
+        allow delete: if isValidId(schoolId) && isValidId(teacherId) && isSchoolOwner(schoolId);
+      }
+
+      // Assessments (MANEB JCE / MSCE marks): Academic staff CRUD; students read-only own marks
+      match /assessments/{assessmentId} {
+        allow get: if isValidId(schoolId) && isValidId(assessmentId) && (
+          isAcademicStaff(schoolId) ||
+          (
+            isVerified() &&
+            'studentEmail' in existing() &&
+            existing().studentEmail is string &&
+            existing().studentEmail != '' &&
+            existing().studentEmail == request.auth.token.email.lower()
+          )
+        );
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isAcademicStaff(schoolId) ||
+          (
+            'studentEmail' in existing() &&
+            existing().studentEmail is string &&
+            existing().studentEmail != '' &&
+            existing().studentEmail == request.auth.token.email.lower()
+          )
+        );
+        allow create: if isValidId(schoolId) && isValidId(assessmentId)
+          && isAcademicStaff(schoolId)
+          && isValidAssessment(incoming())
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(incoming().studentId))
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && isValidId(assessmentId)
+          && isAcademicStaff(schoolId)
+          && isValidAssessment(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().studentId == existing().studentId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'studentName', 'studentEmail', 'formLevel', 'stream', 'term', 'academicYear',
+              'subject',
+              'ca1Raw', 'ca1Max', 'ca1Score',
+              'ca2Raw', 'ca2Max', 'ca2Score',
+              'caScore',
+              'examRaw', 'examMax', 'examScore',
+              'totalScore', 'grade', 'gradePoint', 'remark', 'updatedAt'
+            ])
+          );
+        allow delete: if isValidId(schoolId) && isValidId(assessmentId) && isAcademicStaff(schoolId);
+      }
+
+      // Fee Invoices (MWK): Bursar & Head Teacher / Owner only
+      match /feeInvoices/{invoiceId} {
+        allow get: if isValidId(schoolId) && isValidId(invoiceId) && isBursarStaff(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isBursarStaff(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(invoiceId)
+          && isBursarStaff(schoolId)
+          && isValidFeeInvoice(incoming())
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(incoming().studentId))
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && isValidId(invoiceId)
+          && isBursarStaff(schoolId)
+          && isValidFeeInvoice(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().studentId == existing().studentId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['totalPaid', 'status', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'tuitionFee', 'gpfFee', 'examFee', 'otherFee', 'totalBilled', 'status', 'updatedAt'
+            ])
+          );
+        allow delete: if isValidId(schoolId) && isValidId(invoiceId) && isBursarStaff(schoolId);
+      }
+
+      // Fee Payments: Bursar & Head Teacher / Owner only (immutable receipts)
+      match /feePayments/{paymentId} {
+        allow get: if isValidId(schoolId) && isValidId(paymentId) && isBursarStaff(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isBursarStaff(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(paymentId)
+          && isBursarStaff(schoolId)
+          && isValidFeePayment(incoming())
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/feeInvoices/$(incoming().invoiceId))
+          && getAfter(/databases/$(database)/documents/schools/$(schoolId)/feeInvoices/$(incoming().invoiceId)).data.totalPaid
+             == get(/databases/$(database)/documents/schools/$(schoolId)/feeInvoices/$(incoming().invoiceId)).data.totalPaid + incoming().amount
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if isValidId(schoolId) && isValidId(paymentId) && isBursarStaff(schoolId);
+      }
+
+      // Attendance records: Academic staff only
+      match /attendance/{attendanceId} {
+        allow get: if isValidId(schoolId) && isValidId(attendanceId) && isAcademicStaff(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isAcademicStaff(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(attendanceId)
+          && isAcademicStaff(schoolId)
+          && isValidAttendance(incoming())
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(incoming().studentId))
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && isValidId(attendanceId)
+          && isAcademicStaff(schoolId)
+          && isValidAttendance(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().studentId == existing().studentId
+          && incoming().date == existing().date
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'note', 'updatedAt'])
+          );
+        allow delete: if isValidId(schoolId) && isValidId(attendanceId) && isAcademicStaff(schoolId);
+      }
+
+      // Automated Parent SMS Policy Settings: Bursar & Head Teacher / Owner only
+      match /smsSettings/{configId} {
+        allow get: if isValidId(schoolId) && isValidId(configId) && isBursarStaff(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isBursarStaff(schoolId)
+        );
+        allow create: if isValidId(schoolId) && configId == 'default'
+          && isBursarStaff(schoolId)
+          && isValidSmsConfig(incoming())
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && configId == 'default'
+          && isBursarStaff(schoolId)
+          && isValidSmsConfig(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'autoPaymentSms', 'autoLowBalanceSms', 'lowBalanceThresholdMWK', 'senderLabel', 'updatedAt'
+            ])
+          );
+        allow delete: if false;
+      }
+
+      // Parent SMS Notification Audit Logs: Bursar & Head Teacher / Owner only (immutable)
+      match /smsLogs/{smsId} {
+        allow get: if isValidId(schoolId) && isValidId(smsId) && isBursarStaff(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isBursarStaff(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(smsId)
+          && isBursarStaff(schoolId)
+          && isValidSmsLog(incoming())
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(incoming().studentId))
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/feeInvoices/$(incoming().invoiceId))
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if isValidId(schoolId) && isValidId(smsId) && isSchoolOwner(schoolId);
+      }
+
+      // School Curriculum Subjects & Form Assignments: readable by active school staff, writable by School Owner / Admin
+      match /subjects/{subjectId} {
+        allow get: if isValidId(schoolId) && isValidId(subjectId) && isAnySchoolStaff(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isAnySchoolStaff(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(subjectId)
+          && isSchoolOwner(schoolId)
+          && isValidSchoolSubject(incoming())
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && isValidId(subjectId)
+          && isSchoolOwner(schoolId)
+          && isValidSchoolSubject(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'name', 'code', 'formLevels', 'isCore', 'updatedAt'
+            ])
+          );
+        allow delete: if isValidId(schoolId) && isValidId(subjectId) && isSchoolOwner(schoolId);
+      }
+
+      // School Library Loans (textbooks & reading materials): Library staff & Academic staff CRUD
+      match /libraryLoans/{loanId} {
+        allow get: if isValidId(schoolId) && isValidId(loanId) && isLibraryStaff(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isLibraryStaff(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(loanId)
+          && isLibraryStaff(schoolId)
+          && isValidLibraryLoan(incoming())
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(incoming().studentId))
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && isValidId(loanId)
+          && isLibraryStaff(schoolId)
+          && isValidLibraryLoan(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().studentId == existing().studentId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'studentName', 'admissionNo', 'formLevel', 'stream',
+              'bookTitle', 'materialType', 'subject', 'bookCode', 'quantity',
+              'checkoutDate', 'dueDate', 'returnedDate', 'status',
+              'conditionOnReturn', 'notes', 'updatedAt'
+            ])
+          );
+        allow delete: if isValidId(schoolId) && isValidId(loanId) && isLibraryStaff(schoolId);
+      }
+    }
+  }
+}

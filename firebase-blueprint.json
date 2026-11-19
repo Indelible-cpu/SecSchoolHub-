@@ -1,0 +1,877 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Private user workspace configuration for a signed-in school administrator.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "maxLength": 120 },
+        "email": { "type": "string", "maxLength": 160 },
+        "activeSchoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "email", "activeSchoolId", "createdAt", "updatedAt"]
+    },
+    "School": {
+      "title": "Secondary School",
+      "description": "Malawi secondary school configuration, term calendar, and fee defaults.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "maxLength": 120 },
+        "district": { "type": "string", "maxLength": 60 },
+        "schoolType": {
+          "type": "string",
+          "enum": ["Government Day", "Government Boarding", "Grant-Aided", "Private"],
+          "maxLength": 40
+        },
+        "motto": { "type": "string", "maxLength": 140 },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "currentTerm": {
+          "type": "string",
+          "enum": ["Term 1", "Term 2", "Term 3"],
+          "maxLength": 20
+        },
+        "defaultTuitionMWK": { "type": "number" },
+        "defaultGpfMWK": { "type": "number" },
+        "defaultExamFeeMWK": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "name",
+        "district",
+        "schoolType",
+        "motto",
+        "academicYear",
+        "currentTerm",
+        "defaultTuitionMWK",
+        "defaultGpfMWK",
+        "defaultExamFeeMWK",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Secondary school student enrolled in Form 1 to Form 4.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "admissionNo": { "type": "string", "maxLength": 40 },
+        "fullName": { "type": "string", "maxLength": 120 },
+        "gender": { "type": "string", "enum": ["Male", "Female"], "maxLength": 10 },
+        "formLevel": { "type": "number" },
+        "stream": { "type": "string", "maxLength": 20 },
+        "entryYear": { "type": "number", "description": "4-digit year of entry (e.g., 2026)." },
+        "boardingStatus": {
+          "type": "string",
+          "enum": ["Day Scholar", "Boarder"],
+          "maxLength": 20
+        },
+        "guardianName": { "type": "string", "maxLength": 120 },
+        "guardianPhone": { "type": "string", "maxLength": 30 },
+        "guardianSecondaryPhone": { "type": "string", "maxLength": 30 },
+        "guardianRelationship": { "type": "string", "maxLength": 40 },
+        "emergencyContactName": { "type": "string", "maxLength": 120 },
+        "emergencyContactPhone": { "type": "string", "maxLength": 30 },
+        "emergencyNotes": { "type": "string", "maxLength": 240 },
+        "studentEmail": { "type": "string", "maxLength": 160 },
+        "registrationCode": { "type": "string", "maxLength": 32, "pattern": "^[A-Z0-9_\\-]*$" },
+        "status": {
+          "type": "string",
+          "enum": ["Active", "Transferred", "Suspended", "Graduated"],
+          "maxLength": 20
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "admissionNo",
+        "fullName",
+        "gender",
+        "formLevel",
+        "stream",
+        "boardingStatus",
+        "guardianName",
+        "guardianPhone",
+        "studentEmail",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Teacher": {
+      "title": "Teacher & Staff",
+      "description": "Teaching and administrative staff member.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "staffCode": { "type": "string", "maxLength": 40 },
+        "fullName": { "type": "string", "maxLength": 120 },
+        "roleTitle": {
+          "type": "string",
+          "enum": [
+            "Head Teacher",
+            "Deputy Head",
+            "Head of Department",
+            "Form Master",
+            "Subject Teacher",
+            "School Librarian",
+            "School Bursar"
+          ],
+          "maxLength": 40
+        },
+        "subjects": { "type": "array" },
+        "assignedForm": { "type": "string", "maxLength": 30 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "staffEmail": { "type": "string", "maxLength": 120 },
+        "status": { "type": "string", "enum": ["Active", "On Leave"], "maxLength": 20 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "staffCode",
+        "fullName",
+        "roleTitle",
+        "subjects",
+        "assignedForm",
+        "phone",
+        "staffEmail",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Assessment": {
+      "title": "Academic Assessment",
+      "description": "Subject CA 1 (20%), CA 2 (20%), and Summative Exam (60%) scores with MANEB JCE or MSCE grading.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "studentEmail": { "type": "string", "maxLength": 160 },
+        "formLevel": { "type": "number" },
+        "stream": { "type": "string", "maxLength": 20 },
+        "term": { "type": "string", "enum": ["Term 1", "Term 2", "Term 3"], "maxLength": 20 },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "subject": { "type": "string", "maxLength": 60 },
+        "ca1Raw": { "type": "number" },
+        "ca1Max": { "type": "number" },
+        "ca1Score": { "type": "number" },
+        "ca2Raw": { "type": "number" },
+        "ca2Max": { "type": "number" },
+        "ca2Score": { "type": "number" },
+        "caScore": { "type": "number" },
+        "examRaw": { "type": "number" },
+        "examMax": { "type": "number" },
+        "examScore": { "type": "number" },
+        "totalScore": { "type": "number" },
+        "grade": { "type": "string", "maxLength": 10 },
+        "gradePoint": { "type": "number" },
+        "remark": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "studentId",
+        "studentName",
+        "studentEmail",
+        "formLevel",
+        "stream",
+        "term",
+        "academicYear",
+        "subject",
+        "ca1Raw",
+        "ca1Max",
+        "ca1Score",
+        "ca2Raw",
+        "ca2Max",
+        "ca2Score",
+        "caScore",
+        "examRaw",
+        "examMax",
+        "examScore",
+        "totalScore",
+        "grade",
+        "gradePoint",
+        "remark",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "FeeInvoice": {
+      "title": "Term Fee Invoice",
+      "description": "Student term fee statement in Malawi Kwacha (MWK).",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "formLevel": { "type": "number" },
+        "stream": { "type": "string", "maxLength": 20 },
+        "term": { "type": "string", "enum": ["Term 1", "Term 2", "Term 3"], "maxLength": 20 },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "tuitionFee": { "type": "number" },
+        "gpfFee": { "type": "number" },
+        "examFee": { "type": "number" },
+        "otherFee": { "type": "number" },
+        "totalBilled": { "type": "number" },
+        "totalPaid": { "type": "number" },
+        "status": { "type": "string", "enum": ["Unpaid", "Partial", "Paid"], "maxLength": 20 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "studentId",
+        "studentName",
+        "formLevel",
+        "stream",
+        "term",
+        "academicYear",
+        "tuitionFee",
+        "gpfFee",
+        "examFee",
+        "otherFee",
+        "totalBilled",
+        "totalPaid",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "FeePayment": {
+      "title": "Fee Payment Receipt",
+      "description": "Individual MWK fee payment linked atomically to a term fee invoice.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "invoiceId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "receiptNo": { "type": "string", "maxLength": 40 },
+        "amount": { "type": "number" },
+        "method": {
+          "type": "string",
+          "enum": ["Cash (Bursar)", "Bank Deposit", "Airtel Money", "TNM Mpamba"],
+          "maxLength": 30
+        },
+        "reference": { "type": "string", "maxLength": 80 },
+        "term": { "type": "string", "enum": ["Term 1", "Term 2", "Term 3"], "maxLength": 20 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "invoiceId",
+        "studentId",
+        "studentName",
+        "receiptNo",
+        "amount",
+        "method",
+        "reference",
+        "term",
+        "createdAt"
+      ]
+    },
+    "AttendanceRecord": {
+      "title": "Daily Attendance Record",
+      "description": "Daily attendance status for a student on a specific ISO date.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "date": { "type": "string", "maxLength": 12, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "formLevel": { "type": "number" },
+        "stream": { "type": "string", "maxLength": 20 },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "status": {
+          "type": "string",
+          "enum": ["Present", "Absent", "Late", "Excused"],
+          "maxLength": 20
+        },
+        "note": { "type": "string", "maxLength": 140 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "date",
+        "formLevel",
+        "stream",
+        "studentId",
+        "studentName",
+        "status",
+        "note",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminRecord": {
+      "title": "System Admin Record",
+      "description": "Trusted administrator marker document.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "maxLength": 160 }
+      },
+      "required": ["email"]
+    },
+    "StudentLink": {
+      "title": "Student Portal Link",
+      "description": "Maps a student's verified Google email to their school enrollment for read-only exam result lookup.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolName": { "type": "string", "maxLength": 120 },
+        "schoolDistrict": { "type": "string", "maxLength": 60 },
+        "schoolType": {
+          "type": "string",
+          "enum": ["Government Day", "Government Boarding", "Grant-Aided", "Private"],
+          "maxLength": 40
+        },
+        "motto": { "type": "string", "maxLength": 140 },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "currentTerm": { "type": "string", "enum": ["Term 1", "Term 2", "Term 3"], "maxLength": 20 },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "admissionNo": { "type": "string", "maxLength": 40 },
+        "formLevel": { "type": "number" },
+        "stream": { "type": "string", "maxLength": 20 },
+        "boardingStatus": { "type": "string", "enum": ["Day Scholar", "Boarder"], "maxLength": 20 },
+        "studentEmail": { "type": "string", "maxLength": 160 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "schoolName",
+        "schoolDistrict",
+        "schoolType",
+        "motto",
+        "academicYear",
+        "currentTerm",
+        "studentId",
+        "studentName",
+        "admissionNo",
+        "formLevel",
+        "stream",
+        "boardingStatus",
+        "studentEmail",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StaffLink": {
+      "title": "Staff Portal Link",
+      "description": "Maps a verified teacher or bursar Google email to their assigned school and role.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolName": { "type": "string", "maxLength": 120 },
+        "schoolDistrict": { "type": "string", "maxLength": 60 },
+        "schoolType": {
+          "type": "string",
+          "enum": ["Government Day", "Government Boarding", "Grant-Aided", "Private"],
+          "maxLength": 40
+        },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "currentTerm": { "type": "string", "enum": ["Term 1", "Term 2", "Term 3"], "maxLength": 20 },
+        "teacherId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "staffName": { "type": "string", "maxLength": 120 },
+        "staffCode": { "type": "string", "maxLength": 40 },
+        "roleTitle": {
+          "type": "string",
+          "enum": [
+            "Head Teacher",
+            "Deputy Head",
+            "Head of Department",
+            "Form Master",
+            "Subject Teacher",
+            "School Librarian",
+            "School Bursar"
+          ],
+          "maxLength": 40
+        },
+        "subjects": { "type": "array" },
+        "assignedForm": { "type": "string", "maxLength": 30 },
+        "staffEmail": { "type": "string", "maxLength": 120 },
+        "status": { "type": "string", "enum": ["Active", "On Leave"], "maxLength": 20 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "schoolName",
+        "schoolDistrict",
+        "schoolType",
+        "academicYear",
+        "currentTerm",
+        "teacherId",
+        "staffName",
+        "staffCode",
+        "roleTitle",
+        "subjects",
+        "assignedForm",
+        "staffEmail",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StaffAccess": {
+      "title": "School Staff RBAC Record",
+      "description": "Server-validated role lookup document inside a school keyed by sanitized staff email.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "teacherId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "staffEmail": { "type": "string", "maxLength": 120 },
+        "roleTitle": {
+          "type": "string",
+          "enum": [
+            "Head Teacher",
+            "Deputy Head",
+            "Head of Department",
+            "Form Master",
+            "Subject Teacher",
+            "School Librarian",
+            "School Bursar"
+          ],
+          "maxLength": 40
+        },
+        "status": { "type": "string", "enum": ["Active", "On Leave"], "maxLength": 20 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "teacherId",
+        "staffEmail",
+        "roleTitle",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SmsConfig": {
+      "title": "Parent SMS Alert Policy",
+      "description": "School-wide automated parent SMS confirmation and low balance alert settings.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "autoPaymentSms": { "type": "boolean" },
+        "autoLowBalanceSms": { "type": "boolean" },
+        "lowBalanceThresholdMWK": { "type": "number" },
+        "senderLabel": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "autoPaymentSms",
+        "autoLowBalanceSms",
+        "lowBalanceThresholdMWK",
+        "senderLabel",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SmsLog": {
+      "title": "Parent SMS Notification Log",
+      "description": "Immutable audit log of fee payment confirmation and low balance SMS alerts sent to guardians.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "invoiceId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "guardianName": { "type": "string", "maxLength": 120 },
+        "guardianPhone": { "type": "string", "maxLength": 30 },
+        "type": {
+          "type": "string",
+          "enum": ["Payment Confirmation", "Low Balance Alert"],
+          "maxLength": 40
+        },
+        "message": { "type": "string", "maxLength": 320 },
+        "amountMWK": { "type": "number" },
+        "balanceAfterMWK": { "type": "number" },
+        "status": {
+          "type": "string",
+          "enum": ["Sent", "Simulated", "Failed", "Skipped"],
+          "maxLength": 20
+        },
+        "provider": { "type": "string", "maxLength": 40 },
+        "providerRef": { "type": "string", "maxLength": 100 },
+        "errorReason": { "type": "string", "maxLength": 160 },
+        "term": { "type": "string", "enum": ["Term 1", "Term 2", "Term 3"], "maxLength": 20 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "invoiceId",
+        "studentId",
+        "studentName",
+        "guardianName",
+        "guardianPhone",
+        "type",
+        "message",
+        "amountMWK",
+        "balanceAfterMWK",
+        "status",
+        "provider",
+        "providerRef",
+        "errorReason",
+        "term",
+        "createdAt"
+      ]
+    },
+    "SchoolSubject": {
+      "title": "School Curriculum Subject",
+      "description": "Subject offered by the school and assigned to specific secondary forms (Form 1 to Form 4).",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "maxLength": 60 },
+        "code": { "type": "string", "maxLength": 16 },
+        "formLevels": { "type": "array" },
+        "isCore": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "name",
+        "code",
+        "formLevels",
+        "isCore",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StudentPortal": {
+      "title": "Student Registration Code Portal",
+      "description": "High-entropy administrator-issued registration code document enabling a student to sign in and view exam results without email (zero PII).",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolName": { "type": "string", "maxLength": 120 },
+        "schoolDistrict": { "type": "string", "maxLength": 60 },
+        "schoolType": {
+          "type": "string",
+          "enum": ["Government Day", "Government Boarding", "Grant-Aided", "Private"],
+          "maxLength": 40
+        },
+        "motto": { "type": "string", "maxLength": 140 },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "currentTerm": { "type": "string", "enum": ["Term 1", "Term 2", "Term 3"], "maxLength": 20 },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "admissionNo": { "type": "string", "maxLength": 40 },
+        "formLevel": { "type": "number" },
+        "stream": { "type": "string", "maxLength": 20 },
+        "boardingStatus": { "type": "string", "enum": ["Day Scholar", "Boarder"], "maxLength": 20 },
+        "registrationCode": { "type": "string", "maxLength": 32, "pattern": "^[A-Z0-9_\\-]+$" },
+        "status": {
+          "type": "string",
+          "enum": ["Active", "Transferred", "Suspended", "Graduated"],
+          "maxLength": 20
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "schoolName",
+        "schoolDistrict",
+        "schoolType",
+        "motto",
+        "academicYear",
+        "currentTerm",
+        "studentId",
+        "studentName",
+        "admissionNo",
+        "formLevel",
+        "stream",
+        "boardingStatus",
+        "registrationCode",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StudentPortalResult": {
+      "title": "Student Portal Exam Result",
+      "description": "Assessment mirror under /studentPortals/{registrationCode}/results/{assessmentId} readable by registration code holder.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "registrationCode": { "type": "string", "maxLength": 32, "pattern": "^[A-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "formLevel": { "type": "number" },
+        "stream": { "type": "string", "maxLength": 20 },
+        "term": { "type": "string", "enum": ["Term 1", "Term 2", "Term 3"], "maxLength": 20 },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "subject": { "type": "string", "maxLength": 60 },
+        "ca1Raw": { "type": "number" },
+        "ca1Max": { "type": "number" },
+        "ca1Score": { "type": "number" },
+        "ca2Raw": { "type": "number" },
+        "ca2Max": { "type": "number" },
+        "ca2Score": { "type": "number" },
+        "caScore": { "type": "number" },
+        "examRaw": { "type": "number" },
+        "examMax": { "type": "number" },
+        "examScore": { "type": "number" },
+        "totalScore": { "type": "number" },
+        "grade": { "type": "string", "maxLength": 10 },
+        "gradePoint": { "type": "number" },
+        "remark": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "registrationCode",
+        "studentId",
+        "studentName",
+        "formLevel",
+        "stream",
+        "term",
+        "academicYear",
+        "subject",
+        "ca1Raw",
+        "ca1Max",
+        "ca1Score",
+        "ca2Raw",
+        "ca2Max",
+        "ca2Score",
+        "caScore",
+        "examRaw",
+        "examMax",
+        "examScore",
+        "totalScore",
+        "grade",
+        "gradePoint",
+        "remark",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "LibraryLoan": {
+      "title": "School Library Loan",
+      "description": "Textbook or reading material assigned to a student with due date and return status.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "admissionNo": { "type": "string", "maxLength": 40 },
+        "formLevel": { "type": "number" },
+        "stream": { "type": "string", "maxLength": 20 },
+        "bookTitle": { "type": "string", "maxLength": 140 },
+        "materialType": {
+          "type": "string",
+          "enum": ["Textbook", "Set Book", "Reference Book", "Past Papers", "Reader / Novel", "Science Manual"],
+          "maxLength": 30
+        },
+        "subject": { "type": "string", "maxLength": 60 },
+        "bookCode": { "type": "string", "maxLength": 40 },
+        "quantity": { "type": "number" },
+        "checkoutDate": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "dueDate": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "returnedDate": { "type": "string", "maxLength": 10 },
+        "status": {
+          "type": "string",
+          "enum": ["Checked Out", "Returned"],
+          "maxLength": 20
+        },
+        "conditionOnReturn": {
+          "type": "string",
+          "enum": ["Good", "Fair", "Damaged", "Lost"],
+          "maxLength": 20
+        },
+        "notes": { "type": "string", "maxLength": 240 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "studentId",
+        "studentName",
+        "admissionNo",
+        "formLevel",
+        "stream",
+        "bookTitle",
+        "materialType",
+        "subject",
+        "bookCode",
+        "quantity",
+        "checkoutDate",
+        "dueDate",
+        "returnedDate",
+        "status",
+        "conditionOnReturn",
+        "notes",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StudentPortalLibraryLoan": {
+      "title": "Student Portal Library Loan",
+      "description": "Library loan mirror under /studentPortals/{registrationCode}/libraryLoans/{loanId} readable by registration code holder.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "registrationCode": { "type": "string", "maxLength": 32, "pattern": "^[A-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "formLevel": { "type": "number" },
+        "stream": { "type": "string", "maxLength": 20 },
+        "bookTitle": { "type": "string", "maxLength": 140 },
+        "materialType": {
+          "type": "string",
+          "enum": ["Textbook", "Set Book", "Reference Book", "Past Papers", "Reader / Novel", "Science Manual"],
+          "maxLength": 30
+        },
+        "subject": { "type": "string", "maxLength": 60 },
+        "bookCode": { "type": "string", "maxLength": 40 },
+        "quantity": { "type": "number" },
+        "checkoutDate": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "dueDate": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "returnedDate": { "type": "string", "maxLength": 10 },
+        "status": {
+          "type": "string",
+          "enum": ["Checked Out", "Returned"],
+          "maxLength": 20
+        },
+        "conditionOnReturn": {
+          "type": "string",
+          "enum": ["Good", "Fair", "Damaged", "Lost"],
+          "maxLength": 20
+        },
+        "notes": { "type": "string", "maxLength": 240 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "registrationCode",
+        "studentId",
+        "studentName",
+        "formLevel",
+        "stream",
+        "bookTitle",
+        "materialType",
+        "subject",
+        "bookCode",
+        "quantity",
+        "checkoutDate",
+        "dueDate",
+        "returnedDate",
+        "status",
+        "conditionOnReturn",
+        "notes",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private profile and active school pointer for a user."
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Admin role lookup collection."
+    },
+    "/studentPortals/{registrationCode}": {
+      "schema": { "$ref": "#/entities/StudentPortal" },
+      "description": "Non-enumerable registration code header for student exam results login without email."
+    },
+    "/studentPortals/{registrationCode}/results/{assessmentId}": {
+      "schema": { "$ref": "#/entities/StudentPortalResult" },
+      "description": "Student exam results readable only via their administrator-issued registration code."
+    },
+    "/studentPortals/{registrationCode}/libraryLoans/{loanId}": {
+      "schema": { "$ref": "#/entities/StudentPortalLibraryLoan" },
+      "description": "Student borrowed library books and due dates readable only via their registration code."
+    },
+    "/studentLinks/{linkId}": {
+      "schema": { "$ref": "#/entities/StudentLink" },
+      "description": "Student email-to-enrollment index enabling verified students to locate their own exam results."
+    },
+    "/staffLinks/{linkId}": {
+      "schema": { "$ref": "#/entities/StaffLink" },
+      "description": "Staff email-to-school index enabling teachers, bursars, and deputy heads to open their assigned workspace."
+    },
+    "/schools/{schoolId}": {
+      "schema": { "$ref": "#/entities/School" },
+      "description": "Secondary school workspace owned by an authenticated user."
+    },
+    "/schools/{schoolId}/staffAccess/{staffKey}": {
+      "schema": { "$ref": "#/entities/StaffAccess" },
+      "description": "Role-Based Access Control (RBAC) membership documents for school staff."
+    },
+    "/schools/{schoolId}/students/{studentId}": {
+      "schema": { "$ref": "#/entities/Student" },
+      "description": "Students enrolled in the school."
+    },
+    "/schools/{schoolId}/teachers/{teacherId}": {
+      "schema": { "$ref": "#/entities/Teacher" },
+      "description": "Teaching and administrative staff in the school."
+    },
+    "/schools/{schoolId}/assessments/{assessmentId}": {
+      "schema": { "$ref": "#/entities/Assessment" },
+      "description": "MANEB JCE/MSCE subject marks and grades."
+    },
+    "/schools/{schoolId}/feeInvoices/{invoiceId}": {
+      "schema": { "$ref": "#/entities/FeeInvoice" },
+      "description": "Student term fee invoices in MWK."
+    },
+    "/schools/{schoolId}/feePayments/{paymentId}": {
+      "schema": { "$ref": "#/entities/FeePayment" },
+      "description": "Immutable MWK fee payment receipts."
+    },
+    "/schools/{schoolId}/attendance/{attendanceId}": {
+      "schema": { "$ref": "#/entities/AttendanceRecord" },
+      "description": "Daily student attendance records."
+    },
+    "/schools/{schoolId}/smsSettings/{configId}": {
+      "schema": { "$ref": "#/entities/SmsConfig" },
+      "description": "Automated parent SMS notification policy configuration per school."
+    },
+    "/schools/{schoolId}/smsLogs/{smsId}": {
+      "schema": { "$ref": "#/entities/SmsLog" },
+      "description": "Immutable audit log of fee confirmation and low balance SMS alerts dispatched to guardians."
+    },
+    "/schools/{schoolId}/subjects/{subjectId}": {
+      "schema": { "$ref": "#/entities/SchoolSubject" },
+      "description": "School-defined curriculum subjects mapped to Form 1-4."
+    },
+    "/schools/{schoolId}/libraryLoans/{loanId}": {
+      "schema": { "$ref": "#/entities/LibraryLoan" },
+      "description": "Textbooks and reading materials checked out to students with due dates and return status."
+    }
+  }
+}
