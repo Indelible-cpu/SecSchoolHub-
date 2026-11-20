@@ -224,7 +224,7 @@ async function startServer() {
   }
 
   httpServer.listen(port, '0.0.0.0', () => {
-    console.log(`MalawiSec server listening on http://0.0.0.0:${port}`);
+    console.log(`SecSchoolHub server listening on http://0.0.0.0:${port}`);
   });
 }
 

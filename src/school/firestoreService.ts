@@ -11,11 +11,13 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import {
   addDaysToIsoDate,
   calculateManebGrade,
   calculateWeightedComponent,
+  DEFAULT_DIGITAL_LIBRARY_PRESETS,
+  DEFAULT_LIBRARY_BOOKS_PRESETS,
   DEFAULT_MALAWI_SUBJECT_PRESETS,
   generateStudentRegistrationCode,
   getDefaultEntryYear,
@@ -28,12 +30,19 @@ import {
   Assessment,
   AttendanceStatus,
   BoardingStatus,
+  DigitalLibraryResource,
+  DigitalResourceCategory,
+  DigitalResourceFormLevel,
   FormLevel,
   Gender,
   InvoiceStatus,
+  LibraryBook,
   LibraryItemCondition,
+  LibraryLoan,
   LibraryLoanStatus,
   LibraryMaterialCategory,
+  LibraryReservationStatus,
+  LibraryTransactionAction,
   PaymentMethod,
   School,
   SchoolSubject,
@@ -328,9 +337,21 @@ async function deleteStudentPortalByCode(regCode: string) {
   if (cleanCode.length < 6) return;
 
   const resultsSnap = await getDocs(collection(db, 'studentPortals', cleanCode, 'results'));
-  if (resultsSnap.docs.length > 0) {
+  const loansSnap = await getDocs(collection(db, 'studentPortals', cleanCode, 'libraryLoans'));
+  const reservationsSnap = await getDocs(collection(db, 'studentPortals', cleanCode, 'reservations'));
+  if (
+    resultsSnap.docs.length > 0 ||
+    loansSnap.docs.length > 0 ||
+    reservationsSnap.docs.length > 0
+  ) {
     const batch = writeBatch(db);
     for (const d of resultsSnap.docs) {
+      batch.delete(d.ref);
+    }
+    for (const d of loansSnap.docs) {
+      batch.delete(d.ref);
+    }
+    for (const d of reservationsSnap.docs) {
       batch.delete(d.ref);
     }
     await batch.commit();
@@ -593,6 +614,54 @@ export async function saveStudent(
             }
           }
           await batch.commit();
+        }
+
+        const loansSnap = await getDocs(
+          query(collection(db, 'schools', schoolId, 'libraryLoans'), where('ownerId', '==', ownerId))
+        );
+        const studentLoans = loansSnap.docs.filter(
+          (d) => (d.data() as { studentId?: string }).studentId === studentId
+        );
+
+        if (studentLoans.length > 0) {
+          const isFreshCode = previousRegCode !== cleanRegCode || !portalSnap.exists();
+          const loanBatch = writeBatch(db);
+          for (const d of studentLoans) {
+            const raw = d.data() as Omit<LibraryLoan, 'id'>;
+            const loanPortalRef = doc(db, 'studentPortals', cleanRegCode, 'libraryLoans', d.id);
+            if (isFreshCode) {
+              loanBatch.set(loanPortalRef, {
+                ownerId,
+                schoolId,
+                registrationCode: cleanRegCode,
+                studentId,
+                studentName: clampStr(data.fullName, 120),
+                formLevel: cleanFormLevel,
+                stream: cleanStream,
+                bookTitle: clampStr(raw.bookTitle, 140),
+                materialType: raw.materialType,
+                subject: clampStr(raw.subject || 'General', 60),
+                bookCode: clampStr(raw.bookCode, 40),
+                quantity: Math.min(20, Math.max(1, Math.round(Number(raw.quantity) || 1))),
+                checkoutDate: raw.checkoutDate,
+                dueDate: raw.dueDate,
+                returnedDate: raw.returnedDate || '',
+                status: raw.status === 'Returned' ? 'Returned' : 'Checked Out',
+                conditionOnReturn: raw.conditionOnReturn || 'Good',
+                notes: clampStr(raw.notes || '', 240),
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              });
+            } else {
+              loanBatch.update(loanPortalRef, {
+                studentName: clampStr(data.fullName, 120),
+                formLevel: cleanFormLevel,
+                stream: cleanStream,
+                updatedAt: serverTimestamp(),
+              });
+            }
+          }
+          await loanBatch.commit();
         }
       }
     }
@@ -1302,6 +1371,138 @@ export interface LibraryLoanPayload {
   notes?: string;
 }
 
+async function syncLibraryLoanToPortal(
+  schoolId: string,
+  ownerId: string,
+  loanId: string,
+  loan: {
+    studentId: string;
+    studentName: string;
+    formLevel: FormLevel;
+    stream: string;
+    bookTitle: string;
+    materialType: LibraryMaterialCategory;
+    subject: string;
+    bookCode: string;
+    quantity: number;
+    checkoutDate: string;
+    dueDate: string;
+    returnedDate: string;
+    status: LibraryLoanStatus;
+    conditionOnReturn: LibraryItemCondition;
+    notes: string;
+  }
+) {
+  const stuSnap = await getDoc(doc(db, 'schools', schoolId, 'students', loan.studentId));
+  if (!stuSnap.exists()) return;
+  const regCode = normalizeRegistrationCode(
+    (stuSnap.data() as { registrationCode?: string }).registrationCode
+  );
+  if (regCode.length < 6) return;
+
+  const portalLoanRef = doc(db, 'studentPortals', regCode, 'libraryLoans', loanId);
+  const portalLoanSnap = await getDoc(portalLoanRef);
+  const commonFields = {
+    studentName: clampStr(loan.studentName, 120),
+    formLevel: Math.min(4, Math.max(1, Math.round(loan.formLevel))) as FormLevel,
+    stream: clampStr(loan.stream || 'A', 20) || 'A',
+    bookTitle: clampStr(loan.bookTitle, 140),
+    materialType: loan.materialType,
+    subject: clampStr(loan.subject || 'General', 60),
+    bookCode: clampStr(loan.bookCode, 40),
+    quantity: Math.min(20, Math.max(1, Math.round(Number(loan.quantity) || 1))),
+    checkoutDate: loan.checkoutDate,
+    dueDate: loan.dueDate,
+    returnedDate: loan.returnedDate || '',
+    status: loan.status === 'Returned' ? 'Returned' : 'Checked Out',
+    conditionOnReturn: loan.conditionOnReturn || 'Good',
+    notes: clampStr(loan.notes || '', 240),
+    updatedAt: serverTimestamp(),
+  };
+
+  if (portalLoanSnap.exists()) {
+    await updateDoc(portalLoanRef, commonFields);
+  } else {
+    await setDoc(portalLoanRef, {
+      ownerId,
+      schoolId,
+      registrationCode: regCode,
+      studentId: loan.studentId,
+      ...commonFields,
+      createdAt: serverTimestamp(),
+    });
+  }
+}
+
+function buildLibraryTransactionDocData(params: {
+  ownerId: string;
+  loanId: string;
+  action: LibraryTransactionAction;
+  studentId: string;
+  studentName: string;
+  admissionNo: string;
+  formLevel: FormLevel;
+  stream: string;
+  bookTitle: string;
+  bookCode: string;
+  subject: string;
+  quantity: number;
+  eventDate: string;
+  dueDate: string;
+  condition: LibraryItemCondition;
+  notes: string;
+  actorUidOverride?: string;
+  actorNameOverride?: string;
+}) {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const cleanEventDate = /^\d{4}-\d{2}-\d{2}$/.test(params.eventDate) ? params.eventDate : todayIso;
+  const cleanDueDate = /^\d{4}-\d{2}-\d{2}$/.test(params.dueDate) ? params.dueDate : todayIso;
+  const rawName = clampStr(params.studentName, 120);
+  const cleanStudentName = rawName.length >= 2 ? rawName : 'Student';
+  const rawTitle = clampStr(params.bookTitle, 140);
+  const cleanBookTitle = rawTitle.length >= 2 ? rawTitle : 'Library Book';
+  const actorUid = params.actorUidOverride || auth.currentUser?.uid || params.ownerId;
+  const actorName =
+    clampStr(
+      params.actorNameOverride ||
+        auth.currentUser?.displayName ||
+        auth.currentUser?.email ||
+        'Library Staff',
+      120
+    ) || 'Library Staff';
+
+  return {
+    ownerId: params.ownerId,
+    loanId: params.loanId,
+    action: params.action,
+    studentId: params.studentId,
+    studentName: cleanStudentName,
+    admissionNo: clampStr(params.admissionNo || 'N/A', 40) || 'N/A',
+    formLevel: Math.min(4, Math.max(1, Math.round(Number(params.formLevel) || 1))),
+    stream: clampStr(params.stream || 'A', 20) || 'A',
+    bookTitle: cleanBookTitle,
+    bookCode: clampStr(params.bookCode || 'LIB', 40) || 'LIB',
+    subject: clampStr(params.subject || 'General', 60),
+    quantity: Math.min(20, Math.max(1, Math.round(Number(params.quantity) || 1))),
+    eventDate: cleanEventDate,
+    dueDate: cleanDueDate,
+    condition: params.condition || 'Good',
+    actorUid,
+    actorName,
+    notes: clampStr(params.notes || '', 240),
+    createdAt: serverTimestamp(),
+  };
+}
+
+async function recordLibraryTransaction(
+  schoolId: string,
+  params: Parameters<typeof buildLibraryTransactionDocData>[0]
+) {
+  const txId = makeId('ltx');
+  const txRef = doc(db, 'schools', schoolId, 'libraryTransactions', txId);
+  await setDoc(txRef, buildLibraryTransactionDocData(params));
+}
+
 export async function saveLibraryLoan(
   schoolId: string,
   ownerId: string,
@@ -1327,50 +1528,115 @@ export async function saveLibraryLoan(
   const conditionOnReturn: LibraryItemCondition = data.conditionOnReturn || 'Good';
   const cleanFormLevel = Math.min(4, Math.max(1, Math.round(data.formLevel))) as FormLevel;
   const cleanQty = Math.min(20, Math.max(1, Math.round(Number(data.quantity) || 1)));
+  const cleanStream = clampStr(data.stream || 'A', 20) || 'A';
+  const cleanStudentName = clampStr(data.studentName, 120);
+  const cleanAdmissionNo = clampStr(data.admissionNo || 'N/A', 40) || 'N/A';
+  const cleanBookTitle = clampStr(data.bookTitle, 140);
+  const cleanSubject = clampStr(data.subject || 'General', 60);
+  const cleanBookCode = clampStr(data.bookCode, 40);
+  const cleanNotes = clampStr(data.notes || '', 240);
 
   try {
+    let txAction: LibraryTransactionAction = status === 'Returned' ? 'Returned' : 'Checked Out';
+    let txEventDate = status === 'Returned' ? cleanReturned : cleanCheckout;
+
     if (existingId) {
+      const prevSnap = await getDoc(doc(db, 'schools', schoolId, 'libraryLoans', existingId));
+      const prevStatus = prevSnap.exists()
+        ? (prevSnap.data() as { status?: LibraryLoanStatus }).status
+        : undefined;
+      if (prevStatus !== 'Returned' && status === 'Returned') {
+        txAction = 'Returned';
+        txEventDate = cleanReturned;
+      } else if (prevStatus === 'Returned' && status === 'Checked Out') {
+        txAction = 'Reopened';
+        txEventDate = todayIso;
+      } else {
+        txAction = 'Edited';
+        txEventDate = todayIso;
+      }
+
       await updateDoc(doc(db, 'schools', schoolId, 'libraryLoans', existingId), {
-        studentName: clampStr(data.studentName, 120),
-        admissionNo: clampStr(data.admissionNo || 'N/A', 40) || 'N/A',
+        studentName: cleanStudentName,
+        admissionNo: cleanAdmissionNo,
         formLevel: cleanFormLevel,
-        stream: clampStr(data.stream || 'A', 20) || 'A',
-        bookTitle: clampStr(data.bookTitle, 140),
+        stream: cleanStream,
+        bookTitle: cleanBookTitle,
         materialType: data.materialType,
-        subject: clampStr(data.subject || 'General', 60),
-        bookCode: clampStr(data.bookCode, 40),
+        subject: cleanSubject,
+        bookCode: cleanBookCode,
         quantity: cleanQty,
         checkoutDate: cleanCheckout,
         dueDate: cleanDue,
         returnedDate: cleanReturned,
         status,
         conditionOnReturn,
-        notes: clampStr(data.notes || '', 240),
+        notes: cleanNotes,
         updatedAt: serverTimestamp(),
       });
     } else {
       await setDoc(doc(db, 'schools', schoolId, 'libraryLoans', loanId), {
         ownerId,
         studentId: data.studentId,
-        studentName: clampStr(data.studentName, 120),
-        admissionNo: clampStr(data.admissionNo || 'N/A', 40) || 'N/A',
+        studentName: cleanStudentName,
+        admissionNo: cleanAdmissionNo,
         formLevel: cleanFormLevel,
-        stream: clampStr(data.stream || 'A', 20) || 'A',
-        bookTitle: clampStr(data.bookTitle, 140),
+        stream: cleanStream,
+        bookTitle: cleanBookTitle,
         materialType: data.materialType,
-        subject: clampStr(data.subject || 'General', 60),
-        bookCode: clampStr(data.bookCode, 40),
+        subject: cleanSubject,
+        bookCode: cleanBookCode,
         quantity: cleanQty,
         checkoutDate: cleanCheckout,
         dueDate: cleanDue,
         returnedDate: cleanReturned,
         status,
         conditionOnReturn,
-        notes: clampStr(data.notes || '', 240),
+        notes: cleanNotes,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
     }
+
+    await recordLibraryTransaction(schoolId, {
+      ownerId,
+      loanId,
+      action: txAction,
+      studentId: data.studentId,
+      studentName: cleanStudentName,
+      admissionNo: cleanAdmissionNo,
+      formLevel: cleanFormLevel,
+      stream: cleanStream,
+      bookTitle: cleanBookTitle,
+      bookCode: cleanBookCode,
+      subject: cleanSubject,
+      quantity: cleanQty,
+      eventDate: txEventDate,
+      dueDate: cleanDue,
+      condition: conditionOnReturn,
+      notes: cleanNotes,
+    });
+
+    await syncLibraryLoanToPortal(schoolId, ownerId, loanId, {
+      studentId: data.studentId,
+      studentName: cleanStudentName,
+      formLevel: cleanFormLevel,
+      stream: cleanStream,
+      bookTitle: cleanBookTitle,
+      materialType: data.materialType,
+      subject: cleanSubject,
+      bookCode: cleanBookCode,
+      quantity: cleanQty,
+      checkoutDate: cleanCheckout,
+      dueDate: cleanDue,
+      returnedDate: cleanReturned,
+      status,
+      conditionOnReturn,
+      notes: cleanNotes,
+    });
+
+    await syncStudentCatalogMirror(schoolId, ownerId);
+
     return loanId;
   } catch (error) {
     handleFirestoreError(error, existingId ? OperationType.UPDATE : OperationType.CREATE, path);
@@ -1393,6 +1659,9 @@ export async function markLibraryLoanReturned(
     : todayIso;
 
   try {
+    const loanRef = doc(db, 'schools', schoolId, 'libraryLoans', loanId);
+    const loanSnap = await getDoc(loanRef);
+
     const payload: Record<string, unknown> = {
       status: 'Returned',
       returnedDate: cleanReturned,
@@ -1402,7 +1671,41 @@ export async function markLibraryLoanReturned(
     if (params.notes !== undefined) {
       payload.notes = clampStr(params.notes, 240);
     }
-    await updateDoc(doc(db, 'schools', schoolId, 'libraryLoans', loanId), payload);
+    await updateDoc(loanRef, payload);
+
+    if (loanSnap.exists()) {
+      const existing = loanSnap.data() as Omit<LibraryLoan, 'id'>;
+      const finalNotes =
+        params.notes !== undefined ? clampStr(params.notes, 240) : existing.notes || '';
+      await recordLibraryTransaction(schoolId, {
+        ownerId: existing.ownerId,
+        loanId,
+        action: 'Returned',
+        studentId: existing.studentId,
+        studentName: existing.studentName,
+        admissionNo: existing.admissionNo || 'N/A',
+        formLevel: existing.formLevel,
+        stream: existing.stream,
+        bookTitle: existing.bookTitle,
+        bookCode: existing.bookCode,
+        subject: existing.subject || 'General',
+        quantity: existing.quantity,
+        eventDate: cleanReturned,
+        dueDate: existing.dueDate,
+        condition: params.conditionOnReturn,
+        notes: finalNotes,
+      });
+
+      await syncLibraryLoanToPortal(schoolId, existing.ownerId, loanId, {
+        ...existing,
+        returnedDate: cleanReturned,
+        status: 'Returned',
+        conditionOnReturn: params.conditionOnReturn,
+        notes: finalNotes,
+      });
+
+      await syncStudentCatalogMirror(schoolId, existing.ownerId);
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -1410,13 +1713,49 @@ export async function markLibraryLoanReturned(
 
 export async function reopenLibraryLoan(schoolId: string, loanId: string) {
   const path = `schools/${schoolId}/libraryLoans/${loanId}`;
+  const todayIso = new Date().toISOString().slice(0, 10);
   try {
-    await updateDoc(doc(db, 'schools', schoolId, 'libraryLoans', loanId), {
+    const loanRef = doc(db, 'schools', schoolId, 'libraryLoans', loanId);
+    const loanSnap = await getDoc(loanRef);
+
+    await updateDoc(loanRef, {
       status: 'Checked Out',
       returnedDate: '',
       conditionOnReturn: 'Good',
       updatedAt: serverTimestamp(),
     });
+
+    if (loanSnap.exists()) {
+      const existing = loanSnap.data() as Omit<LibraryLoan, 'id'>;
+      await recordLibraryTransaction(schoolId, {
+        ownerId: existing.ownerId,
+        loanId,
+        action: 'Reopened',
+        studentId: existing.studentId,
+        studentName: existing.studentName,
+        admissionNo: existing.admissionNo || 'N/A',
+        formLevel: existing.formLevel,
+        stream: existing.stream,
+        bookTitle: existing.bookTitle,
+        bookCode: existing.bookCode,
+        subject: existing.subject || 'General',
+        quantity: existing.quantity,
+        eventDate: todayIso,
+        dueDate: existing.dueDate,
+        condition: 'Good',
+        notes: existing.notes || '',
+      });
+
+      await syncLibraryLoanToPortal(schoolId, existing.ownerId, loanId, {
+        ...existing,
+        returnedDate: '',
+        status: 'Checked Out',
+        conditionOnReturn: 'Good',
+        notes: existing.notes || '',
+      });
+
+      await syncStudentCatalogMirror(schoolId, existing.ownerId);
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -1424,10 +1763,724 @@ export async function reopenLibraryLoan(schoolId: string, loanId: string) {
 
 export async function removeLibraryLoan(schoolId: string, loanId: string) {
   const path = `schools/${schoolId}/libraryLoans/${loanId}`;
+  const todayIso = new Date().toISOString().slice(0, 10);
   try {
-    await deleteDoc(doc(db, 'schools', schoolId, 'libraryLoans', loanId));
+    const loanRef = doc(db, 'schools', schoolId, 'libraryLoans', loanId);
+    const loanSnap = await getDoc(loanRef);
+    let ownerIdForMirror = '';
+    if (loanSnap.exists()) {
+      const existing = loanSnap.data() as Omit<LibraryLoan, 'id'>;
+      ownerIdForMirror = existing.ownerId;
+      await recordLibraryTransaction(schoolId, {
+        ownerId: existing.ownerId,
+        loanId,
+        action: 'Deleted',
+        studentId: existing.studentId,
+        studentName: existing.studentName,
+        admissionNo: existing.admissionNo || 'N/A',
+        formLevel: existing.formLevel,
+        stream: existing.stream,
+        bookTitle: existing.bookTitle,
+        bookCode: existing.bookCode,
+        subject: existing.subject || 'General',
+        quantity: existing.quantity,
+        eventDate: todayIso,
+        dueDate: existing.dueDate,
+        condition: existing.conditionOnReturn || 'Good',
+        notes: existing.notes || 'Loan record removed from active register.',
+      });
+
+      const studentId = existing.studentId;
+      if (studentId) {
+        const stuSnap = await getDoc(doc(db, 'schools', schoolId, 'students', studentId));
+        if (stuSnap.exists()) {
+          const regCode = normalizeRegistrationCode(
+            (stuSnap.data() as { registrationCode?: string }).registrationCode
+          );
+          if (regCode.length >= 6) {
+            const portalLoanRef = doc(db, 'studentPortals', regCode, 'libraryLoans', loanId);
+            const portalLoanSnap = await getDoc(portalLoanRef);
+            if (portalLoanSnap.exists()) {
+              await deleteDoc(portalLoanRef);
+            }
+          }
+        }
+      }
+    }
+    await deleteDoc(loanRef);
+    if (ownerIdForMirror) {
+      await syncStudentCatalogMirror(schoolId, ownerIdForMirror);
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export interface LibraryBookPayload {
+  isbn: string;
+  title: string;
+  author: string;
+  subject: string;
+  materialType: LibraryMaterialCategory;
+  shelfCode: string;
+  totalCopies: number;
+  notes?: string;
+}
+
+export async function saveLibraryBook(
+  schoolId: string,
+  ownerId: string,
+  data: LibraryBookPayload,
+  existingId?: string
+): Promise<string> {
+  const bookId = existingId || makeId('bk');
+  const path = `schools/${schoolId}/libraryBooks/${bookId}`;
+  const cleanIsbn = clampStr(data.isbn, 32);
+  const cleanTitle = clampStr(data.title, 140);
+  const cleanAuthor = clampStr(data.author, 120);
+  const cleanSubject = clampStr(data.subject || 'General', 60) || 'General';
+  const cleanShelfCode = clampStr(data.shelfCode || '', 40).toUpperCase();
+  const cleanTotalCopies = Math.min(500, Math.max(1, Math.round(Number(data.totalCopies) || 1)));
+  const cleanNotes = clampStr(data.notes || '', 240);
+
+  try {
+    if (existingId) {
+      await updateDoc(doc(db, 'schools', schoolId, 'libraryBooks', existingId), {
+        isbn: cleanIsbn,
+        title: cleanTitle,
+        author: cleanAuthor,
+        subject: cleanSubject,
+        materialType: data.materialType,
+        shelfCode: cleanShelfCode,
+        totalCopies: cleanTotalCopies,
+        notes: cleanNotes,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(doc(db, 'schools', schoolId, 'libraryBooks', bookId), {
+        ownerId,
+        isbn: cleanIsbn,
+        title: cleanTitle,
+        author: cleanAuthor,
+        subject: cleanSubject,
+        materialType: data.materialType,
+        shelfCode: cleanShelfCode,
+        totalCopies: cleanTotalCopies,
+        notes: cleanNotes,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    await syncStudentCatalogMirror(schoolId, ownerId);
+    return bookId;
+  } catch (error) {
+    handleFirestoreError(error, existingId ? OperationType.UPDATE : OperationType.CREATE, path);
+  }
+}
+
+export async function removeLibraryBook(schoolId: string, bookId: string) {
+  const path = `schools/${schoolId}/libraryBooks/${bookId}`;
+  try {
+    await deleteDoc(doc(db, 'schools', schoolId, 'libraryBooks', bookId));
+    const mirrorRef = doc(db, 'studentLibraries', schoolId, 'books', bookId);
+    const mirrorSnap = await getDoc(mirrorRef);
+    if (mirrorSnap.exists()) {
+      await deleteDoc(mirrorRef);
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function seedDefaultLibraryBooks(
+  schoolId: string,
+  ownerId: string,
+  existingBooks: LibraryBook[]
+): Promise<number> {
+  const existingTitles = new Set(existingBooks.map((b) => b.title.trim().toLowerCase()));
+  const missing = DEFAULT_LIBRARY_BOOKS_PRESETS.filter(
+    (preset) => !existingTitles.has(preset.title.trim().toLowerCase())
+  );
+  if (missing.length === 0) return 0;
+
+  const path = `schools/${schoolId}/libraryBooks`;
+  try {
+    const batch = writeBatch(db);
+    for (const preset of missing) {
+      const bookId = makeId('bk');
+      batch.set(doc(db, 'schools', schoolId, 'libraryBooks', bookId), {
+        ownerId,
+        isbn: preset.isbn,
+        title: preset.title,
+        author: preset.author,
+        subject: preset.subject,
+        materialType: preset.materialType,
+        shelfCode: preset.shelfCode,
+        totalCopies: preset.totalCopies,
+        notes: preset.notes,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    await batch.commit();
+    await syncStudentCatalogMirror(schoolId, ownerId);
+    return missing.length;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function syncStudentCatalogMirror(schoolId: string, ownerId: string): Promise<void> {
+  try {
+    const [booksSnap, loansSnap, mirrorsSnap] = await Promise.all([
+      getDocs(query(collection(db, 'schools', schoolId, 'libraryBooks'), where('ownerId', '==', ownerId))),
+      getDocs(query(collection(db, 'schools', schoolId, 'libraryLoans'), where('ownerId', '==', ownerId))),
+      getDocs(collection(db, 'studentLibraries', schoolId, 'books')),
+    ]);
+
+    const activeLoanCountByTitle = new Map<string, number>();
+    for (const d of loansSnap.docs) {
+      const loan = d.data() as { status?: string; bookTitle?: string; quantity?: number };
+      if (loan.status !== 'Checked Out') continue;
+      const key = String(loan.bookTitle ?? '').trim().toLowerCase();
+      if (!key) continue;
+      const qty = Math.max(1, Math.round(Number(loan.quantity) || 1));
+      activeLoanCountByTitle.set(key, (activeLoanCountByTitle.get(key) || 0) + qty);
+    }
+
+    const existingMirrorIds = new Set(mirrorsSnap.docs.map((d) => d.id));
+    const currentBookIds = new Set(booksSnap.docs.map((d) => d.id));
+
+    const ops: Array<
+      | { kind: 'set'; id: string; data: Record<string, unknown> }
+      | { kind: 'update'; id: string; data: Record<string, unknown> }
+      | { kind: 'delete'; id: string }
+    > = [];
+
+    for (const bookDoc of booksSnap.docs) {
+      const book = bookDoc.data() as Omit<LibraryBook, 'id'>;
+      const cleanIsbn = clampStr(book.isbn || '', 32);
+      const cleanTitle = clampStr(book.title || '', 140);
+      const cleanAuthor = clampStr(book.author || '', 120);
+      if (cleanIsbn.length < 3 || cleanTitle.length < 2 || cleanAuthor.length < 2) continue;
+
+      const totalCopies = Math.min(500, Math.max(1, Math.round(Number(book.totalCopies) || 1)));
+      const checkedOutRaw = activeLoanCountByTitle.get(cleanTitle.toLowerCase()) || 0;
+      const checkedOutCopies = Math.min(500, Math.max(0, checkedOutRaw));
+      const availableCopies = Math.min(500, Math.max(0, totalCopies - checkedOutCopies));
+
+      const sharedFields = {
+        isbn: cleanIsbn,
+        title: cleanTitle,
+        author: cleanAuthor,
+        subject: clampStr(book.subject || 'General', 60),
+        materialType: book.materialType,
+        shelfCode: clampStr(book.shelfCode || '', 40).toUpperCase(),
+        totalCopies,
+        checkedOutCopies,
+        availableCopies,
+        notes: clampStr(book.notes || '', 240),
+        updatedAt: serverTimestamp(),
+      };
+
+      if (existingMirrorIds.has(bookDoc.id)) {
+        ops.push({ kind: 'update', id: bookDoc.id, data: sharedFields });
+      } else {
+        ops.push({
+          kind: 'set',
+          id: bookDoc.id,
+          data: {
+            ownerId,
+            schoolId,
+            ...sharedFields,
+            createdAt: serverTimestamp(),
+          },
+        });
+      }
+    }
+
+    for (const mirrorId of existingMirrorIds) {
+      if (!currentBookIds.has(mirrorId)) {
+        ops.push({ kind: 'delete', id: mirrorId });
+      }
+    }
+
+    const CHUNK_SIZE = 400;
+    for (let i = 0; i < ops.length; i += CHUNK_SIZE) {
+      const batch = writeBatch(db);
+      for (const op of ops.slice(i, i + CHUNK_SIZE)) {
+        const ref = doc(db, 'studentLibraries', schoolId, 'books', op.id);
+        if (op.kind === 'set') batch.set(ref, op.data);
+        else if (op.kind === 'update') batch.update(ref, op.data);
+        else batch.delete(ref);
+      }
+      await batch.commit();
+    }
+  } catch {
+    // Non-blocking mirror sync; callers already saved primary library record
+  }
+}
+
+export interface LibraryReservationPayload {
+  schoolId: string;
+  ownerId: string;
+  bookId: string;
+  isbn: string;
+  bookTitle: string;
+  subject: string;
+  materialType: LibraryMaterialCategory;
+  studentId: string;
+  studentName: string;
+  admissionNo: string;
+  formLevel: FormLevel;
+  stream: string;
+  registrationCode?: string;
+  requestedDate?: string;
+  notes?: string;
+}
+
+export async function createLibraryReservation(
+  data: LibraryReservationPayload
+): Promise<string> {
+  const reservationId = makeId('res');
+  const path = `schools/${data.schoolId}/libraryReservations/${reservationId}`;
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const requestedDate =
+    data.requestedDate && /^\d{4}-\d{2}-\d{2}$/.test(data.requestedDate)
+      ? data.requestedDate
+      : todayIso;
+
+  let cleanRegCode = normalizeRegistrationCode(data.registrationCode || '');
+  if (!cleanRegCode && auth.currentUser) {
+    try {
+      const stuSnap = await getDoc(doc(db, 'schools', data.schoolId, 'students', data.studentId));
+      if (stuSnap.exists()) {
+        cleanRegCode = normalizeRegistrationCode(
+          (stuSnap.data() as { registrationCode?: string }).registrationCode
+        );
+      }
+    } catch {
+      // Optional lookup for staff-initiated requests
+    }
+  }
+
+  const cleanBookId =
+    String(data.bookId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128) || 'catalog_book';
+  const docPayload = {
+    ownerId: data.ownerId,
+    schoolId: data.schoolId,
+    bookId: cleanBookId,
+    isbn: clampStr(data.isbn || '', 32),
+    bookTitle: clampStr(data.bookTitle, 140),
+    subject: clampStr(data.subject || 'General', 60),
+    materialType: data.materialType,
+    studentId: data.studentId,
+    studentName: clampStr(data.studentName, 120),
+    admissionNo: clampStr(data.admissionNo || 'N/A', 40) || 'N/A',
+    formLevel: Math.min(4, Math.max(1, Math.round(Number(data.formLevel) || 1))),
+    stream: clampStr(data.stream || 'A', 20) || 'A',
+    registrationCode: cleanRegCode,
+    status: 'Pending' as LibraryReservationStatus,
+    requestedDate,
+    notes: clampStr(data.notes || '', 240),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  try {
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'schools', data.schoolId, 'libraryReservations', reservationId), docPayload);
+
+    if (cleanRegCode.length >= 6) {
+      let writePortalMirror = !auth.currentUser;
+      if (auth.currentUser) {
+        const portalSnap = await getDoc(doc(db, 'studentPortals', cleanRegCode));
+        if (portalSnap.exists()) {
+          const p = portalSnap.data() as { schoolId?: string; studentId?: string };
+          writePortalMirror = p.schoolId === data.schoolId && p.studentId === data.studentId;
+        }
+      }
+      if (writePortalMirror) {
+        batch.set(
+          doc(db, 'studentPortals', cleanRegCode, 'reservations', reservationId),
+          docPayload
+        );
+      }
+    }
+
+    await batch.commit();
+    return reservationId;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function updateLibraryReservationStatus(
+  schoolId: string,
+  reservationId: string,
+  status: LibraryReservationStatus,
+  registrationCode?: string,
+  notes?: string
+): Promise<void> {
+  const path = `schools/${schoolId}/libraryReservations/${reservationId}`;
+  const cleanRegCode = normalizeRegistrationCode(registrationCode || '');
+  try {
+    const batch = writeBatch(db);
+    const schoolResRef = doc(db, 'schools', schoolId, 'libraryReservations', reservationId);
+    const updateFields: Record<string, unknown> = {
+      status,
+      updatedAt: serverTimestamp(),
+    };
+    if (notes !== undefined) {
+      updateFields.notes = clampStr(notes, 240);
+    }
+    batch.update(schoolResRef, updateFields);
+
+    if (cleanRegCode.length >= 6) {
+      const portalResRef = doc(db, 'studentPortals', cleanRegCode, 'reservations', reservationId);
+      const portalResSnap = await getDoc(portalResRef);
+      if (portalResSnap.exists()) {
+        batch.update(portalResRef, updateFields);
+      }
+    }
+
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function removeLibraryReservation(
+  schoolId: string,
+  reservationId: string,
+  registrationCode?: string
+): Promise<void> {
+  const path = `schools/${schoolId}/libraryReservations/${reservationId}`;
+  const cleanRegCode = normalizeRegistrationCode(registrationCode || '');
+  try {
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'schools', schoolId, 'libraryReservations', reservationId));
+    if (cleanRegCode.length >= 6) {
+      const portalResRef = doc(db, 'studentPortals', cleanRegCode, 'reservations', reservationId);
+      const portalResSnap = await getDoc(portalResRef);
+      if (portalResSnap.exists()) {
+        batch.delete(portalResRef);
+      }
+    }
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export interface DigitalLibraryResourcePayload {
+  title: string;
+  author: string;
+  subject: string;
+  formLevel: DigitalResourceFormLevel;
+  category: DigitalResourceCategory;
+  examYear?: string;
+  summary?: string;
+  content: string;
+  allowOffline: boolean;
+}
+
+export async function saveDigitalResource(
+  schoolId: string,
+  ownerId: string,
+  data: DigitalLibraryResourcePayload,
+  existingId?: string
+): Promise<string> {
+  const resourceId = existingId || makeId('dig');
+  const path = `schools/${schoolId}/digitalLibrary/${resourceId}`;
+  const cleanTitle = clampStr(data.title, 140);
+  const cleanAuthor = clampStr(data.author, 120);
+  const cleanSubject = clampStr(data.subject || 'General', 60) || 'General';
+  const cleanExamYear = clampStr(data.examYear || '', 16);
+  const cleanSummary = clampStr(data.summary || '', 280);
+  const cleanContent = String(data.content ?? '').trim().slice(0, 30000);
+  const allowOffline = Boolean(data.allowOffline);
+
+  try {
+    const schoolRef = doc(db, 'schools', schoolId, 'digitalLibrary', resourceId);
+    const mirrorRef = doc(db, 'studentLibraries', schoolId, 'digitalResources', resourceId);
+    const sharedUpdate = {
+      title: cleanTitle,
+      author: cleanAuthor,
+      subject: cleanSubject,
+      formLevel: data.formLevel,
+      category: data.category,
+      examYear: cleanExamYear,
+      summary: cleanSummary,
+      content: cleanContent,
+      allowOffline,
+      updatedAt: serverTimestamp(),
+    };
+
+    const batch = writeBatch(db);
+    if (existingId) {
+      const mirrorSnap = await getDoc(mirrorRef);
+      batch.update(schoolRef, sharedUpdate);
+      if (mirrorSnap.exists()) {
+        batch.update(mirrorRef, sharedUpdate);
+      } else {
+        batch.set(mirrorRef, {
+          ownerId,
+          schoolId,
+          ...sharedUpdate,
+          createdAt: serverTimestamp(),
+        });
+      }
+    } else {
+      const fullCreate = {
+        ownerId,
+        schoolId,
+        ...sharedUpdate,
+        createdAt: serverTimestamp(),
+      };
+      batch.set(schoolRef, fullCreate);
+      batch.set(mirrorRef, fullCreate);
+    }
+
+    await batch.commit();
+    return resourceId;
+  } catch (error) {
+    handleFirestoreError(error, existingId ? OperationType.UPDATE : OperationType.CREATE, path);
+  }
+}
+
+export async function removeDigitalResource(schoolId: string, resourceId: string): Promise<void> {
+  const path = `schools/${schoolId}/digitalLibrary/${resourceId}`;
+  try {
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'schools', schoolId, 'digitalLibrary', resourceId));
+    const mirrorRef = doc(db, 'studentLibraries', schoolId, 'digitalResources', resourceId);
+    const mirrorSnap = await getDoc(mirrorRef);
+    if (mirrorSnap.exists()) {
+      batch.delete(mirrorRef);
+    }
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function seedDefaultDigitalResources(
+  schoolId: string,
+  ownerId: string,
+  existingResources: DigitalLibraryResource[]
+): Promise<number> {
+  const existingTitles = new Set(existingResources.map((r) => r.title.trim().toLowerCase()));
+  const missing = DEFAULT_DIGITAL_LIBRARY_PRESETS.filter(
+    (preset) => !existingTitles.has(preset.title.trim().toLowerCase())
+  );
+  if (missing.length === 0) return 0;
+
+  const path = `schools/${schoolId}/digitalLibrary`;
+  try {
+    const batch = writeBatch(db);
+    for (const preset of missing) {
+      const resourceId = makeId('dig');
+      const payload = {
+        ownerId,
+        schoolId,
+        title: clampStr(preset.title, 140),
+        author: clampStr(preset.author, 120),
+        subject: clampStr(preset.subject, 60),
+        formLevel: preset.formLevel,
+        category: preset.category,
+        examYear: clampStr(preset.examYear, 16),
+        summary: clampStr(preset.summary, 280),
+        content: preset.content.slice(0, 30000),
+        allowOffline: preset.allowOffline,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      batch.set(doc(db, 'schools', schoolId, 'digitalLibrary', resourceId), payload);
+      batch.set(doc(db, 'studentLibraries', schoolId, 'digitalResources', resourceId), payload);
+    }
+    await batch.commit();
+    return missing.length;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export type LibraryBookImportStrategy = 'skip' | 'update' | 'add_copies';
+
+export interface LibraryBookImportResult {
+  created: number;
+  updated: number;
+  skipped: number;
+}
+
+function normalizeBookIsbnKey(isbn?: string): string {
+  return String(isbn ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '');
+}
+
+export async function bulkImportLibraryBooks(
+  schoolId: string,
+  ownerId: string,
+  rows: LibraryBookPayload[],
+  existingBooks: LibraryBook[],
+  duplicateStrategy: LibraryBookImportStrategy = 'skip'
+): Promise<LibraryBookImportResult> {
+  if (rows.length === 0) {
+    return { created: 0, updated: 0, skipped: 0 };
+  }
+
+  const path = `schools/${schoolId}/libraryBooks`;
+  const byIsbn = new Map<string, LibraryBook>();
+  const byTitle = new Map<string, LibraryBook>();
+
+  for (const book of existingBooks) {
+    const isbnKey = normalizeBookIsbnKey(book.isbn);
+    if (isbnKey.length >= 3) byIsbn.set(isbnKey, book);
+    const titleKey = book.title.trim().toLowerCase();
+    if (titleKey) byTitle.set(titleKey, book);
+  }
+
+  type BatchOp =
+    | { kind: 'create'; id: string; data: Record<string, unknown> }
+    | { kind: 'update'; id: string; data: Record<string, unknown> };
+
+  const ops: BatchOp[] = [];
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
+
+  for (const row of rows) {
+    const cleanIsbn = clampStr(row.isbn, 32);
+    const cleanTitle = clampStr(row.title, 140);
+    const cleanAuthor = clampStr(row.author, 120);
+    const cleanSubject = clampStr(row.subject || 'General', 60) || 'General';
+    const cleanShelfCode = clampStr(row.shelfCode || '', 40).toUpperCase();
+    const cleanTotalCopies = Math.min(500, Math.max(1, Math.round(Number(row.totalCopies) || 1)));
+    const cleanNotes = clampStr(row.notes || '', 240);
+
+    if (cleanIsbn.length < 3 || cleanTitle.length < 2 || cleanAuthor.length < 2) {
+      skipped += 1;
+      continue;
+    }
+
+    const isbnKey = normalizeBookIsbnKey(cleanIsbn);
+    const titleKey = cleanTitle.toLowerCase();
+    const matched = byIsbn.get(isbnKey) || byTitle.get(titleKey);
+
+    if (matched) {
+      if (duplicateStrategy === 'skip') {
+        skipped += 1;
+        continue;
+      }
+
+      const nextCopies =
+        duplicateStrategy === 'add_copies'
+          ? Math.min(500, Math.max(1, (matched.totalCopies || 0) + cleanTotalCopies))
+          : cleanTotalCopies;
+
+      const updateFields: Record<string, unknown> =
+        duplicateStrategy === 'add_copies'
+          ? {
+              isbn: matched.isbn,
+              title: matched.title,
+              author: matched.author,
+              subject: matched.subject || cleanSubject,
+              materialType: matched.materialType,
+              shelfCode: matched.shelfCode || cleanShelfCode,
+              totalCopies: nextCopies,
+              notes: matched.notes || cleanNotes,
+              updatedAt: serverTimestamp(),
+            }
+          : {
+              isbn: cleanIsbn,
+              title: cleanTitle,
+              author: cleanAuthor,
+              subject: cleanSubject,
+              materialType: row.materialType,
+              shelfCode: cleanShelfCode,
+              totalCopies: nextCopies,
+              notes: cleanNotes,
+              updatedAt: serverTimestamp(),
+            };
+
+      ops.push({ kind: 'update', id: matched.id, data: updateFields });
+      const updatedRecord: LibraryBook = {
+        ...matched,
+        ...(duplicateStrategy === 'add_copies'
+          ? { totalCopies: nextCopies }
+          : {
+              isbn: cleanIsbn,
+              title: cleanTitle,
+              author: cleanAuthor,
+              subject: cleanSubject,
+              materialType: row.materialType,
+              shelfCode: cleanShelfCode,
+              totalCopies: nextCopies,
+              notes: cleanNotes,
+            }),
+      };
+      if (isbnKey.length >= 3) byIsbn.set(isbnKey, updatedRecord);
+      byTitle.set(updatedRecord.title.trim().toLowerCase(), updatedRecord);
+      updated += 1;
+    } else {
+      const bookId = makeId('bk');
+      ops.push({
+        kind: 'create',
+        id: bookId,
+        data: {
+          ownerId,
+          isbn: cleanIsbn,
+          title: cleanTitle,
+          author: cleanAuthor,
+          subject: cleanSubject,
+          materialType: row.materialType,
+          shelfCode: cleanShelfCode,
+          totalCopies: cleanTotalCopies,
+          notes: cleanNotes,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+      });
+      const newRecord: LibraryBook = {
+        id: bookId,
+        ownerId,
+        isbn: cleanIsbn,
+        title: cleanTitle,
+        author: cleanAuthor,
+        subject: cleanSubject,
+        materialType: row.materialType,
+        shelfCode: cleanShelfCode,
+        totalCopies: cleanTotalCopies,
+        notes: cleanNotes,
+      };
+      if (isbnKey.length >= 3) byIsbn.set(isbnKey, newRecord);
+      byTitle.set(titleKey, newRecord);
+      created += 1;
+    }
+  }
+
+  try {
+    const CHUNK_SIZE = 400;
+    for (let i = 0; i < ops.length; i += CHUNK_SIZE) {
+      const slice = ops.slice(i, i + CHUNK_SIZE);
+      const batch = writeBatch(db);
+      for (const op of slice) {
+        const ref = doc(db, 'schools', schoolId, 'libraryBooks', op.id);
+        if (op.kind === 'create') {
+          batch.set(ref, op.data);
+        } else {
+          batch.update(ref, op.data);
+        }
+      }
+      await batch.commit();
+    }
+    await syncStudentCatalogMirror(schoolId, ownerId);
+    return { created, updated, skipped };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
@@ -1663,6 +2716,18 @@ export async function seedDemoMalawiSchool(ownerId: string): Promise<string> {
         status: 'Active',
       },
     },
+    {
+      id: 'tch_06',
+      data: {
+        staffCode: 'LIB-1009',
+        fullName: 'Mr. Chisomo Kalua',
+        roleTitle: 'School Librarian',
+        subjects: ['General'],
+        assignedForm: 'Main Library',
+        phone: '+265 991 804 330',
+        status: 'Active',
+      },
+    },
   ];
 
   const demoRegCodes = new Map<string, string>();
@@ -1746,6 +2811,64 @@ export async function seedDemoMalawiSchool(ownerId: string): Promise<string> {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+    });
+    DEFAULT_LIBRARY_BOOKS_PRESETS.forEach((preset, idx) => {
+      const bookId = `bk_${String(idx + 1).padStart(2, '0')}`;
+      const checkedOutCount =
+        preset.title === 'MSCE Biology Form 4 Revision Guide' ||
+        preset.title === 'The Pearl (John Steinbeck)' ||
+        preset.title === 'Excel & Succeed Physical Science Form 3'
+          ? 1
+          : 0;
+      batch1.set(doc(db, 'schools', schoolId, 'libraryBooks', bookId), {
+        ownerId,
+        isbn: preset.isbn,
+        title: preset.title,
+        author: preset.author,
+        subject: preset.subject,
+        materialType: preset.materialType,
+        shelfCode: preset.shelfCode,
+        totalCopies: preset.totalCopies,
+        notes: preset.notes,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      batch1.set(doc(db, 'studentLibraries', schoolId, 'books', bookId), {
+        ownerId,
+        schoolId,
+        isbn: preset.isbn,
+        title: preset.title,
+        author: preset.author,
+        subject: preset.subject,
+        materialType: preset.materialType,
+        shelfCode: preset.shelfCode,
+        totalCopies: preset.totalCopies,
+        checkedOutCopies: checkedOutCount,
+        availableCopies: Math.max(0, preset.totalCopies - checkedOutCount),
+        notes: preset.notes,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    });
+    DEFAULT_DIGITAL_LIBRARY_PRESETS.forEach((preset, idx) => {
+      const digId = `dig_${String(idx + 1).padStart(2, '0')}`;
+      const payload = {
+        ownerId,
+        schoolId,
+        title: clampStr(preset.title, 140),
+        author: clampStr(preset.author, 120),
+        subject: clampStr(preset.subject, 60),
+        formLevel: preset.formLevel,
+        category: preset.category,
+        examYear: clampStr(preset.examYear, 16),
+        summary: clampStr(preset.summary, 280),
+        content: preset.content.slice(0, 30000),
+        allowOffline: preset.allowOffline,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      batch1.set(doc(db, 'schools', schoolId, 'digitalLibrary', digId), payload);
+      batch1.set(doc(db, 'studentLibraries', schoolId, 'digitalResources', digId), payload);
     });
     await batch1.commit();
   } catch (error) {
@@ -2020,6 +3143,84 @@ export async function seedDemoMalawiSchool(ownerId: string): Promise<string> {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+
+      const regCode = demoRegCodes.get(loan.studentId);
+      if (regCode && regCode.length >= 6) {
+        batch2.set(doc(db, 'studentPortals', regCode, 'libraryLoans', loan.id), {
+          ownerId,
+          schoolId,
+          registrationCode: regCode,
+          studentId: loan.studentId,
+          studentName: loan.studentName,
+          formLevel: loan.formLevel,
+          stream: loan.stream,
+          bookTitle: loan.bookTitle,
+          materialType: loan.materialType,
+          subject: loan.subject,
+          bookCode: loan.bookCode,
+          quantity: loan.quantity,
+          checkoutDate: loan.checkoutDate,
+          dueDate: loan.dueDate,
+          returnedDate: loan.returnedDate,
+          status: loan.status,
+          conditionOnReturn: loan.conditionOnReturn,
+          notes: loan.notes,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      batch2.set(
+        doc(db, 'schools', schoolId, 'libraryTransactions', `ltx_${loan.id}_out`),
+        buildLibraryTransactionDocData({
+          ownerId,
+          loanId: loan.id,
+          action: 'Checked Out',
+          studentId: loan.studentId,
+          studentName: loan.studentName,
+          admissionNo: loan.admissionNo,
+          formLevel: loan.formLevel,
+          stream: loan.stream,
+          bookTitle: loan.bookTitle,
+          bookCode: loan.bookCode,
+          subject: loan.subject,
+          quantity: loan.quantity,
+          eventDate: loan.checkoutDate,
+          dueDate: loan.dueDate,
+          condition: 'Good',
+          notes: loan.notes,
+          actorUidOverride: ownerId,
+          actorNameOverride:
+            auth.currentUser?.displayName || auth.currentUser?.email || 'School Librarian',
+        })
+      );
+
+      if (loan.status === 'Returned') {
+        batch2.set(
+          doc(db, 'schools', schoolId, 'libraryTransactions', `ltx_${loan.id}_ret`),
+          buildLibraryTransactionDocData({
+            ownerId,
+            loanId: loan.id,
+            action: 'Returned',
+            studentId: loan.studentId,
+            studentName: loan.studentName,
+            admissionNo: loan.admissionNo,
+            formLevel: loan.formLevel,
+            stream: loan.stream,
+            bookTitle: loan.bookTitle,
+            bookCode: loan.bookCode,
+            subject: loan.subject,
+            quantity: loan.quantity,
+            eventDate: loan.returnedDate || todayIso,
+            dueDate: loan.dueDate,
+            condition: loan.conditionOnReturn,
+            notes: loan.notes,
+            actorUidOverride: ownerId,
+            actorNameOverride:
+              auth.currentUser?.displayName || auth.currentUser?.email || 'School Librarian',
+          })
+        );
+      }
     }
 
     await batch2.commit();

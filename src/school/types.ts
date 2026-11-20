@@ -363,3 +363,111 @@ export interface LibraryLoan {
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
+
+export interface LibraryBook {
+  id: string;
+  ownerId: string;
+  isbn: string;
+  title: string;
+  author: string;
+  subject: string;
+  materialType: LibraryMaterialCategory;
+  shelfCode: string;
+  totalCopies: number;
+  notes: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export type LibraryTransactionAction =
+  | 'Checked Out'
+  | 'Returned'
+  | 'Reopened'
+  | 'Edited'
+  | 'Deleted';
+
+export interface LibraryTransaction {
+  id: string;
+  ownerId: string;
+  loanId: string;
+  action: LibraryTransactionAction;
+  studentId: string;
+  studentName: string;
+  admissionNo: string;
+  formLevel: FormLevel;
+  stream: string;
+  bookTitle: string;
+  bookCode: string;
+  subject: string;
+  quantity: number;
+  eventDate: string;
+  dueDate: string;
+  condition: LibraryItemCondition;
+  actorUid: string;
+  actorName: string;
+  notes: string;
+  createdAt?: Timestamp;
+}
+
+export type LibraryReservationStatus = 'Pending' | 'Ready' | 'Fulfilled' | 'Cancelled';
+
+export interface LibraryReservation {
+  id: string;
+  ownerId: string;
+  schoolId: string;
+  bookId: string;
+  isbn: string;
+  bookTitle: string;
+  subject: string;
+  materialType: LibraryMaterialCategory;
+  studentId: string;
+  studentName: string;
+  admissionNo: string;
+  formLevel: FormLevel;
+  stream: string;
+  registrationCode: string;
+  status: LibraryReservationStatus;
+  requestedDate: string;
+  notes: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export interface CatalogBookMirror {
+  id: string;
+  ownerId: string;
+  schoolId: string;
+  isbn: string;
+  title: string;
+  author: string;
+  subject: string;
+  materialType: LibraryMaterialCategory;
+  shelfCode: string;
+  totalCopies: number;
+  checkedOutCopies: number;
+  availableCopies: number;
+  notes: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export type DigitalResourceCategory = 'Book' | 'Past Paper' | 'Revision Guide' | 'Set Book';
+export type DigitalResourceFormLevel = 'All' | 'Form 1' | 'Form 2' | 'Form 3' | 'Form 4';
+
+export interface DigitalLibraryResource {
+  id: string;
+  ownerId: string;
+  schoolId: string;
+  title: string;
+  author: string;
+  subject: string;
+  formLevel: DigitalResourceFormLevel;
+  category: DigitalResourceCategory;
+  examYear: string;
+  summary: string;
+  content: string;
+  allowOffline: boolean;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+

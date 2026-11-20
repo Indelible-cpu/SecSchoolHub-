@@ -1,6 +1,6 @@
 {
-  "name": "LedgerCalc",
-  "description": "Installable mobile business calculator for profit margin, markup, tax, discounts, break-even, and loan estimates.",
+  "name": "SecSchoolHub",
+  "description": "Role-based secondary school management portal featuring Form 1–4 student records, Exam JCE/MSCE grading, MWK fee billing, attendance, school library analytics, and student registration portal.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

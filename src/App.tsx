@@ -12,7 +12,6 @@ import {
   LogOut,
   Moon,
   Sun,
-  GraduationCap,
   ShieldAlert,
 } from 'lucide-react';
 import {
@@ -27,9 +26,13 @@ import {
 import {
   Assessment,
   AttendanceRecord,
+  DigitalLibraryResource,
   FeeInvoice,
   FeePayment,
+  LibraryBook,
   LibraryLoan,
+  LibraryReservation,
+  LibraryTransaction,
   School,
   SchoolSection,
   SchoolSubject,
@@ -51,6 +54,7 @@ import { AttendanceRegister } from './components/school/AttendanceRegister';
 import { SchoolLibrary } from './components/school/SchoolLibrary';
 import { StaffAndSettings } from './components/school/StaffAndSettings';
 import { StudentResultsPortal } from './components/school/StudentResultsPortal';
+import { LandingPage } from './components/school/LandingPage';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
 
@@ -111,6 +115,8 @@ export default function App() {
   const [staffSchoolsMap, setStaffSchoolsMap] = useState<Record<string, School>>({});
   const [activeSchoolId, setActiveSchoolId] = useState<string | null>(null);
   const [creatingAnotherSchool, setCreatingAnotherSchool] = useState(false);
+  const [adminCheckLoading, setAdminCheckLoading] = useState(false);
+  const [isAdminDoc, setIsAdminDoc] = useState(false);
 
   const [students, setStudents] = useState<Student[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
@@ -122,6 +128,10 @@ export default function App() {
   const [smsConfig, setSmsConfig] = useState<SmsConfig | null>(null);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [libraryLoans, setLibraryLoans] = useState<LibraryLoan[]>([]);
+  const [libraryBooks, setLibraryBooks] = useState<LibraryBook[]>([]);
+  const [libraryTransactions, setLibraryTransactions] = useState<LibraryTransaction[]>([]);
+  const [libraryReservations, setLibraryReservations] = useState<LibraryReservation[]>([]);
+  const [digitalLibraryResources, setDigitalLibraryResources] = useState<DigitalLibraryResource[]>([]);
 
   useEffect(() => {
     testConnection();
@@ -148,6 +158,8 @@ export default function App() {
         setActiveSchoolId(null);
         setSchoolsLoading(false);
         setStaffLinksLoading(false);
+        setAdminCheckLoading(false);
+        setIsAdminDoc(false);
         setPortalOverride('auto');
         setCreatingAnotherSchool(false);
         setStudents([]);
@@ -160,11 +172,20 @@ export default function App() {
         setSmsConfig(null);
         setAttendance([]);
         setLibraryLoans([]);
+        setLibraryBooks([]);
+        setLibraryTransactions([]);
+        setLibraryReservations([]);
+        setDigitalLibraryResources([]);
         return;
       }
 
+      setAdminCheckLoading(true);
       try {
-        const profileSnap = await getDoc(doc(db, 'users', nextUser.uid));
+        const [profileSnap, adminSnap] = await Promise.all([
+          getDoc(doc(db, 'users', nextUser.uid)),
+          getDoc(doc(db, 'admins', nextUser.uid)).catch(() => null),
+        ]);
+        setIsAdminDoc(Boolean(adminSnap?.exists()));
         if (profileSnap.exists()) {
           const data = profileSnap.data() as { activeSchoolId?: string };
           if (data.activeSchoolId) {
@@ -176,6 +197,8 @@ export default function App() {
         if (!msg.includes('offline') && !msg.includes('unavailable')) {
           handleFirestoreError(err, OperationType.GET, `users/${nextUser.uid}`);
         }
+      } finally {
+        setAdminCheckLoading(false);
       }
     });
     return () => unsub();
@@ -333,6 +356,11 @@ export default function App() {
   const activeRole: WorkspaceRole = activeEntry?.role || 'Owner';
   const activeStaffLink = activeEntry?.staffLink || null;
   const rolePermissions = useMemo(() => getRolePermissions(activeRole), [activeRole]);
+  const isPlatformAdmin = useMemo(() => {
+    if (!user) return false;
+    const normalizedEmail = (user.email || '').trim().toLowerCase();
+    return normalizedEmail === 'dicksonpetroj1@gmail.com' || isAdminDoc;
+  }, [isAdminDoc, user]);
 
   const visibleNavItems = useMemo(
     () => NAV_ITEMS.filter((item) => rolePermissions.allowedSections.includes(item.id)),
@@ -368,6 +396,10 @@ export default function App() {
       setSmsConfig(null);
       setAttendance([]);
       setLibraryLoans([]);
+      setLibraryBooks([]);
+      setLibraryTransactions([]);
+      setLibraryReservations([]);
+      setDigitalLibraryResources([]);
       return;
     }
 
@@ -510,8 +542,90 @@ export default function App() {
           (err) => handleFirestoreError(err, OperationType.LIST, `schools/${schoolId}/libraryLoans`)
         )
       );
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'schools', schoolId, 'libraryBooks'), where('ownerId', '==', schoolOwnerId)),
+          (snap) => {
+            const list = snap.docs.map((d) => ({
+              id: d.id,
+              ...(d.data() as Omit<LibraryBook, 'id'>),
+            }));
+            list.sort((a, b) => a.title.localeCompare(b.title));
+            setLibraryBooks(list);
+          },
+          (err) => handleFirestoreError(err, OperationType.LIST, `schools/${schoolId}/libraryBooks`)
+        )
+      );
+      unsubs.push(
+        onSnapshot(
+          query(
+            collection(db, 'schools', schoolId, 'libraryTransactions'),
+            where('ownerId', '==', schoolOwnerId)
+          ),
+          (snap) => {
+            const list = snap.docs.map((d) => ({
+              id: d.id,
+              ...(d.data() as Omit<LibraryTransaction, 'id'>),
+            }));
+            list.sort((a, b) => {
+              const tA = a.createdAt?.toMillis?.() || 0;
+              const tB = b.createdAt?.toMillis?.() || 0;
+              if (tA !== tB) return tB - tA;
+              return (b.eventDate || '').localeCompare(a.eventDate || '');
+            });
+            setLibraryTransactions(list);
+          },
+          (err) =>
+            handleFirestoreError(err, OperationType.LIST, `schools/${schoolId}/libraryTransactions`)
+        )
+      );
+      unsubs.push(
+        onSnapshot(
+          query(
+            collection(db, 'schools', schoolId, 'libraryReservations'),
+            where('ownerId', '==', schoolOwnerId)
+          ),
+          (snap) => {
+            const list = snap.docs.map((d) => ({
+              id: d.id,
+              ...(d.data() as Omit<LibraryReservation, 'id'>),
+            }));
+            list.sort((a, b) => {
+              const tA = a.createdAt?.toMillis?.() || 0;
+              const tB = b.createdAt?.toMillis?.() || 0;
+              if (tA !== tB) return tB - tA;
+              return (b.requestedDate || '').localeCompare(a.requestedDate || '');
+            });
+            setLibraryReservations(list);
+          },
+          (err) =>
+            handleFirestoreError(err, OperationType.LIST, `schools/${schoolId}/libraryReservations`)
+        )
+      );
+      unsubs.push(
+        onSnapshot(
+          query(
+            collection(db, 'schools', schoolId, 'digitalLibrary'),
+            where('ownerId', '==', schoolOwnerId)
+          ),
+          (snap) => {
+            const list = snap.docs.map((d) => ({
+              id: d.id,
+              ...(d.data() as Omit<DigitalLibraryResource, 'id'>),
+            }));
+            list.sort((a, b) => a.title.localeCompare(b.title));
+            setDigitalLibraryResources(list);
+          },
+          (err) =>
+            handleFirestoreError(err, OperationType.LIST, `schools/${schoolId}/digitalLibrary`)
+        )
+      );
     } else {
       setLibraryLoans([]);
+      setLibraryBooks([]);
+      setLibraryTransactions([]);
+      setLibraryReservations([]);
+      setDigitalLibraryResources([]);
     }
 
     return () => {
@@ -581,8 +695,26 @@ export default function App() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : '';
       if (msg.toLowerCase().includes('offline') || msg.toLowerCase().includes('unavailable')) {
+        let hasOfflinePortal = false;
+        try {
+          hasOfflinePortal = Boolean(
+            window.localStorage.getItem(`malawisec_student_portal_${normalized}`)
+          );
+        } catch {
+          hasOfflinePortal = false;
+        }
+        if (hasOfflinePortal) {
+          try {
+            window.localStorage.setItem('malawisec_student_code', normalized);
+          } catch {
+            // Ignore storage error
+          }
+          setStudentSessionCode(normalized);
+          setPortalOverride('student');
+          return;
+        }
         setAuthError(
-          'Unable to reach the school database right now. Check your internet connection and try again.'
+          'Unable to reach the school database right now. Connect to the internet once to sync your portal and offline library.'
         );
       } else {
         setAuthError(msg || 'Unable to verify registration code right now.');
@@ -653,173 +785,30 @@ export default function App() {
   // Unauthenticated Landing / Role-Based Sign-In Gate
   if (!user) {
     return (
-      <div className="min-h-screen flex flex-col bg-[#F7F8FA] dark:bg-[#0D1117]">
-        <header className="h-16 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#161B22]">
-          <div className="max-w-5xl mx-auto h-full px-6 flex items-center justify-between gap-8">
-            <span className="text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0">
-              MalawiSec
-            </span>
-            <div className="flex items-center gap-3">
-              <PWAInstallButton variant="header" />
-            </div>
-          </div>
-        </header>
-
-        <main className="flex-1 flex items-center justify-center p-6">
-          <div className="w-full max-w-4xl grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
-            <div className="lg:col-span-7 space-y-5">
-              <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-                Malawi Secondary School Administration · Form 1–4
-              </div>
-              <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900 dark:text-white text-balance">
-                Role-based dashboards for Head Teachers, Teachers, Bursars, and Students.
-              </h1>
-              <p className="text-sm sm:text-base text-slate-600 dark:text-slate-400 leading-relaxed">
-                Built for Malawian Government, Grant-Aided, and Private secondary schools — Form
-                1–4 registry, Exam JCE &amp; MSCE grading, MWK fee ledgers, and student report cards.
-              </p>
-
-              <div className="pt-2 grid grid-cols-2 gap-4 text-xs text-slate-600 dark:text-slate-400">
-                <div>
-                  <div className="font-semibold text-slate-900 dark:text-slate-100">
-                    Exam JCE &amp; MSCE Scale
-                  </div>
-                  <div className="mt-0.5">JCE A–F &amp; MSCE 1–9 Best-6 points (CA 40% + Exam 60%).</div>
-                </div>
-                <div>
-                  <div className="font-semibold text-slate-900 dark:text-slate-100">
-                    Gov. Tuition-Only &amp; Bursar
-                  </div>
-                  <div className="mt-0.5">Tuition-only enforcement, Airtel/Mpamba receipts &amp; parent SMS.</div>
-                </div>
-              </div>
-            </div>
-
-            <div className="lg:col-span-5 bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-5">
-              {/* 3-Tab Role Login Selector */}
-              <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-900">
-                {(
-                  [
-                    { id: 'admin', label: 'School Admin' },
-                    { id: 'staff', label: 'Teacher / Bursar' },
-                    { id: 'student', label: 'Student' },
-                  ] as const
-                ).map((tab) => (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => {
-                      setLoginIntent(tab.id);
-                      setAuthError('');
-                    }}
-                    className={`min-h-[38px] px-2 rounded-lg text-[11px] font-semibold cursor-pointer transition-colors whitespace-nowrap ${
-                      loginIntent === tab.id
-                        ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
-                        : 'text-slate-600 dark:text-slate-400'
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 flex items-center justify-center text-emerald-700 dark:text-emerald-400 shrink-0">
-                  <GraduationCap className="w-5 h-5" aria-hidden="true" />
-                </div>
-                <div>
-                  <h2 className="text-base font-semibold text-slate-900 dark:text-white">
-                    {loginIntent === 'student'
-                      ? 'Student Results Login'
-                      : loginIntent === 'staff'
-                      ? 'Teacher & Bursar Sign In'
-                      : 'School Admin Sign In'}
-                  </h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    {loginIntent === 'student'
-                      ? 'Use your administrator-issued registration code'
-                      : loginIntent === 'staff'
-                      ? 'Role-based Teacher or Bursar workspace'
-                      : 'Head Teacher / School Owner workspace'}
-                  </p>
-                </div>
-              </div>
-
-              {authError && (
-                <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
-                  {authError}
-                </div>
-              )}
-
-              {loginIntent === 'student' ? (
-                <form onSubmit={handleStudentCodeSignIn} className="space-y-3">
-                  <div>
-                    <label
-                      htmlFor="student-reg-code-input"
-                      className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5"
-                    >
-                      Student Registration Code
-                    </label>
-                    <input
-                      id="student-reg-code-input"
-                      type="text"
-                      required
-                      maxLength={32}
-                      autoComplete="off"
-                      value={studentCodeInput}
-                      onChange={(e) =>
-                        setStudentCodeInput(
-                          e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, '')
-                        )
-                      }
-                      placeholder="e.g. F1A-2026-001"
-                      className="w-full min-h-[46px] px-3.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono text-sm tracking-wider uppercase text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={verifyingStudentCode}
-                    className="w-full min-h-[46px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold disabled:opacity-50 transition-colors cursor-pointer"
-                  >
-                    {verifyingStudentCode ? 'Verifying Code...' : 'Sign In with Registration Code'}
-                  </button>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                    Enter the unique registration code given by your school administrator to view
-                    your CA 1, CA 2, Summative marks, and PDF report cards.
-                  </p>
-                </form>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleGoogleSignIn}
-                    disabled={signingIn}
-                    className="w-full min-h-[46px] px-4 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition-opacity cursor-pointer"
-                  >
-                    {signingIn
-                      ? 'Signing in...'
-                      : loginIntent === 'staff'
-                      ? 'Staff Sign In with Google'
-                      : 'Continue with Google'}
-                  </button>
-
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                    {loginIntent === 'staff'
-                      ? 'Sign in with the staff Google email added in Staff & Settings.'
-                      : 'Manage secondary school enrollment, Exam grades, fees, and staff.'}
-                  </p>
-                </>
-              )}
-            </div>
-          </div>
-        </main>
+      <>
+        <LandingPage
+          loginIntent={loginIntent}
+          onChangeLoginIntent={(intent) => {
+            setLoginIntent(intent);
+            setAuthError('');
+          }}
+          studentCodeInput={studentCodeInput}
+          onChangeStudentCodeInput={setStudentCodeInput}
+          verifyingStudentCode={verifyingStudentCode}
+          signingIn={signingIn}
+          authError={authError}
+          onGoogleSignIn={handleGoogleSignIn}
+          onStudentCodeSignIn={handleStudentCodeSignIn}
+          theme={theme}
+          onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+        />
         <OfflineIndicator />
-      </div>
+      </>
     );
   }
 
-  // Loading schools / staff links skeleton
-  if (schoolsLoading || staffLinksLoading || waitingForStaffSchoolDoc) {
+  // Loading schools / staff links / admin authorization skeleton
+  if (schoolsLoading || staffLinksLoading || waitingForStaffSchoolDoc || adminCheckLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#F7F8FA] dark:bg-[#0D1117]">
         <div className="w-full max-w-md px-6 space-y-3">
@@ -830,22 +819,19 @@ export default function App() {
     );
   }
 
-  // Staff intent without any linked school yet (helpful state before onboarding)
-  if (
-    loginIntent === 'staff' &&
-    !activeSchool &&
-    !creatingAnotherSchool
-  ) {
+  // Strict authorization gate: unlinked or unauthorized Google accounts only see Sign Out (no school creation bypass)
+  if (!activeSchool && (loginIntent === 'staff' || !isPlatformAdmin)) {
+    const isStaffIntent = loginIntent === 'staff';
     return (
       <div className="min-h-screen flex flex-col bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100">
         <header className="h-14 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#161B22]">
           <div className="max-w-4xl mx-auto h-full px-4 sm:px-6 flex items-center justify-between">
-            <span className="text-base font-bold text-slate-900 dark:text-white">MalawiSec</span>
+            <span className="text-base font-bold text-slate-900 dark:text-white">SecSchoolHub</span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => signOutUser()}
-                className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-slate-900 cursor-pointer"
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white cursor-pointer"
               >
                 <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Sign Out</span>
@@ -860,29 +846,24 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-lg font-bold text-slate-900 dark:text-white">
-                Staff Account Not Linked Yet
+                {isStaffIntent ? 'Staff Account Not Linked Yet' : 'Account Not Authorized Yet'}
               </h1>
               <p className="mt-1.5 text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                Signed in as <strong className="text-slate-900 dark:text-slate-200">{user.email}</strong>.
-                Ask your Head Teacher or School Owner to add this exact Google email to your staff
-                profile in <strong>Staff &amp; Settings</strong> with your role (Teacher, Form
-                Master, HOD, Bursar, or Deputy Head).
+                Signed in as{' '}
+                <strong className="text-slate-900 dark:text-slate-200">{user.email}</strong>.{' '}
+                {isStaffIntent
+                  ? 'Ask your Head Teacher or School Owner to add this exact Google email to your staff profile in Staff & Settings with your role (Teacher, Form Teacher, HOD, School Librarian, Bursar, or Deputy Head).'
+                  : 'Access to institutional records is restricted to authorized school administrators and pre-linked staff accounts. Ask your Head Teacher or School Owner to add this exact Google email in Staff & Settings.'}
               </p>
             </div>
-            <div className="pt-2 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => setCreatingAnotherSchool(true)}
-                className="min-h-[42px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer"
-              >
-                Set Up Own School Instead
-              </button>
+            <div className="pt-2">
               <button
                 type="button"
                 onClick={() => signOutUser()}
-                className="min-h-[42px] px-4 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium cursor-pointer"
+                className="w-full min-h-[42px] px-4 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold inline-flex items-center justify-center gap-2 hover:opacity-90 transition-opacity cursor-pointer"
               >
-                Sign Out
+                <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Sign Out</span>
               </button>
             </div>
           </div>
@@ -892,13 +873,13 @@ export default function App() {
     );
   }
 
-  // Onboarding when user has no school yet or clicked + New School
-  if (!activeSchool || creatingAnotherSchool) {
+  // Onboarding is strictly restricted to authorized platform administrators
+  if (isPlatformAdmin && (!activeSchool || creatingAnotherSchool)) {
     return (
       <div className="min-h-screen bg-[#F7F8FA] dark:bg-[#0D1117]">
         <header className="h-14 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#161B22]">
           <div className="max-w-5xl mx-auto h-full px-4 sm:px-6 flex items-center justify-between">
-            <span className="text-base font-bold text-slate-900 dark:text-white">MalawiSec</span>
+            <span className="text-base font-bold text-slate-900 dark:text-white">SecSchoolHub</span>
             <div className="flex items-center gap-3">
               <button
                 type="button"
@@ -920,6 +901,10 @@ export default function App() {
         />
       </div>
     );
+  }
+
+  if (!activeSchool) {
+    return null;
   }
 
   const currentNavLabel =
@@ -1065,9 +1050,14 @@ export default function App() {
               students={students}
               assessments={assessments}
               invoices={invoices}
+              libraryLoans={rolePermissions.canReadLibrary ? libraryLoans : []}
               canManageStudents={rolePermissions.canManageStudents}
               canViewAcademicReport={rolePermissions.canReadMarks}
               canViewFees={rolePermissions.canReadFees}
+              canViewLibrary={rolePermissions.canReadLibrary}
+              onOpenLibrary={
+                rolePermissions.canReadLibrary ? () => setActiveSection('library') : undefined
+              }
             />
           )}
 
@@ -1114,6 +1104,10 @@ export default function App() {
               students={students}
               schoolSubjects={schoolSubjects}
               libraryLoans={libraryLoans}
+              libraryBooks={libraryBooks}
+              libraryTransactions={libraryTransactions}
+              libraryReservations={libraryReservations}
+              digitalResources={digitalLibraryResources}
               canWriteLibrary={rolePermissions.canWriteLibrary}
             />
           )}
@@ -1128,7 +1122,7 @@ export default function App() {
               canManageStaffAndSettings={rolePermissions.canManageStaff}
               onSwitchSchool={handleSchoolSelected}
               onAddNewSchool={
-                rolePermissions.role === 'Owner'
+                isPlatformAdmin && rolePermissions.role === 'Owner'
                   ? () => setCreatingAnotherSchool(true)
                   : undefined
               }

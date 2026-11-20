@@ -18,7 +18,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isVerified() && (
-        request.auth.token.email == 'dicksonpetroj1@gmail.com' ||
+        ('email' in request.auth.token && request.auth.token.email is string && request.auth.token.email.lower() == 'dicksonpetroj1@gmail.com') ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }
@@ -499,6 +499,64 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidLibraryBook(data) {
+      return data.keys().hasAll([
+          'ownerId', 'isbn', 'title', 'author', 'subject',
+          'materialType', 'shelfCode', 'totalCopies', 'notes',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'isbn', 'title', 'author', 'subject',
+          'materialType', 'shelfCode', 'totalCopies', 'notes',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && data.isbn is string && data.isbn.size() >= 3 && data.isbn.size() <= 32
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 140
+        && data.author is string && data.author.size() >= 2 && data.author.size() <= 120
+        && data.subject is string && data.subject.size() <= 60
+        && data.materialType in ['Textbook', 'Set Book', 'Reference Book', 'Past Papers', 'Reader / Novel', 'Science Manual']
+        && data.shelfCode is string && data.shelfCode.size() <= 40
+        && data.totalCopies is int && data.totalCopies >= 1 && data.totalCopies <= 500
+        && data.notes is string && data.notes.size() <= 240
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLibraryTransaction(data) {
+      return data.keys().hasAll([
+          'ownerId', 'loanId', 'action', 'studentId', 'studentName',
+          'admissionNo', 'formLevel', 'stream', 'bookTitle', 'bookCode',
+          'subject', 'quantity', 'eventDate', 'dueDate', 'condition',
+          'actorUid', 'actorName', 'notes', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'loanId', 'action', 'studentId', 'studentName',
+          'admissionNo', 'formLevel', 'stream', 'bookTitle', 'bookCode',
+          'subject', 'quantity', 'eventDate', 'dueDate', 'condition',
+          'actorUid', 'actorName', 'notes', 'createdAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.loanId)
+        && data.action in ['Checked Out', 'Returned', 'Reopened', 'Edited', 'Deleted']
+        && isValidId(data.studentId)
+        && data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 120
+        && data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 40
+        && data.formLevel is int && data.formLevel >= 1 && data.formLevel <= 4
+        && data.stream is string && data.stream.size() >= 1 && data.stream.size() <= 20
+        && data.bookTitle is string && data.bookTitle.size() >= 2 && data.bookTitle.size() <= 140
+        && data.bookCode is string && data.bookCode.size() >= 1 && data.bookCode.size() <= 40
+        && data.subject is string && data.subject.size() <= 60
+        && data.quantity is int && data.quantity >= 1 && data.quantity <= 20
+        && data.eventDate is string && data.eventDate.size() == 10 && data.eventDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.dueDate is string && data.dueDate.size() == 10 && data.dueDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.condition in ['Good', 'Fair', 'Damaged', 'Lost']
+        && isValidId(data.actorUid)
+        && data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 120
+        && data.notes is string && data.notes.size() <= 240
+        && data.createdAt is timestamp;
+    }
+
     function isValidPortalLibraryLoan(data) {
       return data.keys().hasAll([
           'ownerId', 'schoolId', 'registrationCode', 'studentId', 'studentName',
@@ -620,6 +678,92 @@ service cloud.firestore {
         && data.formLevels[0] is int
         && data.formLevels.hasOnly([1, 2, 3, 4])
         && data.isCore is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLibraryReservation(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'bookId', 'isbn', 'bookTitle', 'subject',
+          'materialType', 'studentId', 'studentName', 'admissionNo',
+          'formLevel', 'stream', 'registrationCode', 'status',
+          'requestedDate', 'notes', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'bookId', 'isbn', 'bookTitle', 'subject',
+          'materialType', 'studentId', 'studentName', 'admissionNo',
+          'formLevel', 'stream', 'registrationCode', 'status',
+          'requestedDate', 'notes', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && isValidId(data.bookId)
+        && data.isbn is string && data.isbn.size() <= 32
+        && data.bookTitle is string && data.bookTitle.size() >= 2 && data.bookTitle.size() <= 140
+        && data.subject is string && data.subject.size() <= 60
+        && data.materialType in ['Textbook', 'Set Book', 'Reference Book', 'Past Papers', 'Reader / Novel', 'Science Manual']
+        && isValidId(data.studentId)
+        && data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 120
+        && data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 40
+        && data.formLevel is int && data.formLevel >= 1 && data.formLevel <= 4
+        && data.stream is string && data.stream.size() >= 1 && data.stream.size() <= 20
+        && data.registrationCode is string && data.registrationCode.size() <= 32
+        && data.status in ['Pending', 'Ready', 'Fulfilled', 'Cancelled']
+        && data.requestedDate is string && data.requestedDate.size() == 10 && data.requestedDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.notes is string && data.notes.size() <= 240
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCatalogBookMirror(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'isbn', 'title', 'author', 'subject',
+          'materialType', 'shelfCode', 'totalCopies', 'checkedOutCopies',
+          'availableCopies', 'notes', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'isbn', 'title', 'author', 'subject',
+          'materialType', 'shelfCode', 'totalCopies', 'checkedOutCopies',
+          'availableCopies', 'notes', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && data.isbn is string && data.isbn.size() >= 3 && data.isbn.size() <= 32
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 140
+        && data.author is string && data.author.size() >= 2 && data.author.size() <= 120
+        && data.subject is string && data.subject.size() <= 60
+        && data.materialType in ['Textbook', 'Set Book', 'Reference Book', 'Past Papers', 'Reader / Novel', 'Science Manual']
+        && data.shelfCode is string && data.shelfCode.size() <= 40
+        && data.totalCopies is int && data.totalCopies >= 1 && data.totalCopies <= 500
+        && data.checkedOutCopies is int && data.checkedOutCopies >= 0 && data.checkedOutCopies <= 500
+        && data.availableCopies is int && data.availableCopies >= 0 && data.availableCopies <= 500
+        && data.notes is string && data.notes.size() <= 240
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDigitalLibraryResource(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'title', 'author', 'subject', 'formLevel',
+          'category', 'examYear', 'summary', 'content', 'allowOffline',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'title', 'author', 'subject', 'formLevel',
+          'category', 'examYear', 'summary', 'content', 'allowOffline',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 140
+        && data.author is string && data.author.size() >= 2 && data.author.size() <= 120
+        && data.subject is string && data.subject.size() >= 2 && data.subject.size() <= 60
+        && data.formLevel in ['All', 'Form 1', 'Form 2', 'Form 3', 'Form 4']
+        && data.category in ['Book', 'Past Paper', 'Revision Guide', 'Set Book']
+        && data.examYear is string && data.examYear.size() <= 16
+        && data.summary is string && data.summary.size() <= 280
+        && data.content is string && data.content.size() >= 20 && data.content.size() <= 30000
+        && data.allowOffline is bool
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -763,6 +907,104 @@ service cloud.firestore {
           isLibraryStaff(existing().schoolId)
         );
       }
+
+      match /reservations/{reservationId} {
+        allow get: if isValidRegCode(registrationCode) && isValidId(reservationId);
+        allow list: if isValidRegCode(registrationCode)
+          && existing().registrationCode == registrationCode;
+        allow create: if isValidRegCode(registrationCode) && isValidId(reservationId)
+          && isValidLibraryReservation(incoming())
+          && incoming().registrationCode == registrationCode
+          && incoming().status == 'Pending'
+          && exists(/databases/$(database)/documents/studentPortals/$(registrationCode))
+          && get(/databases/$(database)/documents/studentPortals/$(registrationCode)).data.schoolId == incoming().schoolId
+          && get(/databases/$(database)/documents/studentPortals/$(registrationCode)).data.studentId == incoming().studentId
+          && get(/databases/$(database)/documents/studentPortals/$(registrationCode)).data.ownerId == incoming().ownerId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && (
+            isLibraryStaff(incoming().schoolId) ||
+            existsAfter(/databases/$(database)/documents/schools/$(incoming().schoolId)/libraryReservations/$(reservationId))
+          );
+        allow update: if isVerified() && isValidRegCode(registrationCode) && isValidId(reservationId)
+          && isValidLibraryReservation(incoming())
+          && isLibraryStaff(existing().schoolId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().registrationCode == existing().registrationCode
+          && incoming().studentId == existing().studentId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'notes', 'updatedAt'])
+          );
+        allow delete: if isVerified() && isValidRegCode(registrationCode) && isValidId(reservationId) && (
+          existing().ownerId == request.auth.uid ||
+          isAdmin() ||
+          isLibraryStaff(existing().schoolId)
+        );
+      }
+    }
+
+    // Student Libraries (Zero-PII): School book availability mirror & published non-downloadable digital library
+    match /studentLibraries/{schoolId} {
+      allow read, write: if false;
+
+      match /books/{bookId} {
+        allow get: if isValidId(schoolId) && isValidId(bookId);
+        allow list: if isValidId(schoolId) && existing().schoolId == schoolId;
+        allow create: if isValidId(schoolId) && isValidId(bookId)
+          && isLibraryStaff(schoolId)
+          && isValidCatalogBookMirror(incoming())
+          && incoming().schoolId == schoolId
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && isValidId(bookId)
+          && isLibraryStaff(schoolId)
+          && isValidCatalogBookMirror(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'isbn', 'title', 'author', 'subject', 'materialType',
+              'shelfCode', 'totalCopies', 'checkedOutCopies', 'availableCopies',
+              'notes', 'updatedAt'
+            ])
+          );
+        allow delete: if isValidId(schoolId) && isValidId(bookId) && isLibraryStaff(schoolId);
+      }
+
+      match /digitalResources/{resourceId} {
+        allow get: if isValidId(schoolId) && isValidId(resourceId);
+        allow list: if isValidId(schoolId) && existing().schoolId == schoolId;
+        allow create: if isValidId(schoolId) && isValidId(resourceId)
+          && isLibraryStaff(schoolId)
+          && isValidDigitalLibraryResource(incoming())
+          && incoming().schoolId == schoolId
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && isValidId(resourceId)
+          && isLibraryStaff(schoolId)
+          && isValidDigitalLibraryResource(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'author', 'subject', 'formLevel', 'category',
+              'examYear', 'summary', 'content', 'allowOffline', 'updatedAt'
+            ])
+          );
+        allow delete: if isValidId(schoolId) && isValidId(resourceId) && isLibraryStaff(schoolId);
+      }
     }
 
     // Student Portal Links: verified students locate their enrolled school(s)
@@ -857,6 +1099,7 @@ service cloud.firestore {
       );
       allow list: if isVerified() && (existing().ownerId == request.auth.uid || isAdmin());
       allow create: if isVerified() && isValidId(schoolId)
+        && isAdmin()
         && isValidSchool(incoming())
         && incoming().ownerId == request.auth.uid
         && incoming().createdAt == request.time
@@ -1203,6 +1446,127 @@ service cloud.firestore {
             ])
           );
         allow delete: if isValidId(schoolId) && isValidId(loanId) && isLibraryStaff(schoolId);
+      }
+
+      // School Library Book Inventory: Library staff & Academic staff CRUD
+      match /libraryBooks/{bookId} {
+        allow get: if isValidId(schoolId) && isValidId(bookId) && isLibraryStaff(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isLibraryStaff(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(bookId)
+          && isLibraryStaff(schoolId)
+          && isValidLibraryBook(incoming())
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && isValidId(bookId)
+          && isLibraryStaff(schoolId)
+          && isValidLibraryBook(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'isbn', 'title', 'author', 'subject', 'materialType',
+              'shelfCode', 'totalCopies', 'notes', 'updatedAt'
+            ])
+          );
+        allow delete: if isValidId(schoolId) && isValidId(bookId) && isLibraryStaff(schoolId);
+      }
+
+      // School Library Borrowing Transaction History (immutable audit log)
+      match /libraryTransactions/{transactionId} {
+        allow get: if isValidId(schoolId) && isValidId(transactionId) && isLibraryStaff(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isLibraryStaff(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(transactionId)
+          && isLibraryStaff(schoolId)
+          && isValidLibraryTransaction(incoming())
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && incoming().actorUid == request.auth.uid
+          && (
+            incoming().action == 'Deleted' ||
+            exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(incoming().studentId))
+          )
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if false;
+      }
+
+      // School Library Reservations: Staff CRUD + verified active student portal requests
+      match /libraryReservations/{reservationId} {
+        allow get: if isValidId(schoolId) && isValidId(reservationId) && isLibraryStaff(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isLibraryStaff(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(reservationId)
+          && isValidLibraryReservation(incoming())
+          && incoming().schoolId == schoolId
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(incoming().studentId))
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && (
+            isLibraryStaff(schoolId) ||
+            (
+              incoming().status == 'Pending'
+              && isValidRegCode(incoming().registrationCode)
+              && exists(/databases/$(database)/documents/studentPortals/$(incoming().registrationCode))
+              && get(/databases/$(database)/documents/studentPortals/$(incoming().registrationCode)).data.schoolId == schoolId
+              && get(/databases/$(database)/documents/studentPortals/$(incoming().registrationCode)).data.studentId == incoming().studentId
+              && get(/databases/$(database)/documents/studentPortals/$(incoming().registrationCode)).data.status == 'Active'
+            )
+          );
+        allow update: if isValidId(schoolId) && isValidId(reservationId)
+          && isLibraryStaff(schoolId)
+          && isValidLibraryReservation(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().studentId == existing().studentId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'notes', 'updatedAt'])
+          );
+        allow delete: if isValidId(schoolId) && isValidId(reservationId) && isLibraryStaff(schoolId);
+      }
+
+      // School Digital Library (Online/Offline non-downloadable books & past papers): Staff CRUD
+      match /digitalLibrary/{resourceId} {
+        allow get: if isValidId(schoolId) && isValidId(resourceId) && isLibraryStaff(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isLibraryStaff(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(resourceId)
+          && isLibraryStaff(schoolId)
+          && isValidDigitalLibraryResource(incoming())
+          && incoming().schoolId == schoolId
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && isValidId(resourceId)
+          && isLibraryStaff(schoolId)
+          && isValidDigitalLibraryResource(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'author', 'subject', 'formLevel', 'category',
+              'examYear', 'summary', 'content', 'allowOffline', 'updatedAt'
+            ])
+          );
+        allow delete: if isValidId(schoolId) && isValidId(resourceId) && isLibraryStaff(schoolId);
       }
     }
   }

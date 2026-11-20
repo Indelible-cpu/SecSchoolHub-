@@ -15,9 +15,9 @@ export default defineConfig(() => {
         includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png'],
         manifest: {
           id: '/',
-          name: 'MalawiSec — Secondary School Management',
-          short_name: 'MalawiSec',
-          description: 'Secondary school management system for Malawi featuring Form 1–4 student records, Exam JCE/MSCE grading, and MWK fee billing.',
+          name: 'SecSchoolHub — Secondary School Management',
+          short_name: 'SecSchoolHub',
+          description: 'Secondary school management system featuring Form 1–4 student records, Exam JCE/MSCE grading, MWK fee billing, and library circulation.',
           theme_color: '#0F172A',
           background_color: '#F7F8FA',
           display: 'standalone',

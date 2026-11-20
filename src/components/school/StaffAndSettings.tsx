@@ -57,14 +57,24 @@ const TEACHER_ROLES: TeacherRole[] = [
   'Head of Department',
   'Form Master',
   'Subject Teacher',
+  'School Librarian',
   'School Bursar',
 ];
 
+function getRoleDisplayLabel(role: TeacherRole): string {
+  if (role === 'Form Master') return 'Form Master (Form Teacher)';
+  if (role === 'Head of Department') return 'Head of Department (HOD)';
+  return role;
+}
+
 function getRoleAccessSummary(role: TeacherRole): string {
-  if (role === 'Head Teacher') return 'Full Academics, Attendance & Bursar Access';
-  if (role === 'Deputy Head') return 'Students, Marks, Attendance & Staff Directory';
+  if (role === 'Head Teacher') return 'Full Academics, Attendance, Library & Bursar Access';
+  if (role === 'Deputy Head') return 'Students, Marks, Attendance, Library & Staff Directory';
+  if (role === 'Head of Department') return 'HOD: Department Subjects, Marks, Attendance & Library';
+  if (role === 'Form Master') return 'Form Teacher: Class Roster, Daily Attendance, Marks & Library';
+  if (role === 'School Librarian') return 'School Library Circulation, Analytics & Student Borrower Lookup (no marks/fees)';
   if (role === 'School Bursar') return 'Bursar Fee Ledger (MWK) & Student Lookup';
-  return 'Marks Gradebook & Daily Attendance';
+  return 'Subject Teacher: Exam Marks Gradebook, Roll Call & Library';
 }
 
 export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
@@ -604,7 +614,7 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
               Teachers &amp; Staff RBAC ({teachers.length})
             </h1>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Assign Google emails and roles so Teachers, Bursars, and Deputy Heads get role-based dashboards.
+              Assign Google emails and roles so Teachers, Form Teachers, HODs, Librarians, Bursars, and Deputy Heads get role-based dashboards.
             </p>
           </div>
           {canManageStaffAndSettings && (
@@ -944,11 +954,55 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
                   </label>
                   <select
                     value={tForm.roleTitle}
-                    onChange={(e) => setTForm({ ...tForm, roleTitle: e.target.value as TeacherRole })}
+                    onChange={(e) => {
+                      const nextRole = e.target.value as TeacherRole;
+                      setTForm((prev) => {
+                        let nextAssignedForm = prev.assignedForm;
+                        let nextSubjects = prev.subjects;
+                        if (nextRole === 'School Librarian') {
+                          if (
+                            !prev.assignedForm ||
+                            prev.assignedForm.startsWith('Form') ||
+                            prev.assignedForm === 'Accounts Office'
+                          ) {
+                            nextAssignedForm = 'Main Library';
+                          }
+                          nextSubjects = ['General'];
+                        } else if (nextRole === 'School Bursar') {
+                          if (
+                            !prev.assignedForm ||
+                            prev.assignedForm.startsWith('Form') ||
+                            prev.assignedForm === 'Main Library'
+                          ) {
+                            nextAssignedForm = 'Accounts Office';
+                          }
+                        } else if (
+                          prev.assignedForm === 'Main Library' ||
+                          prev.assignedForm === 'Accounts Office'
+                        ) {
+                          nextAssignedForm = 'Form 1A';
+                        }
+                        if (
+                          nextRole !== 'School Librarian' &&
+                          prev.subjects.length === 1 &&
+                          prev.subjects[0] === 'General'
+                        ) {
+                          nextSubjects = ['English'];
+                        }
+                        return {
+                          ...prev,
+                          roleTitle: nextRole,
+                          assignedForm: nextAssignedForm,
+                          subjects: nextSubjects,
+                        };
+                      });
+                    }}
                     className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"
                   >
                     {TEACHER_ROLES.map((r) => (
-                      <option key={r} value={r}>{r}</option>
+                      <option key={r} value={r}>
+                        {getRoleDisplayLabel(r)}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -1032,30 +1086,38 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
                 </div>
               </div>
 
-              <div>
-                <div className="text-xs font-medium text-slate-700 dark:text-slate-300 mb-2">
-                  Subjects Taught (select up to 8)
+              {tForm.roleTitle === 'School Librarian' || tForm.roleTitle === 'School Bursar' ? (
+                <div className="rounded-xl bg-slate-50 dark:bg-slate-900/70 border border-slate-200/80 dark:border-slate-800 px-3.5 py-2.5 text-xs text-slate-600 dark:text-slate-400">
+                  {tForm.roleTitle === 'School Librarian'
+                    ? 'Library role manages school-wide textbook checkouts, returns, and usage analytics across all subjects.'
+                    : 'Bursar role manages school-wide MWK fee billing, receipts, and guardian SMS alerts.'}
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-                  {selectableTeacherSubjects.map((subj) => {
-                    const selected = tForm.subjects.includes(subj);
-                    return (
-                      <button
-                        key={subj}
-                        type="button"
-                        onClick={() => toggleSubject(subj)}
-                        className={`min-h-[36px] px-2.5 py-1.5 rounded-lg text-xs text-left truncate cursor-pointer ${
-                          selected
-                            ? 'bg-emerald-700 text-white font-semibold'
-                            : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
-                        }`}
-                      >
-                        {subj}
-                      </button>
-                    );
-                  })}
+              ) : (
+                <div>
+                  <div className="text-xs font-medium text-slate-700 dark:text-slate-300 mb-2">
+                    Subjects Taught (select up to 8)
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                    {selectableTeacherSubjects.map((subj) => {
+                      const selected = tForm.subjects.includes(subj);
+                      return (
+                        <button
+                          key={subj}
+                          type="button"
+                          onClick={() => toggleSubject(subj)}
+                          className={`min-h-[36px] px-2.5 py-1.5 rounded-lg text-xs text-left truncate cursor-pointer ${
+                            selected
+                              ? 'bg-emerald-700 text-white font-semibold'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                          }`}
+                        >
+                          {subj}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div className="pt-2 flex justify-end gap-2">
                 <button

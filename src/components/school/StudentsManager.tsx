@@ -1,7 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  BookOpen,
   Check,
+  Clock,
   Copy,
   Download,
   Eye,
@@ -23,6 +25,7 @@ import {
   FeeInvoice,
   FormLevel,
   Gender,
+  LibraryLoan,
   School,
   Student,
   StudentStatus,
@@ -35,7 +38,10 @@ import {
   formatMWK,
   generateStudentRegistrationCode,
   getDefaultEntryYear,
+  getLibraryDueReminderLabel,
   inferStudentEntryYear,
+  isLibraryLoanDueWithin48Hours,
+  isLibraryLoanOverdue,
   normalizeAssessmentComponents,
   normalizeRegistrationCode,
   STREAMS,
@@ -54,9 +60,12 @@ interface StudentsManagerProps {
   students: Student[];
   assessments: Assessment[];
   invoices: FeeInvoice[];
+  libraryLoans?: LibraryLoan[];
   canManageStudents?: boolean;
   canViewAcademicReport?: boolean;
   canViewFees?: boolean;
+  canViewLibrary?: boolean;
+  onOpenLibrary?: () => void;
 }
 
 const GUARDIAN_RELATIONSHIPS = [
@@ -95,10 +104,14 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
   students,
   assessments,
   invoices,
+  libraryLoans = [],
   canManageStudents = true,
   canViewAcademicReport = true,
   canViewFees = true,
+  canViewLibrary = false,
+  onOpenLibrary,
 }) => {
+  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [search, setSearch] = useState('');
   const [formFilter, setFormFilter] = useState<'all' | FormLevel>('all');
   const [boardingFilter, setBoardingFilter] = useState<'all' | BoardingStatus>('all');
@@ -125,6 +138,46 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
     () => students.filter((s) => normalizeRegistrationCode(s.registrationCode).length < 6).length,
     [students]
   );
+
+  const libraryByStudentId = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        activeLoans: LibraryLoan[];
+        dueSoonLoans: LibraryLoan[];
+        overdueLoans: LibraryLoan[];
+        returnedCount: number;
+      }
+    >();
+    if (!canViewLibrary) return map;
+
+    for (const loan of libraryLoans) {
+      const entry = map.get(loan.studentId) || {
+        activeLoans: [],
+        dueSoonLoans: [],
+        overdueLoans: [],
+        returnedCount: 0,
+      };
+      if (loan.status === 'Checked Out') {
+        entry.activeLoans.push(loan);
+        if (isLibraryLoanOverdue(loan, todayIso)) {
+          entry.overdueLoans.push(loan);
+        } else if (isLibraryLoanDueWithin48Hours(loan, todayIso)) {
+          entry.dueSoonLoans.push(loan);
+        }
+      } else {
+        entry.returnedCount += 1;
+      }
+      map.set(loan.studentId, entry);
+    }
+
+    for (const entry of map.values()) {
+      entry.activeLoans.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+      entry.dueSoonLoans.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+      entry.overdueLoans.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+    }
+    return map;
+  }, [canViewLibrary, libraryLoans, todayIso]);
 
   const makeUniqueRegCode = (
     formLevel: FormLevel,
@@ -348,14 +401,21 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
       (a) => a.studentId === liveStudent.id && a.term === school.currentTerm
     );
     const standing = calculateStudentStanding(liveStudent.formLevel, termMarks);
+    const librarySummary = libraryByStudentId.get(liveStudent.id) || {
+      activeLoans: [],
+      dueSoonLoans: [],
+      overdueLoans: [],
+      returnedCount: 0,
+    };
     return {
       student: liveStudent,
       billed,
       paid,
       balance: Math.max(0, billed - paid),
       standing,
+      librarySummary,
     };
-  }, [assessments, detailStudent, invoices, school.currentTerm, students]);
+  }, [assessments, detailStudent, invoices, libraryByStudentId, school.currentTerm, students]);
 
   const reportData = useMemo(() => {
     if (!reportStudent) return null;
@@ -519,7 +579,9 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
-                {filtered.map((s) => (
+                {filtered.map((s) => {
+                  const stuLib = canViewLibrary ? libraryByStudentId.get(s.id) : undefined;
+                  return (
                   <tr key={s.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/30">
                     <td className="py-3 px-4 font-mono tabular-nums text-xs text-slate-600 dark:text-slate-400 whitespace-nowrap">
                       {s.admissionNo}
@@ -555,6 +617,30 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                           </>
                         ) : (
                           <span>· No portal code</span>
+                        )}
+                        {stuLib && stuLib.dueSoonLoans.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setDetailStudent(s)}
+                            className="inline-flex items-center gap-1 font-medium text-amber-700 dark:text-amber-400 hover:underline cursor-pointer"
+                          >
+                            <span>·</span>
+                            <Clock className="w-3 h-3" aria-hidden="true" />
+                            <span>
+                              {stuLib.dueSoonLoans.length}{' '}
+                              {stuLib.dueSoonLoans.length === 1 ? 'book' : 'books'} due in 48h
+                            </span>
+                          </button>
+                        )}
+                        {stuLib && stuLib.overdueLoans.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setDetailStudent(s)}
+                            className="inline-flex items-center gap-1 font-medium text-rose-600 dark:text-rose-400 hover:underline cursor-pointer"
+                          >
+                            <span>·</span>
+                            <span>{stuLib.overdueLoans.length} overdue</span>
+                          </button>
                         )}
                       </div>
                     </td>
@@ -642,7 +728,8 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -841,6 +928,113 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
               </div>
             </div>
 
+            {/* Library Circulation & 48-Hour Return Reminders on Student Profile */}
+            {canViewLibrary && (
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 space-y-3 bg-slate-50/50 dark:bg-slate-900/40">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-slate-900 dark:text-slate-100">
+                    <BookOpen className="w-4 h-4 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+                    <span>Library Books &amp; 48-Hour Return Reminders</span>
+                  </div>
+                  <div className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                    {detailData.librarySummary.activeLoans.length} active ·{' '}
+                    {detailData.librarySummary.returnedCount} returned
+                  </div>
+                </div>
+
+                {detailData.librarySummary.dueSoonLoans.length > 0 && (
+                  <div className="rounded-lg border border-amber-200 dark:border-amber-900/60 bg-amber-50/80 dark:bg-amber-950/30 px-3 py-2.5 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2">
+                    <Clock className="w-4 h-4 text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" aria-hidden="true" />
+                    <div className="space-y-0.5">
+                      <div className="font-semibold">
+                        Automated Return Reminder: {detailData.librarySummary.dueSoonLoans.length}{' '}
+                        {detailData.librarySummary.dueSoonLoans.length === 1 ? 'book' : 'books'} due within 48 hours
+                      </div>
+                      <div className="text-[11px] text-amber-800 dark:text-amber-300">
+                        {detailData.librarySummary.dueSoonLoans
+                          .map(
+                            (l) =>
+                              `${l.bookTitle} (${getLibraryDueReminderLabel(l.dueDate, todayIso).urgencyLabel})`
+                          )
+                          .join(' · ')}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {detailData.librarySummary.overdueLoans.length > 0 && (
+                  <div className="rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50/80 dark:bg-rose-950/30 px-3 py-2.5 text-xs text-rose-900 dark:text-rose-200 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" aria-hidden="true" />
+                    <div>
+                      <span className="font-semibold">
+                        {detailData.librarySummary.overdueLoans.length} overdue{' '}
+                        {detailData.librarySummary.overdueLoans.length === 1 ? 'book' : 'books'}:
+                      </span>{' '}
+                      {detailData.librarySummary.overdueLoans
+                        .map(
+                          (l) =>
+                            `${l.bookTitle} (${getLibraryDueReminderLabel(l.dueDate, todayIso).urgencyLabel})`
+                        )
+                        .join(' · ')}
+                    </div>
+                  </div>
+                )}
+
+                {detailData.librarySummary.activeLoans.length === 0 ? (
+                  <div className="text-xs text-slate-500 dark:text-slate-400">
+                    No library textbooks or reading materials are currently checked out to this student.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-200/70 dark:divide-slate-800 rounded-lg border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-[#161B22] overflow-hidden">
+                    {detailData.librarySummary.activeLoans.map((loan) => {
+                      const reminder = getLibraryDueReminderLabel(loan.dueDate, todayIso);
+                      return (
+                        <div
+                          key={loan.id}
+                          className={`px-3 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs ${
+                            reminder.isOverdue
+                              ? 'bg-rose-50/40 dark:bg-rose-950/15'
+                              : reminder.isDueWithin48h
+                              ? 'bg-amber-50/50 dark:bg-amber-950/20'
+                              : ''
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
+                              {loan.bookTitle}
+                            </div>
+                            <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                              {loan.bookCode} · {loan.subject || 'General'} · Out {loan.checkoutDate}
+                            </div>
+                          </div>
+                          <div className="text-right font-mono tabular-nums shrink-0">
+                            <div
+                              className={`font-semibold ${
+                                reminder.isOverdue
+                                  ? 'text-rose-600 dark:text-rose-400'
+                                  : reminder.isDueWithin48h
+                                  ? 'text-amber-700 dark:text-amber-400'
+                                  : 'text-slate-700 dark:text-slate-300'
+                              }`}
+                            >
+                              {reminder.isDueWithin48h
+                                ? `Due Within 48h · ${reminder.urgencyLabel}`
+                                : reminder.isOverdue
+                                ? `Overdue · ${reminder.urgencyLabel}`
+                                : 'Checked Out'}
+                            </div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                              Due {loan.dueDate}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Detail Modal Footer Actions */}
             <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
@@ -870,6 +1064,19 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                   >
                     <FileText className="w-3.5 h-3.5" aria-hidden="true" />
                     <span>Open Term Report Card</span>
+                  </button>
+                )}
+                {canViewLibrary && onOpenLibrary && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDetailStudent(null);
+                      onOpenLibrary();
+                    }}
+                    className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 cursor-pointer"
+                  >
+                    <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Open School Library</span>
                   </button>
                 )}
               </div>

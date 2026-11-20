@@ -3,9 +3,12 @@ import {
   Users,
   Banknote,
   AlertCircle,
+  AlertTriangle,
   CalendarCheck,
+  Clock,
   ArrowRight,
   Award,
+  BookCheck,
   BookOpen,
   UserCheck,
   FileSpreadsheet,
@@ -26,10 +29,15 @@ import {
 } from '../../school/types';
 import {
   calculateStudentStanding,
+  evaluateAssessmentCaDrop,
   FORM_LEVELS,
   formatMWK,
+  getLibraryDaysOverdue,
+  getLibraryDueReminderLabel,
   isGovernmentSchool,
+  isLibraryLoanDueWithin48Hours,
   isLibraryLoanOverdue,
+  LIBRARY_MATERIAL_CATEGORIES,
   MALAWI_SUBJECTS,
   normalizeAssessmentComponents,
 } from '../../school/malawi';
@@ -103,6 +111,14 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
     () => libraryLoans.filter((loan) => isLibraryLoanOverdue(loan, todayIso)).length,
     [libraryLoans, todayIso]
   );
+  const dueSoonLibraryItems = useMemo(
+    () =>
+      libraryLoans
+        .filter((loan) => isLibraryLoanDueWithin48Hours(loan, todayIso))
+        .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.studentName.localeCompare(b.studentName)),
+    [libraryLoans, todayIso]
+  );
+  const dueSoonLibraryCount = dueSoonLibraryItems.length;
   const attendanceStats = useMemo(() => {
     const todayRows = attendance.filter((a) => a.date === todayIso);
     const present = todayRows.filter((a) => a.status === 'Present' || a.status === 'Late').length;
@@ -218,6 +234,169 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
     };
   }, [activeStaffLink, termAssessments]);
 
+  const formTeacherRoster = useMemo(() => {
+    if (rolePermissions.role !== 'Form Master') return null;
+    const rawAssigned = (activeStaffLink?.assignedForm || '').trim();
+    const match = rawAssigned.match(/form\s*([1-4])\s*([a-z0-9]*)/i);
+    const targetForm = (match ? Number(match[1]) : 4) as FormLevel;
+    const targetStream = (match?.[2] || '').trim().toUpperCase();
+
+    const classStudents = activeStudents
+      .filter((s) => {
+        if (s.formLevel !== targetForm) return false;
+        if (targetStream && s.stream.trim().toUpperCase() !== targetStream) return false;
+        return true;
+      })
+      .sort((a, b) => a.stream.localeCompare(b.stream) || a.fullName.localeCompare(b.fullName));
+
+    const rows = classStudents.map((stu) => {
+      const att = attendanceStats.todayRows.find((a) => a.studentId === stu.id);
+      const stuMarks = termAssessments.filter((m) => m.studentId === stu.id);
+      const standing = calculateStudentStanding(stu.formLevel as FormLevel, stuMarks);
+      const activeLoans = libraryLoans.filter(
+        (l) => l.studentId === stu.id && l.status === 'Checked Out'
+      );
+      const overdueLoans = activeLoans.filter((l) => isLibraryLoanOverdue(l, todayIso));
+      const dueSoonLoans = activeLoans.filter((l) => isLibraryLoanDueWithin48Hours(l, todayIso));
+      return {
+        student: stu,
+        attendanceStatus: att?.status || 'Unmarked',
+        subjectCount: standing.subjectCount,
+        averageScore: standing.subjectCount > 0 ? standing.averageScore : null,
+        activeLoanCount: activeLoans.length,
+        overdueLoanCount: overdueLoans.length,
+        dueSoonLoanCount: dueSoonLoans.length,
+      };
+    });
+
+    const presentCount = rows.filter(
+      (r) => r.attendanceStatus === 'Present' || r.attendanceStatus === 'Late'
+    ).length;
+
+    return {
+      classLabel: targetStream ? `Form ${targetForm}${targetStream}` : `Form ${targetForm}`,
+      rows,
+      presentCount,
+    };
+  }, [activeStaffLink?.assignedForm, activeStudents, attendanceStats.todayRows, libraryLoans, rolePermissions.role, termAssessments, todayIso]);
+
+  const hodDepartmentSummary = useMemo(() => {
+    if (rolePermissions.role !== 'Head of Department') return null;
+    const deptSubjects =
+      activeStaffLink && activeStaffLink.subjects.length > 0
+        ? activeStaffLink.subjects
+        : MALAWI_SUBJECTS.slice(0, 3);
+    const subjSet = new Set(deptSubjects.map((s) => s.toLowerCase()));
+    const deptMarks = termAssessments.filter((m) => subjSet.has(m.subject.toLowerCase()));
+    const deptDrops = deptMarks.filter((m) => evaluateAssessmentCaDrop(m) !== null).length;
+    const examCompleted = deptMarks.filter((m) => normalizeAssessmentComponents(m).hasExam).length;
+    const completionPct =
+      deptMarks.length > 0 ? Math.round((examCompleted / deptMarks.length) * 100) : 0;
+
+    return {
+      deptSubjects,
+      deptMarksCount: deptMarks.length,
+      deptDrops,
+      completionPct,
+    };
+  }, [activeStaffLink, rolePermissions.role, termAssessments]);
+
+  const librarianStats = useMemo(() => {
+    let checkedOutLoans = 0;
+    let checkedOutCopies = 0;
+    let dueSoonLoans = 0;
+    let dueSoonCopies = 0;
+    let overdueLoans = 0;
+    let overdueCopies = 0;
+    let returnedLoans = 0;
+    let damagedOrLost = 0;
+    const borrowerIds = new Set<string>();
+    const subjectMap = new Map<
+      string,
+      { subject: string; totalCopies: number; checkedOutCopies: number; overdueCopies: number }
+    >();
+    const categoryMap = new Map<string, number>();
+
+    for (const loan of libraryLoans) {
+      const qty = Math.max(1, Number(loan.quantity) || 1);
+      const subj = (loan.subject || 'General').trim() || 'General';
+      const sEntry = subjectMap.get(subj) || {
+        subject: subj,
+        totalCopies: 0,
+        checkedOutCopies: 0,
+        overdueCopies: 0,
+      };
+      sEntry.totalCopies += qty;
+      categoryMap.set(loan.materialType, (categoryMap.get(loan.materialType) || 0) + qty);
+
+      if (loan.status === 'Checked Out') {
+        checkedOutLoans += 1;
+        checkedOutCopies += qty;
+        borrowerIds.add(loan.studentId);
+        sEntry.checkedOutCopies += qty;
+        if (isLibraryLoanOverdue(loan, todayIso)) {
+          overdueLoans += 1;
+          overdueCopies += qty;
+          sEntry.overdueCopies += qty;
+        } else if (isLibraryLoanDueWithin48Hours(loan, todayIso)) {
+          dueSoonLoans += 1;
+          dueSoonCopies += qty;
+        }
+      } else {
+        returnedLoans += 1;
+        if (loan.conditionOnReturn === 'Damaged' || loan.conditionOnReturn === 'Lost') {
+          damagedOrLost += 1;
+        }
+      }
+
+      subjectMap.set(subj, sEntry);
+    }
+
+    const activeQueue = libraryLoans
+      .filter((l) => l.status === 'Checked Out')
+      .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+      .slice(0, 8);
+
+    const mostBorrowedSubjects = Array.from(subjectMap.values())
+      .sort((a, b) => b.totalCopies - a.totalCopies || a.subject.localeCompare(b.subject))
+      .slice(0, 6);
+
+    const byForm = FORM_LEVELS.map((form) => {
+      const formActive = libraryLoans.filter(
+        (l) => l.formLevel === form && l.status === 'Checked Out'
+      );
+      const formOverdue = formActive.filter((l) => isLibraryLoanOverdue(l, todayIso));
+      const formDueSoon = formActive.filter((l) => isLibraryLoanDueWithin48Hours(l, todayIso));
+      return {
+        form,
+        activeCount: formActive.length,
+        overdueCount: formOverdue.length,
+        dueSoonCount: formDueSoon.length,
+      };
+    });
+
+    const byCategory = LIBRARY_MATERIAL_CATEGORIES.map((category) => ({
+      category,
+      copies: categoryMap.get(category) || 0,
+    })).filter((c) => c.copies > 0);
+
+    return {
+      checkedOutLoans,
+      checkedOutCopies,
+      dueSoonLoans,
+      dueSoonCopies,
+      overdueLoans,
+      overdueCopies,
+      returnedLoans,
+      damagedOrLost,
+      activeBorrowers: borrowerIds.size,
+      activeQueue,
+      mostBorrowedSubjects,
+      byForm,
+      byCategory,
+    };
+  }, [libraryLoans, todayIso]);
+
   // Role Header Strip (visible across all roles)
   const RoleHeaderBanner = (
     <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -282,12 +461,375 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                   · {overdueLibraryCount} overdue
                 </span>
               ) : null}
+              {dueSoonLibraryCount > 0 ? (
+                <span className="text-amber-700 dark:text-amber-400">
+                  {' '}
+                  · {dueSoonLibraryCount} due in 48h
+                </span>
+              ) : null}
             </span>
           </button>
         )}
       </div>
     </div>
   );
+
+  const LibraryDueReminderBanner =
+    rolePermissions.canReadLibrary &&
+    (dueSoonLibraryItems.length > 0 || overdueLibraryCount > 0) ? (
+      <section
+        aria-label="Automated library return reminders"
+        className="bg-white dark:bg-[#161B22] border border-amber-200 dark:border-amber-900/60 rounded-2xl p-5 space-y-3"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-start gap-2.5">
+            <div className="h-9 w-9 rounded-xl bg-amber-50 dark:bg-amber-950/50 flex items-center justify-center text-amber-700 dark:text-amber-400 shrink-0">
+              <Clock className="w-4 h-4" aria-hidden="true" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
+                Library Return Reminders · Due Within 48 Hours
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums mt-0.5">
+                {dueSoonLibraryCount} {dueSoonLibraryCount === 1 ? 'book' : 'books'} due within 48h
+                {overdueLibraryCount > 0 ? ` · ${overdueLibraryCount} overdue` : ''}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => onNavigate('library')}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <span>Open School Library</span>
+            <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+          </button>
+        </div>
+
+        {dueSoonLibraryItems.length > 0 && (
+          <div className="divide-y divide-slate-100 dark:divide-slate-800/80 rounded-xl border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/40 dark:bg-amber-950/15 overflow-hidden">
+            {dueSoonLibraryItems.slice(0, 4).map((loan) => {
+              const reminder = getLibraryDueReminderLabel(loan.dueDate, todayIso);
+              return (
+                <div
+                  key={loan.id}
+                  className="px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs"
+                >
+                  <div className="min-w-0">
+                    <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
+                      {loan.bookTitle}
+                    </div>
+                    <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 truncate">
+                      {loan.studentName} · Form {loan.formLevel}
+                      {loan.stream} · {loan.bookCode}
+                    </div>
+                  </div>
+                  <div className="text-right font-mono tabular-nums shrink-0">
+                    <span className="font-semibold text-amber-800 dark:text-amber-300">
+                      {reminder.urgencyLabel}
+                    </span>{' '}
+                    <span className="text-slate-500 dark:text-slate-400">
+                      (Due {loan.dueDate})
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+    ) : null;
+
+  // =========================================================================
+  // 0. SCHOOL LIBRARIAN HOME DASHBOARD (ISOLATED FROM MARKS & FEES)
+  // =========================================================================
+  if (rolePermissions.role === 'School Librarian') {
+    return (
+      <div className="space-y-6">
+        {RoleHeaderBanner}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
+            <div className="flex items-center justify-between text-xs font-medium text-slate-500 dark:text-slate-400">
+              <span>Books Checked Out</span>
+              <BookOpen className="w-4 h-4 text-emerald-600" aria-hidden="true" />
+            </div>
+            <div className="mt-2 text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+              {librarianStats.checkedOutCopies}
+            </div>
+            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400 font-mono">
+              {librarianStats.checkedOutLoans} active loans
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
+            <div className="flex items-center justify-between text-xs font-medium text-slate-500 dark:text-slate-400">
+              <span>Overdue Returns</span>
+              <AlertTriangle
+                className={`w-4 h-4 ${
+                  librarianStats.overdueLoans > 0 ? 'text-rose-600' : 'text-slate-400'
+                }`}
+                aria-hidden="true"
+              />
+            </div>
+            <div
+              className={`mt-2 text-2xl font-bold font-mono tabular-nums ${
+                librarianStats.overdueLoans > 0
+                  ? 'text-rose-600 dark:text-rose-400'
+                  : 'text-slate-900 dark:text-white'
+              }`}
+            >
+              {librarianStats.overdueLoans}
+            </div>
+            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400 font-mono">
+              {librarianStats.overdueCopies} overdue ·{' '}
+              <span
+                className={
+                  librarianStats.dueSoonLoans > 0
+                    ? 'text-amber-700 dark:text-amber-400 font-semibold'
+                    : ''
+                }
+              >
+                {librarianStats.dueSoonLoans} due in 48h
+              </span>
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
+            <div className="flex items-center justify-between text-xs font-medium text-slate-500 dark:text-slate-400">
+              <span>Returned &amp; Cleared</span>
+              <BookCheck className="w-4 h-4 text-emerald-600" aria-hidden="true" />
+            </div>
+            <div className="mt-2 text-2xl font-bold font-mono tabular-nums text-emerald-700 dark:text-emerald-400">
+              {librarianStats.returnedLoans}
+            </div>
+            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400 font-mono">
+              {librarianStats.damagedOrLost > 0
+                ? `${librarianStats.damagedOrLost} damaged/lost`
+                : 'All returned intact'}
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
+            <div className="flex items-center justify-between text-xs font-medium text-slate-500 dark:text-slate-400">
+              <span>Active Borrowers</span>
+              <Users className="w-4 h-4 text-slate-400" aria-hidden="true" />
+            </div>
+            <div className="mt-2 text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+              {librarianStats.activeBorrowers}
+            </div>
+            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              of {activeStudents.length} active students
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Active Loans & Overdue Queue */}
+          <section className="lg:col-span-7 bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                  Overdue &amp; 48-Hour Return Reminders
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Sorted by earliest due date so overdue and 48-hour upcoming returns are followed up first.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => onNavigate('library')}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline whitespace-nowrap cursor-pointer"
+              >
+                <span>Open Library Register</span>
+                <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+              </button>
+            </div>
+
+            {librarianStats.dueSoonLoans > 0 && (
+              <div className="mt-3 rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/70 dark:bg-amber-950/25 px-3.5 py-2.5 text-xs text-amber-900 dark:text-amber-200 flex items-center gap-2">
+                <Clock className="w-4 h-4 text-amber-700 dark:text-amber-400 shrink-0" aria-hidden="true" />
+                <span>
+                  <span className="font-semibold">
+                    {librarianStats.dueSoonLoans}{' '}
+                    {librarianStats.dueSoonLoans === 1 ? 'book' : 'books'} due within 48 hours
+                  </span>{' '}
+                  ({librarianStats.dueSoonCopies} {librarianStats.dueSoonCopies === 1 ? 'copy' : 'copies'}). Remind borrowers before the return deadline.
+                </span>
+              </div>
+            )}
+
+            {librarianStats.activeQueue.length === 0 ? (
+              <div className="py-10 text-sm text-slate-500 dark:text-slate-400">
+                No textbooks or reading materials are currently checked out.
+              </div>
+            ) : (
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
+                      <th className="py-2 pr-3 font-medium">Material &amp; Code</th>
+                      <th className="py-2 px-3 font-medium">Student</th>
+                      <th className="py-2 px-3 font-medium">Due Date</th>
+                      <th className="py-2 pl-3 font-medium text-right">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                    {librarianStats.activeQueue.map((loan) => {
+                      const overdue = isLibraryLoanOverdue(loan, todayIso);
+                      const dueSoon = isLibraryLoanDueWithin48Hours(loan, todayIso);
+                      const reminder = getLibraryDueReminderLabel(loan.dueDate, todayIso);
+                      const daysLate = overdue ? getLibraryDaysOverdue(loan.dueDate, todayIso) : 0;
+                      return (
+                        <tr
+                          key={loan.id}
+                          className={
+                            dueSoon
+                              ? 'bg-amber-50/45 dark:bg-amber-950/15'
+                              : overdue
+                              ? 'bg-rose-50/35 dark:bg-rose-950/10'
+                              : ''
+                          }
+                        >
+                          <td className="py-2.5 pr-3">
+                            <div className="font-medium text-slate-900 dark:text-slate-100">
+                              {loan.bookTitle}
+                            </div>
+                            <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                              {loan.bookCode} · {loan.subject || 'General'}
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 text-xs">
+                            <div className="font-medium text-slate-800 dark:text-slate-200">
+                              {loan.studentName}
+                            </div>
+                            <div className="font-mono text-slate-500 dark:text-slate-400">
+                              Form {loan.formLevel}
+                              {loan.stream} · {loan.admissionNo}
+                            </div>
+                          </td>
+                          <td
+                            className={`py-2.5 px-3 font-mono text-xs tabular-nums ${
+                              overdue
+                                ? 'text-rose-600 dark:text-rose-400 font-semibold'
+                                : dueSoon
+                                ? 'text-amber-700 dark:text-amber-400 font-semibold'
+                                : 'text-slate-600 dark:text-slate-300'
+                            }`}
+                          >
+                            {loan.dueDate}
+                          </td>
+                          <td
+                            className={`py-2.5 pl-3 text-right text-xs font-semibold whitespace-nowrap ${
+                              overdue
+                                ? 'text-rose-600 dark:text-rose-400'
+                                : dueSoon
+                                ? 'text-amber-700 dark:text-amber-400'
+                                : 'text-slate-600 dark:text-slate-300'
+                            }`}
+                          >
+                            {overdue
+                              ? `Overdue (${daysLate}d)`
+                              : dueSoon
+                              ? `48h Alert · ${reminder.urgencyLabel}`
+                              : 'Checked Out'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          {/* Most Borrowed Subjects & Form Circulation */}
+          <section className="lg:col-span-5 space-y-6">
+            <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 space-y-4">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                  Most Borrowed Subjects
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('library')}
+                  className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer"
+                >
+                  Analytics
+                </button>
+              </div>
+              {librarianStats.mostBorrowedSubjects.length === 0 ? (
+                <p className="text-xs text-slate-500 dark:text-slate-400">No circulation recorded yet.</p>
+              ) : (
+                <div className="space-y-3">
+                  {librarianStats.mostBorrowedSubjects.map((item) => {
+                    const max = librarianStats.mostBorrowedSubjects[0]?.totalCopies || 1;
+                    const widthPct = Math.max(8, Math.round((item.totalCopies / max) * 100));
+                    return (
+                      <div key={item.subject} className="space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-medium text-slate-800 dark:text-slate-200">
+                            {item.subject}
+                          </span>
+                          <span className="font-mono tabular-nums text-[11px] text-slate-500 dark:text-slate-400">
+                            {item.totalCopies} {item.totalCopies === 1 ? 'copy' : 'copies'} ·{' '}
+                            {item.checkedOutCopies} out
+                          </span>
+                        </div>
+                        <div className="h-2 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                          <div
+                            style={{ width: `${widthPct}%` }}
+                            className="h-full rounded-full bg-emerald-700 dark:bg-emerald-500"
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 space-y-3">
+              <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                Active Loans by Form
+              </h2>
+              <div className="grid grid-cols-2 gap-2.5">
+                {librarianStats.byForm.map((f) => (
+                  <div
+                    key={f.form}
+                    className="rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/70 dark:border-slate-800 p-3"
+                  >
+                    <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                      Form {f.form}
+                    </div>
+                    <div className="mt-1 text-lg font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+                      {f.activeCount}
+                    </div>
+                    <div
+                      className={`text-[11px] font-mono ${
+                        f.overdueCount > 0
+                          ? 'text-rose-600 dark:text-rose-400 font-semibold'
+                          : f.dueSoonCount > 0
+                          ? 'text-amber-700 dark:text-amber-400 font-semibold'
+                          : 'text-slate-500 dark:text-slate-400'
+                      }`}
+                    >
+                      {f.overdueCount > 0
+                        ? `${f.overdueCount} overdue`
+                        : f.dueSoonCount > 0
+                        ? `${f.dueSoonCount} due in 48h`
+                        : 'On schedule'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    );
+  }
 
   // =========================================================================
   // 1. SCHOOL BURSAR HOME DASHBOARD
@@ -580,6 +1122,137 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
           onOpenGradebook={() => onNavigate('marks')}
         />
 
+        {rolePermissions.role === 'Head of Department' && hodDepartmentSummary && (
+          <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+                HOD Department Oversight
+              </div>
+              <h2 className="mt-0.5 text-base font-semibold text-slate-900 dark:text-white">
+                {hodDepartmentSummary.deptSubjects.join(' · ')}
+              </h2>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400 font-mono">
+                {hodDepartmentSummary.deptMarksCount} term assessments ·{' '}
+                {hodDepartmentSummary.completionPct}% exam completion ·{' '}
+                {hodDepartmentSummary.deptDrops} CA drop{' '}
+                {hodDepartmentSummary.deptDrops === 1 ? 'alert' : 'alerts'}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => onNavigate('marks')}
+                className="min-h-[38px] px-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer"
+              >
+                Review Department Marks
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('library')}
+                className="min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                Department Textbooks
+              </button>
+            </div>
+          </section>
+        )}
+
+        {rolePermissions.role === 'Form Master' && formTeacherRoster && (
+          <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                  My Form Class Roster — {formTeacherRoster.classLabel}
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono">
+                  {formTeacherRoster.rows.length} active students · {formTeacherRoster.presentCount} marked present today
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onNavigate('attendance')}
+                  className="min-h-[36px] px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer"
+                >
+                  Mark Class Roll Call
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('students')}
+                  className="min-h-[36px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Open Student Directory
+                </button>
+              </div>
+            </div>
+
+            {formTeacherRoster.rows.length === 0 ? (
+              <p className="text-xs text-slate-500 dark:text-slate-400 py-4">
+                No active students currently enrolled in {formTeacherRoster.classLabel}.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
+                      <th className="py-2 pr-3 font-medium">Student</th>
+                      <th className="py-2 px-3 font-medium">Adm #</th>
+                      <th className="py-2 px-3 font-medium">Today&apos;s Roll Call</th>
+                      <th className="py-2 px-3 font-medium text-right">Term Avg</th>
+                      <th className="py-2 pl-3 font-medium text-right">Library Books</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                    {formTeacherRoster.rows.slice(0, 10).map((r) => (
+                      <tr key={r.student.id}>
+                        <td className="py-2.5 pr-3 font-medium text-slate-900 dark:text-slate-100">
+                          {r.student.fullName}
+                        </td>
+                        <td className="py-2.5 px-3 font-mono text-xs text-slate-500 dark:text-slate-400">
+                          {r.student.admissionNo}
+                        </td>
+                        <td
+                          className={`py-2.5 px-3 text-xs font-semibold ${
+                            r.attendanceStatus === 'Present'
+                              ? 'text-emerald-700 dark:text-emerald-400'
+                              : r.attendanceStatus === 'Absent'
+                              ? 'text-rose-600 dark:text-rose-400'
+                              : r.attendanceStatus === 'Late' || r.attendanceStatus === 'Excused'
+                              ? 'text-amber-700 dark:text-amber-400'
+                              : 'text-slate-400'
+                          }`}
+                        >
+                          {r.attendanceStatus}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-xs">
+                          {r.averageScore !== null ? `${r.averageScore.toFixed(1)}%` : '—'}
+                        </td>
+                        <td
+                          className={`py-2.5 pl-3 text-right font-mono text-xs ${
+                            r.overdueLoanCount > 0
+                              ? 'text-rose-600 dark:text-rose-400 font-semibold'
+                              : r.dueSoonLoanCount > 0
+                              ? 'text-amber-700 dark:text-amber-400 font-semibold'
+                              : 'text-slate-600 dark:text-slate-300'
+                          }`}
+                        >
+                          {r.activeLoanCount === 0
+                            ? '0'
+                            : r.overdueLoanCount > 0
+                            ? `${r.activeLoanCount} out (${r.overdueLoanCount} overdue)`
+                            : r.dueSoonLoanCount > 0
+                            ? `${r.activeLoanCount} out (${r.dueSoonLoanCount} due in 48h)`
+                            : `${r.activeLoanCount} out`}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        )}
+
         <CaDropAlertsPanel
           assessments={termAssessments}
           students={students}
@@ -771,6 +1444,8 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
           onOpenGradebook={() => onNavigate('marks')}
         />
 
+        {LibraryDueReminderBanner}
+
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           <section className="lg:col-span-7 bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 space-y-4">
             <div className="flex items-center justify-between gap-4">
@@ -956,6 +1631,8 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
         term={school.currentTerm}
         onOpenGradebook={() => onNavigate('marks')}
       />
+
+      {LibraryDueReminderBanner}
 
       {/* Visual Analytics Row (Fees + Academics) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">

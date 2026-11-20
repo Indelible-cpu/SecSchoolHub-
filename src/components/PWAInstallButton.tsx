@@ -42,13 +42,13 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ variant = 'h
             <div className="flex items-center gap-2">
               <Smartphone className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" aria-hidden="true" />
               <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                {isInstalled ? 'Installed on Device' : 'Install LedgerCalc on Mobile'}
+                {isInstalled ? 'Installed on Device' : 'Install SecSchoolHub on Mobile'}
               </h3>
             </div>
             <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
               {isInstalled
                 ? 'Running as a standalone offline-ready app on your device.'
-                : 'Add LedgerCalc to your home screen for instant offline access and full-screen keypad use.'}
+                : 'Add SecSchoolHub to your home screen for instant offline school portal access.'}
             </p>
           </div>
           {isInstalled ? (
@@ -91,7 +91,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ variant = 'h
                   Install on Your Phone
                 </h2>
                 <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                  Use LedgerCalc offline from your home screen with zero browser bars.
+                  Use SecSchoolHub offline from your home screen with zero browser bars.
                 </p>
               </div>
               <button

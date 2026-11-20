@@ -794,6 +794,233 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "LibraryBook": {
+      "title": "School Library Book Inventory",
+      "description": "Cataloged textbook or reading material in the school library inventory with ISBN, author, and copy count.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "isbn": { "type": "string", "maxLength": 32 },
+        "title": { "type": "string", "maxLength": 140 },
+        "author": { "type": "string", "maxLength": 120 },
+        "subject": { "type": "string", "maxLength": 60 },
+        "materialType": {
+          "type": "string",
+          "enum": ["Textbook", "Set Book", "Reference Book", "Past Papers", "Reader / Novel", "Science Manual"],
+          "maxLength": 30
+        },
+        "shelfCode": { "type": "string", "maxLength": 40 },
+        "totalCopies": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 240 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "isbn",
+        "title",
+        "author",
+        "subject",
+        "materialType",
+        "shelfCode",
+        "totalCopies",
+        "notes",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "LibraryTransaction": {
+      "title": "School Library Audit Transaction",
+      "description": "Immutable audit log entry recording library borrowing events (checkouts, returns, reopens, edits, deletions).",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "loanId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "action": {
+          "type": "string",
+          "enum": ["Checked Out", "Returned", "Reopened", "Edited", "Deleted"],
+          "maxLength": 20
+        },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "admissionNo": { "type": "string", "maxLength": 40 },
+        "formLevel": { "type": "number" },
+        "stream": { "type": "string", "maxLength": 20 },
+        "bookTitle": { "type": "string", "maxLength": 140 },
+        "bookCode": { "type": "string", "maxLength": 40 },
+        "subject": { "type": "string", "maxLength": 60 },
+        "quantity": { "type": "number" },
+        "eventDate": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "dueDate": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "condition": {
+          "type": "string",
+          "enum": ["Good", "Fair", "Damaged", "Lost"],
+          "maxLength": 20
+        },
+        "actorUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorName": { "type": "string", "maxLength": 120 },
+        "notes": { "type": "string", "maxLength": 240 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "loanId",
+        "action",
+        "studentId",
+        "studentName",
+        "admissionNo",
+        "formLevel",
+        "stream",
+        "bookTitle",
+        "bookCode",
+        "subject",
+        "quantity",
+        "eventDate",
+        "dueDate",
+        "condition",
+        "actorUid",
+        "actorName",
+        "notes",
+        "createdAt"
+      ]
+    },
+    "LibraryReservation": {
+      "title": "School Library Book Reservation",
+      "description": "Student reservation request for a library book that is currently checked out.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "bookId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "isbn": { "type": "string", "maxLength": 32 },
+        "bookTitle": { "type": "string", "maxLength": 140 },
+        "subject": { "type": "string", "maxLength": 60 },
+        "materialType": {
+          "type": "string",
+          "enum": ["Textbook", "Set Book", "Reference Book", "Past Papers", "Reader / Novel", "Science Manual"],
+          "maxLength": 30
+        },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "admissionNo": { "type": "string", "maxLength": 40 },
+        "formLevel": { "type": "number" },
+        "stream": { "type": "string", "maxLength": 20 },
+        "registrationCode": { "type": "string", "maxLength": 32 },
+        "status": {
+          "type": "string",
+          "enum": ["Pending", "Ready", "Fulfilled", "Cancelled"],
+          "maxLength": 20
+        },
+        "requestedDate": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "notes": { "type": "string", "maxLength": 240 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "bookId",
+        "isbn",
+        "bookTitle",
+        "subject",
+        "materialType",
+        "studentId",
+        "studentName",
+        "admissionNo",
+        "formLevel",
+        "stream",
+        "registrationCode",
+        "status",
+        "requestedDate",
+        "notes",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CatalogBookMirror": {
+      "title": "Student Library Catalog Book",
+      "description": "Zero-PII mirror of library book availability under /studentLibraries/{schoolId}/books/{bookId}.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "isbn": { "type": "string", "maxLength": 32 },
+        "title": { "type": "string", "maxLength": 140 },
+        "author": { "type": "string", "maxLength": 120 },
+        "subject": { "type": "string", "maxLength": 60 },
+        "materialType": {
+          "type": "string",
+          "enum": ["Textbook", "Set Book", "Reference Book", "Past Papers", "Reader / Novel", "Science Manual"],
+          "maxLength": 30
+        },
+        "shelfCode": { "type": "string", "maxLength": 40 },
+        "totalCopies": { "type": "number" },
+        "checkedOutCopies": { "type": "number" },
+        "availableCopies": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 240 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "isbn",
+        "title",
+        "author",
+        "subject",
+        "materialType",
+        "shelfCode",
+        "totalCopies",
+        "checkedOutCopies",
+        "availableCopies",
+        "notes",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DigitalLibraryResource": {
+      "title": "Online & Offline Digital Library Resource",
+      "description": "Non-downloadable digital textbook, set book, revision guide, or past paper readable online and offline.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "maxLength": 140 },
+        "author": { "type": "string", "maxLength": 120 },
+        "subject": { "type": "string", "maxLength": 60 },
+        "formLevel": {
+          "type": "string",
+          "enum": ["All", "Form 1", "Form 2", "Form 3", "Form 4"],
+          "maxLength": 10
+        },
+        "category": {
+          "type": "string",
+          "enum": ["Book", "Past Paper", "Revision Guide", "Set Book"],
+          "maxLength": 30
+        },
+        "examYear": { "type": "string", "maxLength": 16 },
+        "summary": { "type": "string", "maxLength": 280 },
+        "content": { "type": "string", "maxLength": 30000 },
+        "allowOffline": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "title",
+        "author",
+        "subject",
+        "formLevel",
+        "category",
+        "examYear",
+        "summary",
+        "content",
+        "allowOffline",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -816,6 +1043,18 @@
     "/studentPortals/{registrationCode}/libraryLoans/{loanId}": {
       "schema": { "$ref": "#/entities/StudentPortalLibraryLoan" },
       "description": "Student borrowed library books and due dates readable only via their registration code."
+    },
+    "/studentPortals/{registrationCode}/reservations/{reservationId}": {
+      "schema": { "$ref": "#/entities/LibraryReservation" },
+      "description": "Student library book reservations readable and requestable via their registration code."
+    },
+    "/studentLibraries/{schoolId}/books/{bookId}": {
+      "schema": { "$ref": "#/entities/CatalogBookMirror" },
+      "description": "Zero-PII school book availability catalog readable by students in that school."
+    },
+    "/studentLibraries/{schoolId}/digitalResources/{resourceId}": {
+      "schema": { "$ref": "#/entities/DigitalLibraryResource" },
+      "description": "Published non-downloadable digital books and past papers readable by students in that school."
     },
     "/studentLinks/{linkId}": {
       "schema": { "$ref": "#/entities/StudentLink" },
@@ -872,6 +1111,22 @@
     "/schools/{schoolId}/libraryLoans/{loanId}": {
       "schema": { "$ref": "#/entities/LibraryLoan" },
       "description": "Textbooks and reading materials checked out to students with due dates and return status."
+    },
+    "/schools/{schoolId}/libraryBooks/{bookId}": {
+      "schema": { "$ref": "#/entities/LibraryBook" },
+      "description": "Available book inventory catalog with ISBN, title, author, subject, and copy counts."
+    },
+    "/schools/{schoolId}/libraryTransactions/{transactionId}": {
+      "schema": { "$ref": "#/entities/LibraryTransaction" },
+      "description": "Immutable audit trail of library borrowing activity (checkouts, returns, reopens, edits, and deletions)."
+    },
+    "/schools/{schoolId}/libraryReservations/{reservationId}": {
+      "schema": { "$ref": "#/entities/LibraryReservation" },
+      "description": "Student reservation requests for checked-out library books managed by librarians."
+    },
+    "/schools/{schoolId}/digitalLibrary/{resourceId}": {
+      "schema": { "$ref": "#/entities/DigitalLibraryResource" },
+      "description": "Online & offline digital library collection (non-downloadable books, set books, and past papers)."
     }
   }
 }

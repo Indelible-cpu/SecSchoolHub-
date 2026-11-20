@@ -46,7 +46,7 @@ export async function saveSmsConfig(
 ): Promise<void> {
   const path = `schools/${schoolId}/smsSettings/default`;
   const cleanThreshold = Math.min(100000000, Math.max(0, Math.round(Number(input.lowBalanceThresholdMWK) || 0)));
-  const cleanLabel = (input.senderLabel || 'MalawiSec').trim().slice(0, 40) || 'MalawiSec';
+  const cleanLabel = (input.senderLabel || 'SecSchoolHub').trim().slice(0, 40) || 'SecSchoolHub';
 
   try {
     if (existsInDb) {
@@ -133,7 +133,7 @@ export interface DispatchSmsOutcome {
 export async function dispatchAndLogParentSms(params: DispatchSmsParams): Promise<DispatchSmsOutcome> {
   const smsId = `sms_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
   const path = `schools/${params.schoolId}/smsLogs/${smsId}`;
-  const cleanSender = (params.senderLabel || 'MalawiSec').trim().slice(0, 40) || 'MalawiSec';
+  const cleanSender = (params.senderLabel || 'SecSchoolHub').trim().slice(0, 40) || 'SecSchoolHub';
   const cleanStudentName = params.studentName.trim().slice(0, 120) || 'Student';
   const cleanGuardianName = params.guardianName.trim().slice(0, 120) || 'Parent/Guardian';
 
