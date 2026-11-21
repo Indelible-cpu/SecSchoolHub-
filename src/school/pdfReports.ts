@@ -29,11 +29,26 @@ function drawReportHeader(
   doc.setFillColor(13, 110, 82);
   doc.rect(0, 0, pageWidth, 4, 'F');
 
+  let textOffsetX = margin;
+  if (school.logoDataUrl && school.logoDataUrl.startsWith('data:image/')) {
+    try {
+      const imgFormat = school.logoDataUrl.startsWith('data:image/jpeg')
+        ? 'JPEG'
+        : school.logoDataUrl.startsWith('data:image/webp')
+        ? 'WEBP'
+        : 'PNG';
+      doc.addImage(school.logoDataUrl, imgFormat, margin, 8.5, 13, 13);
+      textOffsetX = margin + 16;
+    } catch {
+      textOffsetX = margin;
+    }
+  }
+
   // School name & district
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(15);
   doc.setTextColor(15, 23, 42);
-  doc.text(school.name.toUpperCase(), margin, 15);
+  doc.text(school.name.toUpperCase(), textOffsetX, 15);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
@@ -45,7 +60,7 @@ function drawReportHeader(
   ]
     .filter(Boolean)
     .join('  ·  ');
-  doc.text(subline, margin, 20.5);
+  doc.text(subline, textOffsetX, 20.5);
 
   // Date stamp top right
   const generatedStr = new Date().toLocaleDateString('en-MW', {
@@ -322,7 +337,7 @@ export function downloadStudentTermReportCardPdf(params: {
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(71, 85, 105);
-  doc.text('Form Master Signature & Date', 14, sigY + 4.5);
+  doc.text('Form Teacher Signature & Date', 14, sigY + 4.5);
   doc.text('Head Teacher Signature & School Stamp', pageWidth - 82, sigY + 4.5);
 
   addPageFooters(doc, school.name);

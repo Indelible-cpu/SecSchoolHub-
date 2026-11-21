@@ -77,7 +77,7 @@ service cloud.firestore {
     function isAcademicStaff(schoolId) {
       return isSchoolOwner(schoolId) || (
         hasStaffAccess(schoolId) && staffRole(schoolId) in [
-          'Head Teacher', 'Deputy Head', 'Head of Department', 'Form Master', 'Subject Teacher'
+          'Head Teacher', 'Deputy Head', 'Head of Department', 'Form Teacher', 'Form Master', 'Subject Teacher'
         ]
       );
     }
@@ -92,7 +92,7 @@ service cloud.firestore {
       return isSchoolOwner(schoolId) || (
         hasStaffAccess(schoolId) && staffRole(schoolId) in [
           'Head Teacher', 'Deputy Head', 'School Librarian',
-          'Head of Department', 'Form Master', 'Subject Teacher'
+          'Head of Department', 'Form Teacher', 'Form Master', 'Subject Teacher'
         ]
       );
     }
@@ -114,6 +114,13 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidLogoDataUrl(val) {
+      return val is string && (
+        val == '' ||
+        (val.size() >= 22 && val.size() <= 160000 && val.matches('^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$'))
+      );
+    }
+
     function isValidSchool(data) {
       return data.keys().hasAll([
           'ownerId', 'name', 'district', 'schoolType', 'motto',
@@ -123,7 +130,7 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'ownerId', 'name', 'district', 'schoolType', 'motto',
           'academicYear', 'currentTerm', 'defaultTuitionMWK', 'defaultGpfMWK',
-          'defaultExamFeeMWK', 'createdAt', 'updatedAt'
+          'defaultExamFeeMWK', 'logoDataUrl', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerId)
         && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
@@ -135,6 +142,7 @@ service cloud.firestore {
         && data.defaultTuitionMWK is number && data.defaultTuitionMWK >= 0 && data.defaultTuitionMWK <= 100000000
         && data.defaultGpfMWK is number && data.defaultGpfMWK >= 0 && data.defaultGpfMWK <= 100000000
         && data.defaultExamFeeMWK is number && data.defaultExamFeeMWK >= 0 && data.defaultExamFeeMWK <= 100000000
+        && (!('logoDataUrl' in data) || isValidLogoDataUrl(data.logoDataUrl))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -187,7 +195,7 @@ service cloud.firestore {
         && data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 120
         && data.roleTitle in [
           'Head Teacher', 'Deputy Head', 'Head of Department',
-          'Form Master', 'Subject Teacher', 'School Librarian', 'School Bursar'
+          'Form Teacher', 'Form Master', 'Subject Teacher', 'School Librarian', 'School Bursar'
         ]
         && data.subjects is list && data.subjects.size() >= 1 && data.subjects.size() <= 8
         && data.subjects[0] is string && data.subjects[0].size() <= 60
@@ -214,7 +222,7 @@ service cloud.firestore {
         && data.staffEmail is string && data.staffEmail.size() >= 3 && data.staffEmail.size() <= 120
         && data.roleTitle in [
           'Head Teacher', 'Deputy Head', 'Head of Department',
-          'Form Master', 'Subject Teacher', 'School Librarian', 'School Bursar'
+          'Form Teacher', 'Form Master', 'Subject Teacher', 'School Librarian', 'School Bursar'
         ]
         && data.status in ['Active', 'On Leave']
         && data.createdAt is timestamp
@@ -232,7 +240,7 @@ service cloud.firestore {
           'ownerId', 'schoolId', 'schoolName', 'schoolDistrict', 'schoolType',
           'academicYear', 'currentTerm', 'teacherId', 'staffName', 'staffCode',
           'roleTitle', 'subjects', 'assignedForm', 'staffEmail', 'status',
-          'createdAt', 'updatedAt'
+          'logoDataUrl', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerId)
         && isValidId(data.schoolId)
@@ -246,13 +254,14 @@ service cloud.firestore {
         && data.staffCode is string && data.staffCode.size() >= 1 && data.staffCode.size() <= 40
         && data.roleTitle in [
           'Head Teacher', 'Deputy Head', 'Head of Department',
-          'Form Master', 'Subject Teacher', 'School Librarian', 'School Bursar'
+          'Form Teacher', 'Form Master', 'Subject Teacher', 'School Librarian', 'School Bursar'
         ]
         && data.subjects is list && data.subjects.size() >= 1 && data.subjects.size() <= 8
         && data.subjects[0] is string && data.subjects[0].size() <= 60
         && data.assignedForm is string && data.assignedForm.size() >= 1 && data.assignedForm.size() <= 30
         && data.staffEmail is string && data.staffEmail.size() >= 3 && data.staffEmail.size() <= 120
         && data.status in ['Active', 'On Leave']
+        && (!('logoDataUrl' in data) || isValidLogoDataUrl(data.logoDataUrl))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -314,7 +323,7 @@ service cloud.firestore {
           'ownerId', 'schoolId', 'schoolName', 'schoolDistrict', 'schoolType',
           'motto', 'academicYear', 'currentTerm', 'studentId', 'studentName',
           'admissionNo', 'formLevel', 'stream', 'boardingStatus', 'studentEmail',
-          'createdAt', 'updatedAt'
+          'logoDataUrl', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerId)
         && isValidId(data.schoolId)
@@ -331,6 +340,7 @@ service cloud.firestore {
         && data.stream is string && data.stream.size() >= 1 && data.stream.size() <= 20
         && data.boardingStatus in ['Day Scholar', 'Boarder']
         && data.studentEmail is string && data.studentEmail.size() >= 3 && data.studentEmail.size() <= 160
+        && (!('logoDataUrl' in data) || isValidLogoDataUrl(data.logoDataUrl))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -346,7 +356,7 @@ service cloud.firestore {
           'ownerId', 'schoolId', 'schoolName', 'schoolDistrict', 'schoolType',
           'motto', 'academicYear', 'currentTerm', 'studentId', 'studentName',
           'admissionNo', 'formLevel', 'stream', 'boardingStatus', 'registrationCode',
-          'status', 'createdAt', 'updatedAt'
+          'status', 'logoDataUrl', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerId)
         && isValidId(data.schoolId)
@@ -364,6 +374,7 @@ service cloud.firestore {
         && data.boardingStatus in ['Day Scholar', 'Boarder']
         && isValidRegCode(data.registrationCode)
         && data.status in ['Active', 'Transferred', 'Suspended', 'Graduated']
+        && (!('logoDataUrl' in data) || isValidLogoDataUrl(data.logoDataUrl))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -750,8 +761,9 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'ownerId', 'schoolId', 'title', 'author', 'subject', 'formLevel',
-          'category', 'examYear', 'summary', 'content', 'allowOffline',
-          'createdAt', 'updatedAt'
+          'category', 'examYear', 'summary', 'content',
+          'storageFormat', 'fileName', 'mimeType', 'fileSizeBytes', 'chunkCount',
+          'allowOffline', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerId)
         && isValidId(data.schoolId)
@@ -762,8 +774,150 @@ service cloud.firestore {
         && data.category in ['Book', 'Past Paper', 'Revision Guide', 'Set Book']
         && data.examYear is string && data.examYear.size() <= 16
         && data.summary is string && data.summary.size() <= 280
-        && data.content is string && data.content.size() >= 20 && data.content.size() <= 30000
+        && (!('storageFormat' in data) || data.storageFormat in ['text', 'pdf', 'image'])
+        && (!('fileName' in data) || (data.fileName is string && data.fileName.size() <= 160))
+        && (!('mimeType' in data) || (data.mimeType is string && data.mimeType.size() <= 100))
+        && (!('fileSizeBytes' in data) || (data.fileSizeBytes is int && data.fileSizeBytes >= 0 && data.fileSizeBytes <= 15728640))
+        && (!('chunkCount' in data) || (data.chunkCount is int && data.chunkCount >= 0 && data.chunkCount <= 40))
+        && data.content is string && data.content.size() <= 30000
+        && (
+          ('chunkCount' in data && data.chunkCount is int && data.chunkCount > 0) ||
+          data.content.size() >= 20
+        )
         && data.allowOffline is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDigitalResourceChunk(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'resourceId', 'chunkIndex', 'dataBase64', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'resourceId', 'chunkIndex', 'dataBase64', 'createdAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && isValidId(data.resourceId)
+        && data.chunkIndex is int && data.chunkIndex >= 0 && data.chunkIndex < 40
+        && data.dataBase64 is string && data.dataBase64.size() >= 1 && data.dataBase64.size() <= 700000
+        && data.createdAt is timestamp;
+    }
+
+    function isValidPortalFeeInvoice(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'registrationCode', 'studentId', 'studentName',
+          'formLevel', 'stream', 'term', 'academicYear',
+          'tuitionFee', 'gpfFee', 'examFee', 'otherFee',
+          'totalBilled', 'totalPaid', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'registrationCode', 'studentId', 'studentName',
+          'formLevel', 'stream', 'term', 'academicYear',
+          'tuitionFee', 'gpfFee', 'examFee', 'otherFee',
+          'totalBilled', 'totalPaid', 'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && isValidRegCode(data.registrationCode)
+        && isValidId(data.studentId)
+        && data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 120
+        && data.formLevel is int && data.formLevel >= 1 && data.formLevel <= 4
+        && data.stream is string && data.stream.size() >= 1 && data.stream.size() <= 20
+        && data.term in ['Term 1', 'Term 2', 'Term 3']
+        && data.academicYear is string && data.academicYear.size() >= 4 && data.academicYear.size() <= 20
+        && data.tuitionFee is number && data.tuitionFee >= 0 && data.tuitionFee <= 100000000
+        && data.gpfFee is number && data.gpfFee >= 0 && data.gpfFee <= 100000000
+        && data.examFee is number && data.examFee >= 0 && data.examFee <= 100000000
+        && data.otherFee is number && data.otherFee >= 0 && data.otherFee <= 100000000
+        && data.totalBilled is number && data.totalBilled >= 0 && data.totalBilled <= 400000000
+        && data.totalPaid is number && data.totalPaid >= 0 && data.totalPaid <= 400000000
+        && data.status in ['Unpaid', 'Partial', 'Paid']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFeeSubmission(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'studentId', 'studentName', 'admissionNo',
+          'formLevel', 'stream', 'registrationCode', 'invoiceId', 'term', 'academicYear',
+          'amount', 'method', 'reference', 'notes', 'fileName', 'mimeType',
+          'fileFormat', 'fileSizeBytes', 'chunkCount', 'status', 'reviewNote',
+          'receiptNo', 'submittedDate', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'studentId', 'studentName', 'admissionNo',
+          'formLevel', 'stream', 'registrationCode', 'invoiceId', 'term', 'academicYear',
+          'amount', 'method', 'reference', 'notes', 'fileName', 'mimeType',
+          'fileFormat', 'fileSizeBytes', 'chunkCount', 'status', 'reviewNote',
+          'receiptNo', 'submittedDate', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && isValidId(data.studentId)
+        && data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 120
+        && data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 40
+        && data.formLevel is int && data.formLevel >= 1 && data.formLevel <= 4
+        && data.stream is string && data.stream.size() >= 1 && data.stream.size() <= 20
+        && isValidRegCode(data.registrationCode)
+        && data.invoiceId is string && (data.invoiceId == '' || isValidId(data.invoiceId))
+        && data.term in ['Term 1', 'Term 2', 'Term 3']
+        && data.academicYear is string && data.academicYear.size() >= 4 && data.academicYear.size() <= 20
+        && data.amount is number && data.amount > 0 && data.amount <= 100000000
+        && data.method in ['Cash (Bursar)', 'Bank Deposit', 'Airtel Money', 'TNM Mpamba']
+        && data.reference is string && data.reference.size() <= 80
+        && data.notes is string && data.notes.size() <= 240
+        && data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 160
+        && data.mimeType is string && data.mimeType.size() >= 3 && data.mimeType.size() <= 100
+        && data.fileFormat in ['pdf', 'image']
+        && data.fileSizeBytes is int && data.fileSizeBytes >= 1 && data.fileSizeBytes <= 8388608
+        && data.chunkCount is int && data.chunkCount >= 1 && data.chunkCount <= 20
+        && data.status in ['Pending', 'Approved', 'Rejected']
+        && data.reviewNote is string && data.reviewNote.size() <= 240
+        && data.receiptNo is string && data.receiptNo.size() <= 40
+        && data.submittedDate is string && data.submittedDate.size() == 10 && data.submittedDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFeeSubmissionChunk(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'registrationCode', 'submissionId',
+          'chunkIndex', 'dataBase64', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'registrationCode', 'submissionId',
+          'chunkIndex', 'dataBase64', 'createdAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && isValidRegCode(data.registrationCode)
+        && isValidId(data.submissionId)
+        && data.chunkIndex is int && data.chunkIndex >= 0 && data.chunkIndex < 20
+        && data.dataBase64 is string && data.dataBase64.size() >= 1 && data.dataBase64.size() <= 700000
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSchoolAnnouncement(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'title', 'message', 'targetAudiences',
+          'publishedDate', 'authorName', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'title', 'message', 'targetAudiences',
+          'publishedDate', 'authorName', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 120
+        && data.message is string && data.message.size() >= 2 && data.message.size() <= 1000
+        && data.targetAudiences is list
+        && data.targetAudiences.size() >= 1
+        && data.targetAudiences.size() <= 4
+        && data.targetAudiences[0] is string
+        && data.targetAudiences.hasOnly(['Teachers', 'Librarian', 'Bursar', 'Students'])
+        && data.publishedDate is string && data.publishedDate.size() == 10 && data.publishedDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.authorName is string && data.authorName.size() >= 2 && data.authorName.size() <= 120
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -824,7 +978,7 @@ service cloud.firestore {
           incoming().diff(existing()).affectedKeys().hasOnly([
             'schoolName', 'schoolDistrict', 'schoolType', 'motto',
             'academicYear', 'currentTerm', 'studentName', 'admissionNo',
-            'formLevel', 'stream', 'boardingStatus', 'status', 'updatedAt'
+            'formLevel', 'stream', 'boardingStatus', 'status', 'logoDataUrl', 'updatedAt'
           ])
         );
       allow delete: if isVerified() && isValidRegCode(registrationCode) && (
@@ -945,6 +1099,107 @@ service cloud.firestore {
           isLibraryStaff(existing().schoolId)
         );
       }
+
+      match /feeInvoices/{invoiceId} {
+        allow get: if isValidRegCode(registrationCode) && isValidId(invoiceId);
+        allow list: if isValidRegCode(registrationCode)
+          && existing().registrationCode == registrationCode;
+        allow create: if isVerified() && isValidRegCode(registrationCode) && isValidId(invoiceId)
+          && isValidPortalFeeInvoice(incoming())
+          && incoming().registrationCode == registrationCode
+          && isBursarStaff(incoming().schoolId)
+          && incoming().ownerId == schoolOwnerId(incoming().schoolId)
+          && exists(/databases/$(database)/documents/schools/$(incoming().schoolId)/students/$(incoming().studentId))
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerified() && isValidRegCode(registrationCode) && isValidId(invoiceId)
+          && isValidPortalFeeInvoice(incoming())
+          && isBursarStaff(existing().schoolId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().registrationCode == existing().registrationCode
+          && incoming().studentId == existing().studentId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'studentName', 'formLevel', 'stream', 'tuitionFee', 'gpfFee',
+              'examFee', 'otherFee', 'totalBilled', 'totalPaid', 'status', 'updatedAt'
+            ])
+          );
+        allow delete: if isVerified() && isValidRegCode(registrationCode) && isValidId(invoiceId) && (
+          existing().ownerId == request.auth.uid ||
+          isAdmin() ||
+          isBursarStaff(existing().schoolId) ||
+          isSchoolHead(existing().schoolId)
+        );
+      }
+
+      match /feeSubmissions/{submissionId} {
+        allow get: if isValidRegCode(registrationCode) && isValidId(submissionId);
+        allow list: if isValidRegCode(registrationCode)
+          && existing().registrationCode == registrationCode;
+        allow create: if isValidRegCode(registrationCode) && isValidId(submissionId)
+          && isValidFeeSubmission(incoming())
+          && incoming().registrationCode == registrationCode
+          && incoming().status == 'Pending'
+          && incoming().reviewNote == ''
+          && incoming().receiptNo == ''
+          && exists(/databases/$(database)/documents/studentPortals/$(registrationCode))
+          && get(/databases/$(database)/documents/studentPortals/$(registrationCode)).data.schoolId == incoming().schoolId
+          && get(/databases/$(database)/documents/studentPortals/$(registrationCode)).data.studentId == incoming().studentId
+          && get(/databases/$(database)/documents/studentPortals/$(registrationCode)).data.ownerId == incoming().ownerId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && (
+            isBursarStaff(incoming().schoolId) ||
+            existsAfter(/databases/$(database)/documents/schools/$(incoming().schoolId)/feeSubmissions/$(submissionId))
+          );
+        allow update: if isVerified() && isValidRegCode(registrationCode) && isValidId(submissionId)
+          && isValidFeeSubmission(incoming())
+          && isBursarStaff(existing().schoolId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().registrationCode == existing().registrationCode
+          && incoming().studentId == existing().studentId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'reviewNote', 'receiptNo', 'invoiceId', 'updatedAt'
+            ])
+          );
+        allow delete: if isVerified() && isValidRegCode(registrationCode) && isValidId(submissionId) && (
+          existing().ownerId == request.auth.uid ||
+          isAdmin() ||
+          isBursarStaff(existing().schoolId) ||
+          isSchoolHead(existing().schoolId)
+        );
+
+        match /chunks/{chunkId} {
+          allow get: if isValidRegCode(registrationCode) && isValidId(submissionId) && isValidId(chunkId);
+          allow list: if isValidRegCode(registrationCode) && isValidId(submissionId)
+            && existing().registrationCode == registrationCode
+            && existing().submissionId == submissionId;
+          allow create: if isValidRegCode(registrationCode) && isValidId(submissionId) && isValidId(chunkId)
+            && isValidFeeSubmissionChunk(incoming())
+            && incoming().registrationCode == registrationCode
+            && incoming().submissionId == submissionId
+            && exists(/databases/$(database)/documents/studentPortals/$(registrationCode))
+            && get(/databases/$(database)/documents/studentPortals/$(registrationCode)).data.schoolId == incoming().schoolId
+            && get(/databases/$(database)/documents/studentPortals/$(registrationCode)).data.ownerId == incoming().ownerId
+            && incoming().createdAt == request.time;
+          allow update: if false;
+          allow delete: if isVerified() && isValidRegCode(registrationCode) && isValidId(submissionId) && isValidId(chunkId) && (
+            existing().ownerId == request.auth.uid ||
+            isAdmin() ||
+            isBursarStaff(existing().schoolId) ||
+            isSchoolHead(existing().schoolId)
+          );
+        }
+      }
     }
 
     // Student Libraries (Zero-PII): School book availability mirror & published non-downloadable digital library
@@ -1000,10 +1255,57 @@ service cloud.firestore {
             isAdmin() ||
             incoming().diff(existing()).affectedKeys().hasOnly([
               'title', 'author', 'subject', 'formLevel', 'category',
-              'examYear', 'summary', 'content', 'allowOffline', 'updatedAt'
+              'examYear', 'summary', 'content',
+              'storageFormat', 'fileName', 'mimeType', 'fileSizeBytes', 'chunkCount',
+              'allowOffline', 'updatedAt'
             ])
           );
         allow delete: if isValidId(schoolId) && isValidId(resourceId) && isLibraryStaff(schoolId);
+
+        match /chunks/{chunkId} {
+          allow get: if isValidId(schoolId) && isValidId(resourceId) && isValidId(chunkId);
+          allow list: if isValidId(schoolId) && isValidId(resourceId)
+            && existing().schoolId == schoolId
+            && existing().resourceId == resourceId;
+          allow create: if isValidId(schoolId) && isValidId(resourceId) && isValidId(chunkId)
+            && isLibraryStaff(schoolId)
+            && isValidDigitalResourceChunk(incoming())
+            && incoming().schoolId == schoolId
+            && incoming().resourceId == resourceId
+            && incoming().ownerId == schoolOwnerId(schoolId)
+            && incoming().createdAt == request.time;
+          allow update: if false;
+          allow delete: if isValidId(schoolId) && isValidId(resourceId) && isValidId(chunkId)
+            && isLibraryStaff(schoolId);
+        }
+      }
+
+      match /announcements/{announcementId} {
+        allow get: if isValidId(schoolId) && isValidId(announcementId);
+        allow list: if isValidId(schoolId) && existing().schoolId == schoolId;
+        allow create: if isValidId(schoolId) && isValidId(announcementId)
+          && isSchoolOwner(schoolId)
+          && isValidSchoolAnnouncement(incoming())
+          && 'Students' in incoming().targetAudiences
+          && incoming().schoolId == schoolId
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && isValidId(announcementId)
+          && isSchoolOwner(schoolId)
+          && isValidSchoolAnnouncement(incoming())
+          && 'Students' in incoming().targetAudiences
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'message', 'targetAudiences', 'publishedDate', 'authorName', 'updatedAt'
+            ])
+          );
+        allow delete: if isValidId(schoolId) && isValidId(announcementId) && isSchoolOwner(schoolId);
       }
     }
 
@@ -1040,7 +1342,7 @@ service cloud.firestore {
           incoming().diff(existing()).affectedKeys().hasOnly([
             'schoolName', 'schoolDistrict', 'schoolType', 'motto',
             'academicYear', 'currentTerm', 'studentName', 'admissionNo',
-            'formLevel', 'stream', 'boardingStatus', 'studentEmail', 'updatedAt'
+            'formLevel', 'stream', 'boardingStatus', 'studentEmail', 'logoDataUrl', 'updatedAt'
           ])
         );
       allow delete: if isVerified() && isValidId(linkId) && (
@@ -1082,7 +1384,7 @@ service cloud.firestore {
           incoming().diff(existing()).affectedKeys().hasOnly([
             'schoolName', 'schoolDistrict', 'schoolType', 'academicYear', 'currentTerm',
             'staffName', 'staffCode', 'roleTitle', 'subjects', 'assignedForm',
-            'staffEmail', 'status', 'updatedAt'
+            'staffEmail', 'status', 'logoDataUrl', 'updatedAt'
           ])
         );
       allow delete: if isVerified() && isValidId(linkId) && (
@@ -1115,7 +1417,7 @@ service cloud.firestore {
           incoming().diff(existing()).affectedKeys().hasOnly([
             'name', 'district', 'schoolType', 'motto', 'academicYear',
             'currentTerm', 'defaultTuitionMWK', 'defaultGpfMWK',
-            'defaultExamFeeMWK', 'updatedAt'
+            'defaultExamFeeMWK', 'logoDataUrl', 'updatedAt'
           ])
         );
       allow delete: if isVerified() && isValidId(schoolId) && (existing().ownerId == request.auth.uid || isAdmin());
@@ -1310,6 +1612,50 @@ service cloud.firestore {
           && incoming().createdAt == request.time;
         allow update: if false;
         allow delete: if isValidId(schoolId) && isValidId(paymentId) && isBursarStaff(schoolId);
+      }
+
+      // Student Fee Payment Reference Submissions: Student create + Bursar review
+      match /feeSubmissions/{submissionId} {
+        allow get: if isValidId(schoolId) && isValidId(submissionId) && isBursarStaff(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isBursarStaff(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(submissionId)
+          && isValidFeeSubmission(incoming())
+          && incoming().schoolId == schoolId
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && incoming().status == 'Pending'
+          && incoming().reviewNote == ''
+          && incoming().receiptNo == ''
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(incoming().studentId))
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && (
+            isBursarStaff(schoolId) ||
+            (
+              isValidRegCode(incoming().registrationCode)
+              && exists(/databases/$(database)/documents/studentPortals/$(incoming().registrationCode))
+              && get(/databases/$(database)/documents/studentPortals/$(incoming().registrationCode)).data.schoolId == schoolId
+              && get(/databases/$(database)/documents/studentPortals/$(incoming().registrationCode)).data.studentId == incoming().studentId
+              && existsAfter(/databases/$(database)/documents/studentPortals/$(incoming().registrationCode)/feeSubmissions/$(submissionId))
+            )
+          );
+        allow update: if isValidId(schoolId) && isValidId(submissionId)
+          && isBursarStaff(schoolId)
+          && isValidFeeSubmission(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().studentId == existing().studentId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'reviewNote', 'receiptNo', 'invoiceId', 'updatedAt'
+            ])
+          );
+        allow delete: if isValidId(schoolId) && isValidId(submissionId) && isBursarStaff(schoolId);
       }
 
       // Attendance records: Academic staff only
@@ -1563,10 +1909,42 @@ service cloud.firestore {
             isAdmin() ||
             incoming().diff(existing()).affectedKeys().hasOnly([
               'title', 'author', 'subject', 'formLevel', 'category',
-              'examYear', 'summary', 'content', 'allowOffline', 'updatedAt'
+              'examYear', 'summary', 'content',
+              'storageFormat', 'fileName', 'mimeType', 'fileSizeBytes', 'chunkCount',
+              'allowOffline', 'updatedAt'
             ])
           );
         allow delete: if isValidId(schoolId) && isValidId(resourceId) && isLibraryStaff(schoolId);
+      }
+
+      // School Announcements: Readable by all active school staff; created/edited/deleted by School Admin / Owner
+      match /announcements/{announcementId} {
+        allow get: if isValidId(schoolId) && isValidId(announcementId) && isAnySchoolStaff(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isAnySchoolStaff(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(announcementId)
+          && isSchoolOwner(schoolId)
+          && isValidSchoolAnnouncement(incoming())
+          && incoming().schoolId == schoolId
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && isValidId(announcementId)
+          && isSchoolOwner(schoolId)
+          && isValidSchoolAnnouncement(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'message', 'targetAudiences', 'publishedDate', 'authorName', 'updatedAt'
+            ])
+          );
+        allow delete: if isValidId(schoolId) && isValidId(announcementId) && isSchoolOwner(schoolId);
       }
     }
   }

@@ -2,7 +2,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
 import {
   AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
   Award,
+  Banknote,
   BookmarkCheck,
   BookmarkPlus,
   BookOpen,
@@ -10,28 +13,40 @@ import {
   CheckCircle2,
   Clock,
   CloudOff,
+  Eye,
   FileDown,
   FileText,
   Globe,
   GraduationCap,
+  Image as ImageIcon,
   KeyRound,
-  Lock,
   LogOut,
+  Megaphone,
   Moon,
   Printer,
   Search,
   Sun,
   Trash2,
-  Wifi,
+  Upload,
   WifiOff,
   X,
 } from 'lucide-react';
 import { db, handleFirestoreError, OperationType } from '../../firebase';
 import { useOnlineStatus } from '../../hooks/useOnlineStatus';
-import { createLibraryReservation } from '../../school/firestoreService';
+import {
+  createLibraryReservation,
+  fetchDigitalResourceBytes,
+  submitStudentFeePaymentReference,
+} from '../../school/firestoreService';
+import { formatFileSizeLabel } from '../../school/digitalMaterialParser';
+import {
+  parsePaymentProofFile,
+  type ParsedPaymentProofFile,
+} from '../../school/paymentProofParser';
 import {
   calculateTermReportSummary,
   DIGITAL_RESOURCE_CATEGORIES,
+  formatMWK,
   getLibraryDaysOverdue,
   getLibraryDueReminderLabel,
   isLibraryLoanDueWithin48Hours,
@@ -54,15 +69,28 @@ import {
   DigitalResourceFormLevel,
   LibraryLoan,
   LibraryReservation,
+  PaymentMethod,
   School,
+  SchoolAnnouncement,
   Student,
+  StudentFeeSubmission,
   StudentPortal,
+  StudentPortalFeeInvoice,
   TermName,
 } from '../../school/types';
 import { OfflineIndicator } from '../OfflineIndicator';
 import { PWAInstallButton } from '../PWAInstallButton';
 import { SubjectComponentBarChart } from './AnalyticsCharts';
 import { OnlineLibraryReaderModal, ReadableDigitalResource } from './OnlineLibraryReaderModal';
+import { PaymentProofPreviewModal } from './PaymentProofPreviewModal';
+import { StudentPerformanceTrends } from './StudentPerformanceTrends';
+
+type StudentPortalTab = 'dashboard' | 'results' | 'library' | 'fees';
+
+const STUDENT_PAYMENT_METHODS: Extract<
+  PaymentMethod,
+  'Bank Deposit' | 'Airtel Money' | 'TNM Mpamba'
+>[] = ['Bank Deposit', 'Airtel Money', 'TNM Mpamba'];
 
 interface StudentResultsPortalProps {
   registrationCode: string;
@@ -95,7 +123,10 @@ function writeCachedJson(key: string, value: unknown): void {
   }
 }
 
-function toOfflineRecord(resource: DigitalLibraryResource): OfflineDigitalResourceRecord {
+function toOfflineRecord(
+  resource: DigitalLibraryResource,
+  fileBytes?: Uint8Array
+): OfflineDigitalResourceRecord {
   return {
     id: resource.id,
     schoolId: resource.schoolId,
@@ -107,6 +138,12 @@ function toOfflineRecord(resource: DigitalLibraryResource): OfflineDigitalResour
     examYear: resource.examYear || '',
     summary: resource.summary || '',
     content: resource.content,
+    storageFormat: resource.storageFormat,
+    fileName: resource.fileName,
+    mimeType: resource.mimeType,
+    fileSizeBytes: resource.fileSizeBytes,
+    chunkCount: resource.chunkCount,
+    fileBytes,
     allowOffline: resource.allowOffline,
     savedAt: new Date().toISOString(),
   };
@@ -121,6 +158,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
   onSwitchToAdmin,
 }) => {
   const isOnline = useOnlineStatus();
+  const [activeTab, setActiveTab] = useState<StudentPortalTab>('dashboard');
   const [portalLoading, setPortalLoading] = useState(true);
   const [activePortal, setActivePortal] = useState<StudentPortal | null>(() =>
     registrationCode ? readCachedJson<StudentPortal>(`malawisec_student_portal_${registrationCode}`) : null
@@ -135,6 +173,36 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
     registrationCode ? readCachedJson<LibraryLoan[]>(`malawisec_student_loans_${registrationCode}`) || [] : []
   );
   const [loadingLibrary, setLoadingLibrary] = useState(true);
+
+  // Fees & Payment Reference Uploads
+  const [feeInvoices, setFeeInvoices] = useState<StudentPortalFeeInvoice[]>(() =>
+    registrationCode
+      ? readCachedJson<StudentPortalFeeInvoice[]>(`malawisec_student_fees_${registrationCode}`) || []
+      : []
+  );
+  const [loadingFees, setLoadingFees] = useState(true);
+  const [feeSubmissions, setFeeSubmissions] = useState<StudentFeeSubmission[]>(() =>
+    registrationCode
+      ? readCachedJson<StudentFeeSubmission[]>(`malawisec_student_fee_subs_${registrationCode}`) || []
+      : []
+  );
+  const [loadingFeeSubmissions, setLoadingFeeSubmissions] = useState(true);
+  const [proofInvoiceId, setProofInvoiceId] = useState<string>('');
+  const [proofTerm, setProofTerm] = useState<TermName>('Term 2');
+  const [proofMethod, setProofMethod] = useState<'Bank Deposit' | 'Airtel Money' | 'TNM Mpamba'>(
+    'Bank Deposit'
+  );
+  const [proofAmountStr, setProofAmountStr] = useState('');
+  const [proofReference, setProofReference] = useState('');
+  const [proofNotes, setProofNotes] = useState('');
+  const [parsedProofFile, setParsedProofFile] = useState<ParsedPaymentProofFile | null>(null);
+  const [proofFileDragActive, setProofFileDragActive] = useState(false);
+  const [proofFileError, setProofFileError] = useState('');
+  const [submittingProof, setSubmittingProof] = useState(false);
+  const [proofProgress, setProofProgress] = useState('');
+  const [proofSubmitError, setProofSubmitError] = useState('');
+  const [proofSubmitSuccess, setProofSubmitSuccess] = useState('');
+  const [previewSubmission, setPreviewSubmission] = useState<StudentFeeSubmission | null>(null);
 
   // Physical Catalog & Reservations
   const [catalogBooks, setCatalogBooks] = useState<CatalogBookMirror[]>([]);
@@ -154,6 +222,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
   const [offlineDigitalRecords, setOfflineDigitalRecords] = useState<OfflineDigitalResourceRecord[]>([]);
   const [loadingDigitalLibrary, setLoadingDigitalLibrary] = useState(true);
   const [digitalSearch, setDigitalSearch] = useState('');
+  const [digitalSubjectFilter, setDigitalSubjectFilter] = useState<string>('All');
   const [digitalCategoryFilter, setDigitalCategoryFilter] = useState<
     'All' | DigitalResourceCategory | 'Saved Offline'
   >('All');
@@ -162,6 +231,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
   const [savingOfflineId, setSavingOfflineId] = useState<string | null>(null);
   const [savingAllOffline, setSavingAllOffline] = useState(false);
   const [offlineSyncFeedback, setOfflineSyncFeedback] = useState('');
+  const [announcements, setAnnouncements] = useState<SchoolAnnouncement[]>([]);
 
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
@@ -210,6 +280,8 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
   useEffect(() => {
     if (activePortal && termInitializedForCode !== activePortal.registrationCode) {
       setSelectedTerm(activePortal.currentTerm);
+      setProofTerm(activePortal.currentTerm);
+      setActiveTab('dashboard');
       setTermInitializedForCode(activePortal.registrationCode);
     }
   }, [activePortal, termInitializedForCode]);
@@ -231,9 +303,12 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
       setLoadingResults(true);
     }
 
-    const resultsRef = collection(db, 'studentPortals', registrationCode, 'results');
+    const resultsQuery = query(
+      collection(db, 'studentPortals', registrationCode, 'results'),
+      where('registrationCode', '==', registrationCode)
+    );
     const unsub = onSnapshot(
-      resultsRef,
+      resultsQuery,
       (snap) => {
         const docs = snap.docs
           .map((d) => ({ id: d.id, ...(d.data() as Omit<Assessment, 'id'>) }))
@@ -309,6 +384,113 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
           err,
           OperationType.LIST,
           `studentPortals/${registrationCode}/libraryLoans`
+        );
+      }
+    );
+
+    return () => unsub();
+  }, [activePortal, registrationCode]);
+
+  // Load Student Fee Invoices (with offline cache fallback)
+  useEffect(() => {
+    if (!registrationCode || !activePortal) {
+      setFeeInvoices([]);
+      setLoadingFees(false);
+      return;
+    }
+
+    const cachedFees =
+      readCachedJson<StudentPortalFeeInvoice[]>(`malawisec_student_fees_${registrationCode}`) || [];
+    if (cachedFees.length > 0) {
+      setFeeInvoices(cachedFees);
+      setLoadingFees(false);
+    } else {
+      setLoadingFees(true);
+    }
+
+    const feeQuery = query(
+      collection(db, 'studentPortals', registrationCode, 'feeInvoices'),
+      where('registrationCode', '==', registrationCode)
+    );
+    const unsub = onSnapshot(
+      feeQuery,
+      (snap) => {
+        const docs = snap.docs
+          .map((d) => ({ id: d.id, ...(d.data() as Omit<StudentPortalFeeInvoice, 'id'>) }))
+          .filter((inv) => inv.studentId === activePortal.studentId)
+          .sort((a, b) => {
+            const termDiff = TERMS.indexOf(b.term) - TERMS.indexOf(a.term);
+            if (termDiff !== 0) return termDiff;
+            return (b.academicYear || '').localeCompare(a.academicYear || '');
+          });
+        setFeeInvoices(docs);
+        writeCachedJson(`malawisec_student_fees_${registrationCode}`, docs);
+        setLoadingFees(false);
+      },
+      (err) => {
+        setLoadingFees(false);
+        if (isFirestoreOfflineError(err)) {
+          if (cachedFees.length > 0) setFeeInvoices(cachedFees);
+          return;
+        }
+        handleFirestoreError(
+          err,
+          OperationType.LIST,
+          `studentPortals/${registrationCode}/feeInvoices`
+        );
+      }
+    );
+
+    return () => unsub();
+  }, [activePortal, registrationCode]);
+
+  // Load Student Fee Payment Proof Submissions (with offline cache fallback)
+  useEffect(() => {
+    if (!registrationCode || !activePortal) {
+      setFeeSubmissions([]);
+      setLoadingFeeSubmissions(false);
+      return;
+    }
+
+    const cachedSubs =
+      readCachedJson<StudentFeeSubmission[]>(`malawisec_student_fee_subs_${registrationCode}`) || [];
+    if (cachedSubs.length > 0) {
+      setFeeSubmissions(cachedSubs);
+      setLoadingFeeSubmissions(false);
+    } else {
+      setLoadingFeeSubmissions(true);
+    }
+
+    const subQuery = query(
+      collection(db, 'studentPortals', registrationCode, 'feeSubmissions'),
+      where('registrationCode', '==', registrationCode)
+    );
+    const unsub = onSnapshot(
+      subQuery,
+      (snap) => {
+        const docs = snap.docs
+          .map((d) => ({ id: d.id, ...(d.data() as Omit<StudentFeeSubmission, 'id'>) }))
+          .filter((sub) => sub.studentId === activePortal.studentId)
+          .sort((a, b) => {
+            const tA = a.createdAt?.toMillis?.() || 0;
+            const tB = b.createdAt?.toMillis?.() || 0;
+            if (tA !== tB) return tB - tA;
+            return (b.submittedDate || '').localeCompare(a.submittedDate || '');
+          });
+        setFeeSubmissions(docs);
+        writeCachedJson(`malawisec_student_fee_subs_${registrationCode}`, docs);
+        setLoadingFeeSubmissions(false);
+      },
+      (err) => {
+        setLoadingFeeSubmissions(false);
+        if (isFirestoreOfflineError(err)) {
+          if (cachedSubs.length > 0) setFeeSubmissions(cachedSubs);
+          return;
+        }
+        handleFirestoreError(
+          err,
+          OperationType.LIST,
+          `studentPortals/${registrationCode}/feeSubmissions`
         );
       }
     );
@@ -452,27 +634,91 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
     return () => unsub();
   }, [activePortal?.schoolId]);
 
+  // Subscribe to Student-Visible School Announcements (zero-PII mirror, offline cached)
+  useEffect(() => {
+    if (!activePortal?.schoolId) {
+      setAnnouncements([]);
+      return;
+    }
+
+    const cacheKey = `malawisec_student_announcements_${activePortal.schoolId}`;
+    const cached = readCachedJson<SchoolAnnouncement[]>(cacheKey) || [];
+    if (cached.length > 0) {
+      setAnnouncements(cached);
+    }
+
+    const annQuery = query(
+      collection(db, 'studentLibraries', activePortal.schoolId, 'announcements'),
+      where('schoolId', '==', activePortal.schoolId)
+    );
+    const unsub = onSnapshot(
+      annQuery,
+      (snap) => {
+        const docs = snap.docs
+          .map((d) => ({ id: d.id, ...(d.data() as Omit<SchoolAnnouncement, 'id'>) }))
+          .sort((a, b) => {
+            const dateCmp = (b.publishedDate || '').localeCompare(a.publishedDate || '');
+            if (dateCmp !== 0) return dateCmp;
+            const tA = a.createdAt?.toMillis?.() || 0;
+            const tB = b.createdAt?.toMillis?.() || 0;
+            return tB - tA;
+          });
+        setAnnouncements(docs);
+        writeCachedJson(cacheKey, docs);
+      },
+      (err) => {
+        if (isFirestoreOfflineError(err)) {
+          if (cached.length > 0) setAnnouncements(cached);
+          return;
+        }
+        handleFirestoreError(
+          err,
+          OperationType.LIST,
+          `studentLibraries/${activePortal.schoolId}/announcements`
+        );
+      }
+    );
+
+    return () => unsub();
+  }, [activePortal?.schoolId]);
+
   const offlineIds = useMemo(
     () => new Set(offlineDigitalRecords.map((r) => r.id)),
     [offlineDigitalRecords]
   );
 
-  // Refresh already-saved offline items whenever live copies update
+  const offlineIdsKey = useMemo(
+    () => Array.from(offlineIds).sort().join(','),
+    [offlineIds]
+  );
+
+  // Refresh already-saved offline items whenever live metadata updates (preserving cached binary bytes)
   useEffect(() => {
-    if (!activePortal?.schoolId || liveDigitalResources.length === 0 || offlineIds.size === 0) {
+    if (!activePortal?.schoolId || liveDigitalResources.length === 0 || !offlineIdsKey) {
       return;
     }
-    const toRefresh = liveDigitalResources
-      .filter((item) => item.allowOffline && offlineIds.has(item.id))
-      .map(toOfflineRecord);
-    if (toRefresh.length === 0) return;
+    let cancelled = false;
+    getOfflineDigitalResources(activePortal.schoolId).then((cachedList) => {
+      if (cancelled) return;
+      const existingById = new Map(cachedList.map((r) => [r.id, r]));
+      const toRefresh = liveDigitalResources
+        .filter((item) => item.allowOffline && existingById.has(item.id))
+        .map((item) => toOfflineRecord(item, existingById.get(item.id)?.fileBytes));
+      if (toRefresh.length === 0) return;
 
-    saveDigitalResourcesBatchOffline(toRefresh).then((count) => {
-      if (count > 0) {
-        getOfflineDigitalResources(activePortal.schoolId).then(setOfflineDigitalRecords);
-      }
+      saveDigitalResourcesBatchOffline(toRefresh).then((count) => {
+        if (!cancelled && count > 0) {
+          getOfflineDigitalResources(activePortal.schoolId).then((updated) => {
+            if (!cancelled) setOfflineDigitalRecords(updated);
+          });
+        }
+      });
     });
-  }, [activePortal?.schoolId, liveDigitalResources, offlineIds]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activePortal?.schoolId, liveDigitalResources, offlineIdsKey]);
 
   const mergedDigitalResources = useMemo<ReadableDigitalResource[]>(() => {
     if (liveDigitalResources.length === 0) {
@@ -490,30 +736,56 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
     return Array.from(byId.values()).sort((a, b) => a.title.localeCompare(b.title));
   }, [liveDigitalResources, offlineDigitalRecords]);
 
+  const digitalSubjects = useMemo(() => {
+    const unique = new Set<string>();
+    for (const r of mergedDigitalResources) {
+      const subj = (r.subject || '').trim();
+      if (subj) unique.add(subj);
+    }
+    return Array.from(unique).sort((a, b) => a.localeCompare(b));
+  }, [mergedDigitalResources]);
+
   const filteredDigitalResources = useMemo(() => {
-    const q = digitalSearch.trim().toLowerCase();
+    const tokens = digitalSearch
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
     return mergedDigitalResources.filter((r) => {
       if (digitalCategoryFilter === 'Saved Offline') {
         if (!offlineIds.has(r.id)) return false;
       } else if (digitalCategoryFilter !== 'All' && r.category !== digitalCategoryFilter) {
         return false;
       }
+      if (
+        digitalSubjectFilter !== 'All' &&
+        (r.subject || '').trim().toLowerCase() !== digitalSubjectFilter.toLowerCase()
+      ) {
+        return false;
+      }
       if (digitalFormFilter !== 'All' && r.formLevel !== 'All' && r.formLevel !== digitalFormFilter) {
         return false;
       }
-      if (!q) return true;
-      return (
-        r.title.toLowerCase().includes(q) ||
-        r.author.toLowerCase().includes(q) ||
-        r.subject.toLowerCase().includes(q) ||
-        (r.examYear || '').toLowerCase().includes(q) ||
-        (r.summary || '').toLowerCase().includes(q)
-      );
+      if (tokens.length === 0) return true;
+      const searchable = [
+        r.title,
+        r.subject,
+        r.author,
+        r.category,
+        r.formLevel,
+        r.examYear || '',
+        r.fileName || '',
+        r.summary || '',
+      ]
+        .join(' ')
+        .toLowerCase();
+      return tokens.every((tok) => searchable.includes(tok));
     });
   }, [
     digitalCategoryFilter,
     digitalFormFilter,
     digitalSearch,
+    digitalSubjectFilter,
     mergedDigitalResources,
     offlineIds,
   ]);
@@ -559,6 +831,131 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
     return { dueSoonLoans, overdueLoans };
   }, [libraryLoans, todayIso]);
 
+  const feeTotals = useMemo(() => {
+    const billed = feeInvoices.reduce((s, inv) => s + inv.totalBilled, 0);
+    const paid = feeInvoices.reduce((s, inv) => s + inv.totalPaid, 0);
+    const balance = Math.max(0, billed - paid);
+    const pendingProofs = feeSubmissions.filter((sub) => sub.status === 'Pending').length;
+    return { billed, paid, balance, pendingProofs };
+  }, [feeInvoices, feeSubmissions]);
+
+  const activeBorrowedLoansCount = useMemo(
+    () => libraryLoans.filter((l) => l.status === 'Checked Out').length,
+    [libraryLoans]
+  );
+
+  const readyReservationsCount = useMemo(
+    () => reservations.filter((r) => r.status === 'Ready').length,
+    [reservations]
+  );
+
+  useEffect(() => {
+    if (feeInvoices.length === 0) return;
+    if (proofInvoiceId && feeInvoices.some((inv) => inv.id === proofInvoiceId)) return;
+    const unpaid = feeInvoices.find((inv) => inv.totalBilled > inv.totalPaid) || feeInvoices[0];
+    if (unpaid) {
+      setProofInvoiceId(unpaid.id);
+      setProofTerm(unpaid.term);
+      const rem = Math.max(0, unpaid.totalBilled - unpaid.totalPaid);
+      if (!proofAmountStr && rem > 0) {
+        setProofAmountStr(String(rem));
+      }
+    }
+  }, [feeInvoices, proofAmountStr, proofInvoiceId]);
+
+  const handleSelectProofInvoice = (nextInvoiceId: string) => {
+    setProofInvoiceId(nextInvoiceId);
+    const matched = feeInvoices.find((inv) => inv.id === nextInvoiceId);
+    if (matched) {
+      setProofTerm(matched.term);
+      const rem = Math.max(0, matched.totalBilled - matched.totalPaid);
+      if (rem > 0) {
+        setProofAmountStr(String(rem));
+      }
+    }
+  };
+
+  const handleProofFileSelected = async (file: File | null) => {
+    setProofFileError('');
+    setProofSubmitError('');
+    setProofSubmitSuccess('');
+    if (!file) return;
+    try {
+      const parsed = await parsePaymentProofFile(file);
+      setParsedProofFile(parsed);
+    } catch (err) {
+      setParsedProofFile(null);
+      setProofFileError(err instanceof Error ? err.message : 'Unable to read file.');
+    }
+  };
+
+  const handleSubmitPaymentProof = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activePortal) return;
+    setProofSubmitError('');
+    setProofSubmitSuccess('');
+
+    if (!isOnline) {
+      setProofSubmitError('Connect to the internet to upload a payment reference.');
+      return;
+    }
+    if (!parsedProofFile) {
+      setProofSubmitError('Select a PDF or image payment slip/screenshot first.');
+      return;
+    }
+    const amount = Math.round(Number(proofAmountStr) || 0);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setProofSubmitError('Enter the amount paid in MWK (greater than 0).');
+      return;
+    }
+
+    setSubmittingProof(true);
+    setProofProgress('Uploading...');
+    try {
+      const selectedInv = feeInvoices.find((inv) => inv.id === proofInvoiceId);
+      await submitStudentFeePaymentReference(
+        {
+          ownerId: activePortal.ownerId,
+          schoolId: activePortal.schoolId,
+          studentId: activePortal.studentId,
+          studentName: activePortal.studentName,
+          admissionNo: activePortal.admissionNo,
+          formLevel: activePortal.formLevel,
+          stream: activePortal.stream,
+          registrationCode: activePortal.registrationCode,
+          invoiceId: selectedInv?.id || '',
+          term: selectedInv ? selectedInv.term : proofTerm,
+          academicYear: selectedInv?.academicYear || activePortal.academicYear,
+          amount,
+          method: proofMethod,
+          reference: proofReference.trim(),
+          notes: proofNotes.trim(),
+          fileName: parsedProofFile.fileName,
+          mimeType: parsedProofFile.mimeType,
+          fileFormat: parsedProofFile.fileFormat,
+          fileSizeBytes: parsedProofFile.fileSizeBytes,
+          fileBytes: parsedProofFile.fileBytes,
+        },
+        (done, total) => {
+          setProofProgress(`Uploading ${done}/${total}...`);
+        }
+      );
+
+      setParsedProofFile(null);
+      setProofReference('');
+      setProofNotes('');
+      setProofProgress('');
+      setProofSubmitSuccess('Payment reference submitted to the School Bursar for verification.');
+    } catch (err) {
+      setProofSubmitError(
+        err instanceof Error ? err.message : 'Unable to upload payment reference.'
+      );
+    } finally {
+      setSubmittingProof(false);
+      setProofProgress('');
+    }
+  };
+
   const handleDownloadPdf = () => {
     if (!activePortal || !summary || summary.rows.length === 0) return;
     const viewSchool: School = {
@@ -573,6 +970,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
       defaultTuitionMWK: 0,
       defaultGpfMWK: 0,
       defaultExamFeeMWK: 0,
+      logoDataUrl: activePortal.logoDataUrl,
     };
     const viewStudent: Student = {
       id: activePortal.studentId,
@@ -605,6 +1003,14 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
         await removeOfflineDigitalResource(resource.id);
         setOfflineSyncFeedback(`Removed "${resource.title}" from offline storage.`);
       } else {
+        let fileBytes: Uint8Array | undefined =
+          'fileBytes' in resource && resource.fileBytes instanceof Uint8Array
+            ? resource.fileBytes
+            : undefined;
+        if (!fileBytes && resource.chunkCount && resource.chunkCount > 0) {
+          const fetched = await fetchDigitalResourceBytes(activePortal.schoolId, resource.id);
+          if (fetched) fileBytes = fetched;
+        }
         const saved = await saveDigitalResourceOffline({
           id: resource.id,
           schoolId: activePortal.schoolId,
@@ -616,6 +1022,12 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
           examYear: resource.examYear || '',
           summary: resource.summary || '',
           content: resource.content,
+          storageFormat: resource.storageFormat,
+          fileName: resource.fileName,
+          mimeType: resource.mimeType,
+          fileSizeBytes: resource.fileSizeBytes,
+          chunkCount: resource.chunkCount,
+          fileBytes,
           allowOffline: resource.allowOffline,
           savedAt: new Date().toISOString(),
         });
@@ -637,22 +1049,37 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
     setSavingAllOffline(true);
     setOfflineSyncFeedback('');
     try {
-      const eligible = mergedDigitalResources
-        .filter((r) => r.allowOffline)
-        .map((r) => ({
-          id: r.id,
-          schoolId: activePortal.schoolId,
-          title: r.title,
-          author: r.author,
-          subject: r.subject,
-          formLevel: r.formLevel,
-          category: r.category,
-          examYear: r.examYear || '',
-          summary: r.summary || '',
-          content: r.content,
-          allowOffline: r.allowOffline,
-          savedAt: new Date().toISOString(),
-        }));
+      const eligibleRaw = mergedDigitalResources.filter((r) => r.allowOffline);
+      const eligible = await Promise.all(
+        eligibleRaw.map(async (r) => {
+          let fileBytes: Uint8Array | undefined =
+            'fileBytes' in r && r.fileBytes instanceof Uint8Array ? r.fileBytes : undefined;
+          if (!fileBytes && r.chunkCount && r.chunkCount > 0) {
+            const fetched = await fetchDigitalResourceBytes(activePortal.schoolId, r.id);
+            if (fetched) fileBytes = fetched;
+          }
+          return {
+            id: r.id,
+            schoolId: activePortal.schoolId,
+            title: r.title,
+            author: r.author,
+            subject: r.subject,
+            formLevel: r.formLevel,
+            category: r.category,
+            examYear: r.examYear || '',
+            summary: r.summary || '',
+            content: r.content,
+            storageFormat: r.storageFormat,
+            fileName: r.fileName,
+            mimeType: r.mimeType,
+            fileSizeBytes: r.fileSizeBytes,
+            chunkCount: r.chunkCount,
+            fileBytes,
+            allowOffline: r.allowOffline,
+            savedAt: new Date().toISOString(),
+          };
+        })
+      );
       const savedCount = await saveDigitalResourcesBatchOffline(eligible);
       const nextRecords = await getOfflineDigitalResources(activePortal.schoolId);
       setOfflineDigitalRecords(nextRecords);
@@ -722,20 +1149,32 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
     ? (`Form ${activePortal.formLevel}` as DigitalResourceFormLevel)
     : 'All';
 
+  const handleSelectTab = (nextTab: StudentPortalTab) => {
+    setActiveTab(nextTab);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   return (
     <div className="min-h-screen flex flex-col bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100">
-      <header className="sticky top-0 z-30 h-16 bg-white/95 dark:bg-[#161B22]/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800">
+      <header className="sticky top-0 z-30 h-14 bg-white/95 dark:bg-[#161B22]/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 print:hidden">
         <div className="max-w-5xl mx-auto h-full px-4 sm:px-6 flex items-center justify-between gap-4">
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="h-9 w-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 flex items-center justify-center text-emerald-700 dark:text-emerald-400 shrink-0">
-              <GraduationCap className="w-5 h-5" aria-hidden="true" />
-            </div>
+            {activePortal?.logoDataUrl ? (
+              <div className="h-9 w-9 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-hidden flex items-center justify-center shrink-0">
+                <img
+                  src={activePortal.logoDataUrl}
+                  alt={activePortal.schoolName}
+                  className="h-full w-full object-contain p-0.5"
+                />
+              </div>
+            ) : (
+              <div className="h-9 w-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 flex items-center justify-center text-emerald-700 dark:text-emerald-400 shrink-0">
+                <GraduationCap className="w-5 h-5" aria-hidden="true" />
+              </div>
+            )}
             <div className="min-w-0">
               <div className="text-sm font-bold tracking-tight text-slate-900 dark:text-white truncate">
-                {activePortal ? activePortal.schoolName : 'SecSchoolHub Student Portal'}
-              </div>
-              <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate font-mono">
-                Student Portal · Code: {registrationCode}
+                {activePortal ? activePortal.schoolName : 'Student Portal'}
               </div>
             </div>
           </div>
@@ -771,7 +1210,11 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
         </div>
       </header>
 
-      <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
+      <main
+        className={`flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 pt-5 sm:pt-7 space-y-6 ${
+          !portalLoading && activePortal && summary ? 'pb-24 sm:pb-24' : 'pb-8'
+        }`}
+      >
         {portalLoading ? (
           <div className="max-w-md mx-auto py-12 space-y-3">
             <div className="h-5 w-48 bg-slate-200 dark:bg-slate-800 rounded animate-pulse" />
@@ -790,7 +1233,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
               <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
                 {registrationCode}
               </span>
-              . Please check the code carefully or ask your school administrator or form master to
+              . Please check the code carefully or ask your school administrator or form teacher to
               issue a valid registration code.
             </p>
             <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
@@ -815,19 +1258,15 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
           </div>
         ) : (
           <>
-            {/* Student Profile Header & Controls */}
+            {/* Student Profile Header (Dashboard opens by default) */}
             <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 space-y-4">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-                    {activePortal.schoolName} · {activePortal.schoolDistrict} District ·{' '}
-                    {activePortal.schoolType}
-                  </div>
-                  <h1 className="mt-1 text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
+                  <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
                     {activePortal.studentName}
                   </h1>
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                    Admission #: <span className="font-mono font-semibold">{activePortal.admissionNo}</span> ·{' '}
+                    <span className="font-mono font-semibold">{activePortal.admissionNo}</span> ·{' '}
                     Form {activePortal.formLevel}
                     {activePortal.stream} ({activePortal.formLevel <= 2 ? 'JCE' : 'MSCE'}) ·{' '}
                     {activePortal.boardingStatus} · {activePortal.academicYear}
@@ -835,66 +1274,35 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                   </p>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => window.print()}
-                    disabled={summary.rows.length === 0}
-                    className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
-                  >
-                    <Printer className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>Print Report</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDownloadPdf}
-                    disabled={summary.rows.length === 0}
-                    className="inline-flex items-center gap-1.5 min-h-[40px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
-                  >
-                    <FileDown className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>Download PDF Report Card</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-900">
-                  {TERMS.map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => setSelectedTerm(t)}
-                      className={`min-h-[36px] px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${
-                        selectedTerm === t
-                          ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
-                          : 'text-slate-600 dark:text-slate-400'
-                      }`}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
-
                 <div className="flex items-center gap-3 text-xs font-mono text-slate-500 dark:text-slate-400">
-                  <span className="inline-flex items-center gap-1">
-                    {isOnline ? (
-                      <Wifi className="w-3.5 h-3.5 text-emerald-600" aria-hidden="true" />
-                    ) : (
-                      <WifiOff className="w-3.5 h-3.5 text-amber-600" aria-hidden="true" />
-                    )}
-                    <span>{isOnline ? 'Online' : 'Offline Mode'}</span>
-                  </span>
-                  <span>·</span>
-                  <span>
-                    Reg. Code:{' '}
-                    <span className="font-semibold text-slate-800 dark:text-slate-200">
-                      {activePortal.registrationCode}
-                    </span>
+                  {activeTab !== 'dashboard' && (
+                    <button
+                      type="button"
+                      onClick={() => handleSelectTab('dashboard')}
+                      className="inline-flex items-center gap-1.5 min-h-[34px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 font-sans text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer print:hidden"
+                    >
+                      <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>Back</span>
+                    </button>
+                  )}
+                  {!isOnline && (
+                    <>
+                      <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-semibold">
+                        <WifiOff className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>Offline</span>
+                      </span>
+                      <span>·</span>
+                    </>
+                  )}
+                  <span className="font-semibold text-slate-700 dark:text-slate-200">
+                    {activePortal.registrationCode}
                   </span>
                 </div>
               </div>
 
-              {(libraryAlerts.dueSoonLoans.length > 0 || libraryAlerts.overdueLoans.length > 0) && (
+              {(libraryAlerts.dueSoonLoans.length > 0 ||
+                libraryAlerts.overdueLoans.length > 0 ||
+                readyReservationsCount > 0) && (
                 <div className="space-y-2 pt-1">
                   {libraryAlerts.dueSoonLoans.length > 0 && (
                     <div className="rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/75 dark:bg-amber-950/30 px-4 py-3 text-xs text-amber-950 dark:text-amber-200 flex items-start gap-2.5">
@@ -941,72 +1349,381 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                       </div>
                     </div>
                   )}
+
+                  {readyReservationsCount > 0 && (
+                    <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/75 dark:bg-emerald-950/30 px-4 py-3 text-xs text-emerald-950 dark:text-emerald-200 flex flex-wrap items-center justify-between gap-2">
+                      <span className="inline-flex items-center gap-2 font-semibold">
+                        <BookmarkCheck className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" aria-hidden="true" />
+                        <span>
+                          {readyReservationsCount} reserved{' '}
+                          {readyReservationsCount === 1 ? 'book is' : 'books are'} ready for library pickup
+                        </span>
+                      </span>
+                      {activeTab !== 'library' && (
+                        <button
+                          type="button"
+                          onClick={() => handleSelectTab('library')}
+                          className="text-xs font-semibold text-emerald-800 dark:text-emerald-300 hover:underline cursor-pointer"
+                        >
+                          Open Library
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </section>
 
-            {/* Summary KPIs */}
-            <section className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
-              <div className="rounded-2xl bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200/80 dark:border-emerald-900/60 p-4">
-                <div className="text-xs text-emerald-800 dark:text-emerald-300 font-medium">
-                  {activePortal.formLevel >= 3 ? 'MSCE Best 6' : 'Subjects Passed'}
-                </div>
-                <div className="mt-1.5 text-2xl font-bold font-mono tabular-nums text-emerald-900 dark:text-emerald-200">
-                  {summary.subjectCount === 0
-                    ? '—'
-                    : activePortal.formLevel >= 3
-                    ? summary.standing.bestSixPoints !== null
-                      ? `${summary.standing.bestSixPoints} pts`
-                      : `${summary.subjectCount}/6`
-                    : `${summary.passedSubjectCount}/${summary.subjectCount}`}
-                </div>
-                <div className="mt-0.5 text-[11px] text-emerald-700 dark:text-emerald-400 font-mono">
-                  {activePortal.formLevel >= 3 && summary.meanManebPoint !== null
-                    ? `Mean Pt ${summary.meanManebPoint}`
-                    : `${summary.creditSubjectCount} credit${summary.creditSubjectCount === 1 ? '' : 's'}`}
-                </div>
-              </div>
+            {/* SECTION 1: DASHBOARD */}
+            {activeTab === 'dashboard' && (
+              <div className="space-y-5">
+                <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* Exam Results Card */}
+                  <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex flex-col justify-between gap-4">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                          Exam Results · {selectedTerm}
+                        </span>
+                        <Award className="w-4 h-4 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+                      </div>
+                      <div className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+                        {summary.subjectCount > 0 ? `${summary.weightedAverage.toFixed(1)}%` : '—'}
+                      </div>
+                      <div className="text-xs text-slate-600 dark:text-slate-300 font-mono">
+                        {summary.subjectCount > 0
+                          ? `Grade ${summary.overallGrade} · ${summary.standing.outcome} · ${summary.subjectCount} subjects`
+                          : `No ${selectedTerm} results published yet`}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectTab('results')}
+                      className="inline-flex items-center justify-between min-h-[38px] px-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200/80 dark:border-emerald-900/60 text-xs font-semibold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100/80 dark:hover:bg-emerald-950/80 cursor-pointer"
+                    >
+                      <span>Open Exam Results</span>
+                      <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
 
-              <div className="rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-4">
-                <div className="text-xs text-slate-500 dark:text-slate-400">Overall Grade</div>
-                <div className="mt-1.5 text-2xl font-bold font-mono text-slate-900 dark:text-white">
-                  {summary.overallGrade}
-                </div>
-                <div className="mt-0.5 text-[11px] text-slate-600 dark:text-slate-300">
-                  {summary.overallRemark} · {summary.system}
-                </div>
-              </div>
+                  {/* Library Card */}
+                  <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex flex-col justify-between gap-4">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                          School Library
+                        </span>
+                        <BookOpen className="w-4 h-4 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+                      </div>
+                      <div className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+                        {activeBorrowedLoansCount} Checked Out
+                      </div>
+                      <div className="text-xs text-slate-600 dark:text-slate-300 font-mono">
+                        {offlineIds.size} saved offline ·{' '}
+                        {libraryAlerts.overdueLoans.length > 0
+                          ? `${libraryAlerts.overdueLoans.length} overdue`
+                          : libraryAlerts.dueSoonLoans.length > 0
+                          ? `${libraryAlerts.dueSoonLoans.length} due in 48h`
+                          : `${mergedDigitalResources.length} digital books`}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectTab('library')}
+                      className="inline-flex items-center justify-between min-h-[38px] px-3.5 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-slate-800 cursor-pointer"
+                    >
+                      <span>Open Library</span>
+                      <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
 
-              <div className="rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-4">
-                <div className="text-xs text-slate-500 dark:text-slate-400">Term Average</div>
-                <div className="mt-1.5 text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
-                  {summary.subjectCount > 0 ? `${summary.weightedAverage.toFixed(1)}%` : '—'}
-                </div>
-                <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 font-mono">
-                  CA {summary.caAverage.toFixed(1)} + Exam {summary.summativeAverage.toFixed(1)}
-                </div>
-              </div>
+                  {/* Fees Card */}
+                  <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex flex-col justify-between gap-4">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                          School Fees (MWK)
+                        </span>
+                        <Banknote className="w-4 h-4 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+                      </div>
+                      <div
+                        className={`text-2xl font-bold font-mono tabular-nums ${
+                          feeTotals.balance > 0
+                            ? 'text-amber-700 dark:text-amber-400'
+                            : 'text-emerald-700 dark:text-emerald-400'
+                        }`}
+                      >
+                        {feeInvoices.length > 0 ? formatMWK(feeTotals.balance) : '—'}
+                      </div>
+                      <div className="text-xs text-slate-600 dark:text-slate-300 font-mono">
+                        {feeInvoices.length > 0
+                          ? `Paid ${formatMWK(feeTotals.paid)} of ${formatMWK(feeTotals.billed)}`
+                          : 'No invoices billed'}
+                        {feeTotals.pendingProofs > 0
+                          ? ` · ${feeTotals.pendingProofs} pending proof`
+                          : ''}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectTab('fees')}
+                      className="inline-flex items-center justify-between min-h-[38px] px-3.5 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-slate-800 cursor-pointer"
+                    >
+                      <span>Open Fees &amp; Upload Proof</span>
+                      <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
+                </section>
 
-              <div className="rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-4">
-                <div className="text-xs text-slate-500 dark:text-slate-400">
-                  {summary.system} Standing
-                </div>
-                <div
-                  className={`mt-1.5 text-2xl font-bold ${
-                    summary.standing.outcome === 'Pass'
-                      ? 'text-emerald-700 dark:text-emerald-400'
-                      : summary.standing.outcome === 'Fail'
-                      ? 'text-rose-600 dark:text-rose-400'
-                      : 'text-slate-700 dark:text-slate-300'
-                  }`}
-                >
-                  {summary.standing.outcome}
-                </div>
-                <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
-                  {summary.subjectCount} graded
-                </div>
+                {/* School Announcements */}
+                <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Megaphone className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" aria-hidden="true" />
+                      <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        School Announcements ({announcements.length})
+                      </h2>
+                    </div>
+                  </div>
+                  {announcements.length === 0 ? (
+                    <div className="py-4 text-center text-xs text-slate-500 dark:text-slate-400">
+                      No school announcements at this time.
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                      {announcements.map((item) => (
+                        <article key={item.id} className="py-3 first:pt-1 last:pb-1 space-y-1">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                              {item.title}
+                            </h3>
+                            <span className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400 shrink-0">
+                              {item.publishedDate}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">
+                            {item.message}
+                          </p>
+                          {item.authorName && (
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                              {item.authorName}
+                            </div>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </section>
+
+                {/* Recent Fee Submissions or Subject Summary */}
+                <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        {selectedTerm} Subject Summary
+                      </h2>
+                      <button
+                        type="button"
+                        onClick={() => handleSelectTab('results')}
+                        className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer"
+                      >
+                        View Full Report
+                      </button>
+                    </div>
+                    {summary.rows.length === 0 ? (
+                      <div className="py-6 text-center text-xs text-slate-500 dark:text-slate-400">
+                        No graded subjects for {selectedTerm}.
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                        {summary.rows.slice(0, 6).map((r) => (
+                          <div
+                            key={r.assessment.id}
+                            className="py-2 flex items-center justify-between gap-3 text-xs"
+                          >
+                            <span className="font-medium text-slate-800 dark:text-slate-200 truncate">
+                              {r.assessment.subject}
+                            </span>
+                            <div className="flex items-center gap-3 font-mono tabular-nums shrink-0">
+                              <span className="text-slate-600 dark:text-slate-300">
+                                {r.totalScore.toFixed(1)}%
+                              </span>
+                              <span
+                                className={`font-bold ${
+                                  r.gradePoint <= 6
+                                    ? 'text-emerald-700 dark:text-emerald-400'
+                                    : r.gradePoint <= 8
+                                    ? 'text-amber-700 dark:text-amber-400'
+                                    : 'text-rose-600 dark:text-rose-400'
+                                }`}
+                              >
+                                {r.grade}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        Recent Fee Payment Proofs
+                      </h2>
+                      <button
+                        type="button"
+                        onClick={() => handleSelectTab('fees')}
+                        className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer"
+                      >
+                        Upload Reference
+                      </button>
+                    </div>
+                    {feeSubmissions.length === 0 ? (
+                      <div className="py-6 text-center text-xs text-slate-500 dark:text-slate-400">
+                        No payment references uploaded yet.
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                        {feeSubmissions.slice(0, 5).map((sub) => (
+                          <div
+                            key={sub.id}
+                            className="py-2.5 flex items-center justify-between gap-3 text-xs"
+                          >
+                            <div className="min-w-0">
+                              <div className="font-semibold text-slate-900 dark:text-slate-100 font-mono tabular-nums">
+                                {formatMWK(sub.amount)} · {sub.method}
+                              </div>
+                              <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 truncate">
+                                {sub.term} · {sub.submittedDate}
+                                {sub.reference ? ` · ${sub.reference}` : ''}
+                              </div>
+                            </div>
+                            <span
+                              className={`font-semibold shrink-0 ${
+                                sub.status === 'Approved'
+                                  ? 'text-emerald-700 dark:text-emerald-400'
+                                  : sub.status === 'Rejected'
+                                  ? 'text-rose-600 dark:text-rose-400'
+                                  : 'text-amber-700 dark:text-amber-400'
+                              }`}
+                            >
+                              {sub.status}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </section>
               </div>
-            </section>
+            )}
+
+            {/* SECTION 2: EXAM RESULTS */}
+            {activeTab === 'results' && (
+              <>
+                <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-900">
+                    {TERMS.map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => setSelectedTerm(t)}
+                        className={`min-h-[36px] px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${
+                          selectedTerm === t
+                            ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
+                            : 'text-slate-600 dark:text-slate-400'
+                        }`}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => window.print()}
+                      disabled={summary.rows.length === 0}
+                      className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <Printer className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>Print Report</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDownloadPdf}
+                      disabled={summary.rows.length === 0}
+                      className="inline-flex items-center gap-1.5 min-h-[40px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <FileDown className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>Download PDF Report Card</span>
+                    </button>
+                  </div>
+                </section>
+
+                {/* Summary KPIs */}
+                <section className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+                  <div className="rounded-2xl bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200/80 dark:border-emerald-900/60 p-4">
+                    <div className="text-xs text-emerald-800 dark:text-emerald-300 font-medium">
+                      {activePortal.formLevel >= 3 ? 'MSCE Best 6' : 'Subjects Passed'}
+                    </div>
+                    <div className="mt-1.5 text-2xl font-bold font-mono tabular-nums text-emerald-900 dark:text-emerald-200">
+                      {summary.subjectCount === 0
+                        ? '—'
+                        : activePortal.formLevel >= 3
+                        ? summary.standing.bestSixPoints !== null
+                          ? `${summary.standing.bestSixPoints} pts`
+                          : `${summary.subjectCount}/6`
+                        : `${summary.passedSubjectCount}/${summary.subjectCount}`}
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-emerald-700 dark:text-emerald-400 font-mono">
+                      {activePortal.formLevel >= 3 && summary.meanManebPoint !== null
+                        ? `Mean Pt ${summary.meanManebPoint}`
+                        : `${summary.creditSubjectCount} credit${summary.creditSubjectCount === 1 ? '' : 's'}`}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-4">
+                    <div className="text-xs text-slate-500 dark:text-slate-400">Overall Grade</div>
+                    <div className="mt-1.5 text-2xl font-bold font-mono text-slate-900 dark:text-white">
+                      {summary.overallGrade}
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-slate-600 dark:text-slate-300">
+                      {summary.overallRemark} · {summary.system}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-4">
+                    <div className="text-xs text-slate-500 dark:text-slate-400">Term Average</div>
+                    <div className="mt-1.5 text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+                      {summary.subjectCount > 0 ? `${summary.weightedAverage.toFixed(1)}%` : '—'}
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+                      CA {summary.caAverage.toFixed(1)} + Exam {summary.summativeAverage.toFixed(1)}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-4">
+                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                      {summary.system} Standing
+                    </div>
+                    <div
+                      className={`mt-1.5 text-2xl font-bold ${
+                        summary.standing.outcome === 'Pass'
+                          ? 'text-emerald-700 dark:text-emerald-400'
+                          : summary.standing.outcome === 'Fail'
+                          ? 'text-rose-600 dark:text-rose-400'
+                          : 'text-slate-700 dark:text-slate-300'
+                      }`}
+                    >
+                      {summary.standing.outcome}
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+                      {summary.subjectCount} graded
+                    </div>
+                  </div>
+                </section>
 
             {/* Subject Component Visual Breakdown */}
             {summary.rows.length > 0 && (
@@ -1028,6 +1745,19 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
               </section>
             )}
 
+            {/* Term-Over-Term Performance Trends (Recharts) */}
+            {assessments.length > 0 && (
+              <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
+                <StudentPerformanceTrends
+                  studentId={activePortal.studentId}
+                  studentName={activePortal.studentName}
+                  formLevel={activePortal.formLevel}
+                  academicYear={activePortal.academicYear}
+                  assessments={assessments}
+                />
+              </section>
+            )}
+
             {/* Subject Results Table */}
             <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
               <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
@@ -1037,9 +1767,6 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                     {selectedTerm} Examination Results
                   </h2>
                 </div>
-                <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                  CA1 20% + CA2 20% + Exam 60%
-                </span>
               </div>
 
               {loadingResults ? (
@@ -1169,7 +1896,12 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                 </div>
               )}
             </section>
+              </>
+            )}
 
+            {/* SECTION 3: LIBRARY */}
+            {activeTab === 'library' && (
+              <>
             {/* Student Library Materials & Due Dates */}
             <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
               <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
@@ -1179,15 +1911,17 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                     School Library Books Assigned
                   </h2>
                 </div>
-                <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400 tabular-nums">
-                  {libraryLoans.filter((l) => l.status === 'Checked Out').length} currently checked out
-                  {libraryAlerts.dueSoonLoans.length > 0 && (
-                    <span className="text-amber-700 dark:text-amber-400 font-semibold">
-                      {' '}
-                      · {libraryAlerts.dueSoonLoans.length} due in 48h
-                    </span>
-                  )}
-                </span>
+                {libraryLoans.some((l) => l.status === 'Checked Out') && (
+                  <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400 tabular-nums">
+                    {libraryLoans.filter((l) => l.status === 'Checked Out').length} checked out
+                    {libraryAlerts.dueSoonLoans.length > 0 && (
+                      <span className="text-amber-700 dark:text-amber-400 font-semibold">
+                        {' '}
+                        · {libraryAlerts.dueSoonLoans.length} due in 48h
+                      </span>
+                    )}
+                  </span>
+                )}
               </div>
 
               {loadingLibrary ? (
@@ -1196,7 +1930,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                 </div>
               ) : libraryLoans.length === 0 ? (
                 <div className="py-10 px-6 text-center text-xs text-slate-500 dark:text-slate-400">
-                  No library textbooks or reading materials are assigned to your registration code yet.
+                  No library books assigned.
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -1285,71 +2019,66 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
             {/* Online & Offline Digital Library (Non-Downloadable Books & Past Papers) */}
             <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
               <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <Globe className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" aria-hidden="true" />
-                    <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                      Online Library · Digital Books &amp; Past Papers
-                    </h2>
-                  </div>
-                  <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                    Read study guides, set books, and JCE/MSCE past papers when physical copies are unavailable · Save in-app for offline reading (downloads disabled).
-                  </p>
+                <div className="flex items-center gap-2 min-w-0">
+                  <Globe className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" aria-hidden="true" />
+                  <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    Online Library · Digital Books &amp; Past Papers
+                  </h2>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2 shrink-0">
-                  <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-600 dark:text-slate-300">
-                    <Lock className="w-3 h-3 text-slate-500" aria-hidden="true" />
-                    <span>Read-Only · No Downloads</span>
-                  </span>
-                  {mergedDigitalResources.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={handleSaveAllOffline}
-                      disabled={savingAllOffline}
-                      className="inline-flex items-center gap-1.5 min-h-[36px] px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
-                    >
-                      <CloudOff className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>
-                        {savingAllOffline
-                          ? 'Caching...'
-                          : `Save All Offline (${mergedDigitalResources.filter((r) => r.allowOffline).length})`}
-                      </span>
-                    </button>
-                  )}
-                </div>
+                {mergedDigitalResources.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleSaveAllOffline}
+                    disabled={savingAllOffline}
+                    className="inline-flex items-center gap-1.5 min-h-[36px] px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <CloudOff className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>
+                      {savingAllOffline
+                        ? 'Caching...'
+                        : `Save All Offline (${mergedDigitalResources.filter((r) => r.allowOffline).length})`}
+                    </span>
+                  </button>
+                )}
               </div>
 
-              <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800/80 bg-slate-50/60 dark:bg-slate-900/40 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2.5">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {(['All', ...DIGITAL_RESOURCE_CATEGORIES, 'Saved Offline'] as const).map((cat) => {
-                      const active = digitalCategoryFilter === cat;
-                      return (
-                        <button
-                          key={cat}
-                          type="button"
-                          onClick={() => setDigitalCategoryFilter(cat)}
-                          className={`min-h-[32px] px-3 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer ${
-                            active
-                              ? 'bg-emerald-700 text-white'
-                              : 'bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
-                          }`}
-                        >
-                          {cat === 'Saved Offline' ? `Saved Offline (${offlineIds.size})` : cat}
-                        </button>
-                      );
-                    })}
+              <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800/80 bg-slate-50/60 dark:bg-slate-900/40 space-y-3">
+                {/* Prominent Search Bar + Form Level & Count */}
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
+                  <div className="relative flex-1 min-w-0">
+                    <Search
+                      className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                      aria-hidden="true"
+                    />
+                    <input
+                      type="text"
+                      aria-label="Search uploaded digital resources by title or subject tags"
+                      value={digitalSearch}
+                      onChange={(e) => setDigitalSearch(e.target.value)}
+                      placeholder="Search uploaded resources by title or subject..."
+                      className="w-full min-h-[42px] pl-9 pr-9 rounded-xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+                    />
+                    {digitalSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setDigitalSearch('')}
+                        aria-label="Clear digital library search"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 min-h-[30px] min-w-[30px] flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center justify-between sm:justify-end gap-2.5 shrink-0">
                     <select
                       aria-label="Filter digital library by form level"
                       value={digitalFormFilter}
                       onChange={(e) =>
                         setDigitalFormFilter(e.target.value as 'All' | DigitalResourceFormLevel)
                       }
-                      className="min-h-[34px] px-2.5 rounded-lg bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-700 text-xs text-slate-700 dark:text-slate-200"
+                      className="min-h-[42px] px-3 rounded-xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200"
                     >
                       <option value="All">All Forms</option>
                       <option value={studentFormLabel}>My Level ({studentFormLabel})</option>
@@ -1359,22 +2088,72 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                       <option value="Form 4">Form 4</option>
                     </select>
 
-                    <div className="relative min-w-[200px]">
-                      <Search
-                        className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
-                        aria-hidden="true"
-                      />
-                      <input
-                        type="search"
-                        aria-label="Search digital books and past papers"
-                        value={digitalSearch}
-                        onChange={(e) => setDigitalSearch(e.target.value)}
-                        placeholder="Search title, subject, year..."
-                        className="w-full min-h-[34px] pl-8 pr-3 rounded-lg bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
-                      />
-                    </div>
+                    <span className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                      {filteredDigitalResources.length} of {mergedDigitalResources.length}
+                    </span>
                   </div>
                 </div>
+
+                {/* Category Filter Buttons */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {(['All', ...DIGITAL_RESOURCE_CATEGORIES, 'Saved Offline'] as const).map((cat) => {
+                    const active = digitalCategoryFilter === cat;
+                    return (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => setDigitalCategoryFilter(cat)}
+                        aria-pressed={active}
+                        className={`min-h-[34px] px-3 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer ${
+                          active
+                            ? 'bg-emerald-700 text-white'
+                            : 'bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        {cat === 'Saved Offline' ? `Saved Offline (${offlineIds.size})` : cat}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Subject Tag Filter Buttons */}
+                {digitalSubjects.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-slate-200/70 dark:border-slate-800">
+                    <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mr-1">
+                      Subjects:
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setDigitalSubjectFilter('All')}
+                      aria-pressed={digitalSubjectFilter === 'All'}
+                      className={`min-h-[30px] px-2.5 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer ${
+                        digitalSubjectFilter === 'All'
+                          ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900'
+                          : 'bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      All Subjects
+                    </button>
+                    {digitalSubjects.map((subj) => {
+                      const active = digitalSubjectFilter === subj;
+                      return (
+                        <button
+                          key={subj}
+                          type="button"
+                          onClick={() => setDigitalSubjectFilter(active ? 'All' : subj)}
+                          aria-pressed={active}
+                          className={`min-h-[30px] px-2.5 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer ${
+                            active
+                              ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900'
+                              : 'bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          {subj}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
 
                 {offlineSyncFeedback && (
                   <div className="flex items-center justify-between gap-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 px-3 py-2 text-xs text-emerald-800 dark:text-emerald-300">
@@ -1400,12 +2179,28 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                     Loading online study materials...
                   </div>
                 ) : filteredDigitalResources.length === 0 ? (
-                  <div className="py-10 px-4 text-center text-xs text-slate-500 dark:text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-                    {mergedDigitalResources.length === 0
-                      ? isOnline
-                        ? 'Your school librarian has not published online books or past papers yet.'
-                        : 'No offline books or past papers have been cached on this device yet. Connect to the internet once to save reading materials for offline study.'
-                      : 'No digital books or past papers match your current search or filter.'}
+                  <div className="py-10 px-4 text-center space-y-3 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
+                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                      {mergedDigitalResources.length === 0
+                        ? isOnline
+                          ? 'No online books or past papers published yet.'
+                          : 'No offline books or past papers saved on this device.'
+                        : 'No uploaded digital resources match your search or subject filter.'}
+                    </div>
+                    {mergedDigitalResources.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDigitalSearch('');
+                          setDigitalSubjectFilter('All');
+                          setDigitalCategoryFilter('All');
+                          setDigitalFormFilter('All');
+                        }}
+                        className="inline-flex items-center min-h-[34px] px-3.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#161B22] text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                      >
+                        Reset Search &amp; Filters
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1422,6 +2217,11 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                               <div className="text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
                                 {item.category} · {item.subject} · {item.formLevel}
                                 {item.examYear ? ` · ${item.examYear}` : ''}
+                                {item.storageFormat === 'pdf'
+                                  ? ` · PDF${item.fileSizeBytes ? ` (${formatFileSizeLabel(item.fileSizeBytes)})` : ''}`
+                                  : item.storageFormat === 'image'
+                                  ? ` · Image${item.fileSizeBytes ? ` (${formatFileSizeLabel(item.fileSizeBytes)})` : ''}`
+                                  : ''}
                               </div>
                               {isSaved && (
                                 <span className="text-[11px] font-medium text-emerald-700 dark:text-emerald-400 whitespace-nowrap shrink-0">
@@ -1509,19 +2309,14 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
             {/* Physical School Book Catalog & Book Reservations */}
             <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
               <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <BookmarkPlus
-                      className="w-4 h-4 text-emerald-700 dark:text-emerald-400"
-                      aria-hidden="true"
-                    />
-                    <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                      Physical Book Catalog &amp; Reservations
-                    </h2>
-                  </div>
-                  <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                    Check shelf availability or reserve a physical book that is currently checked out.
-                  </p>
+                <div className="flex items-center gap-2">
+                  <BookmarkPlus
+                    className="w-4 h-4 text-emerald-700 dark:text-emerald-400"
+                    aria-hidden="true"
+                  />
+                  <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    Physical Book Catalog &amp; Reservations
+                  </h2>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -1710,7 +2505,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                   </div>
                 ) : reservations.length === 0 ? (
                   <div className="py-4 text-xs text-slate-500 dark:text-slate-400">
-                    You have not reserved any checked-out books yet. Click Reserve on any checked-out book above to queue a request.
+                    No book reservations yet.
                   </div>
                 ) : (
                   <div className="divide-y divide-slate-200/80 dark:divide-slate-800 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#161B22]">
@@ -1753,6 +2548,513 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                 )}
               </div>
             </section>
+              </>
+            )}
+
+            {/* SECTION 4: FEES & PAYMENT REFERENCE UPLOAD */}
+            {activeTab === 'fees' && (
+              <div className="space-y-5">
+                {/* Fee Summary KPIs */}
+                <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-4">
+                    <div className="text-xs text-slate-500 dark:text-slate-400">Total Billed</div>
+                    <div className="mt-1 text-xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+                      {formatMWK(feeTotals.billed)}
+                    </div>
+                  </div>
+                  <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-4">
+                    <div className="text-xs text-slate-500 dark:text-slate-400">Total Paid</div>
+                    <div className="mt-1 text-xl font-bold font-mono tabular-nums text-emerald-700 dark:text-emerald-400">
+                      {formatMWK(feeTotals.paid)}
+                    </div>
+                  </div>
+                  <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-4">
+                    <div className="text-xs text-slate-500 dark:text-slate-400">Balance Due</div>
+                    <div
+                      className={`mt-1 text-xl font-bold font-mono tabular-nums ${
+                        feeTotals.balance > 0
+                          ? 'text-amber-700 dark:text-amber-400'
+                          : 'text-emerald-700 dark:text-emerald-400'
+                      }`}
+                    >
+                      {formatMWK(feeTotals.balance)}
+                    </div>
+                  </div>
+                </section>
+
+                {/* Term Fee Invoices */}
+                <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
+                  <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center gap-2">
+                    <Banknote className="w-4 h-4 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+                    <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      Fee Invoices
+                    </h2>
+                  </div>
+
+                  {loadingFees ? (
+                    <div className="py-10 text-center text-sm text-slate-500 dark:text-slate-400">
+                      Loading fee invoices...
+                    </div>
+                  ) : feeInvoices.length === 0 ? (
+                    <div className="py-8 px-6 text-center text-xs text-slate-500 dark:text-slate-400">
+                      No term fee invoices billed yet.
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-sm">
+                        <thead>
+                          <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 text-xs text-slate-500 dark:text-slate-400">
+                            <th className="py-3 px-4 font-medium">Term</th>
+                            <th className="py-3 px-3 font-medium text-right">Tuition</th>
+                            <th className="py-3 px-3 font-medium text-right">GPF / Exam / Other</th>
+                            <th className="py-3 px-3 font-medium text-right">Billed</th>
+                            <th className="py-3 px-3 font-medium text-right">Paid</th>
+                            <th className="py-3 px-3 font-medium text-right">Balance</th>
+                            <th className="py-3 px-4 font-medium text-right">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                          {feeInvoices.map((inv) => {
+                            const balance = Math.max(0, inv.totalBilled - inv.totalPaid);
+                            const extras = inv.gpfFee + inv.examFee + inv.otherFee;
+                            return (
+                              <tr key={inv.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30">
+                                <td className="py-3 px-4">
+                                  <div className="font-medium text-slate-900 dark:text-slate-100">
+                                    {inv.term}
+                                  </div>
+                                  <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                                    {inv.academicYear}
+                                  </div>
+                                </td>
+                                <td className="py-3 px-3 text-right font-mono text-xs tabular-nums">
+                                  {formatMWK(inv.tuitionFee)}
+                                </td>
+                                <td className="py-3 px-3 text-right font-mono text-xs tabular-nums text-slate-600 dark:text-slate-300">
+                                  {formatMWK(extras)}
+                                </td>
+                                <td className="py-3 px-3 text-right font-mono text-xs tabular-nums">
+                                  {formatMWK(inv.totalBilled)}
+                                </td>
+                                <td className="py-3 px-3 text-right font-mono text-xs tabular-nums text-emerald-700 dark:text-emerald-400">
+                                  {formatMWK(inv.totalPaid)}
+                                </td>
+                                <td className="py-3 px-3 text-right font-mono text-xs tabular-nums font-semibold">
+                                  {formatMWK(balance)}
+                                </td>
+                                <td className="py-3 px-4 text-right text-xs font-semibold">
+                                  <span
+                                    className={
+                                      inv.status === 'Paid'
+                                        ? 'text-emerald-700 dark:text-emerald-400'
+                                        : inv.status === 'Partial'
+                                        ? 'text-amber-700 dark:text-amber-400'
+                                        : 'text-rose-600 dark:text-rose-400'
+                                    }
+                                  >
+                                    {inv.status}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </section>
+
+                {/* Upload Payment Reference (PDF or Image) */}
+                <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 space-y-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Upload className="w-4 h-4 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+                      <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        Upload Payment Reference (PDF or Image)
+                      </h2>
+                    </div>
+                  </div>
+
+                  {proofSubmitError && (
+                    <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
+                      {proofSubmitError}
+                    </div>
+                  )}
+
+                  {proofSubmitSuccess && (
+                    <div className="flex items-center justify-between gap-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 px-3.5 py-2.5 text-xs text-emerald-800 dark:text-emerald-300">
+                      <span className="inline-flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                        <span>{proofSubmitSuccess}</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setProofSubmitSuccess('')}
+                        aria-label="Dismiss upload confirmation"
+                        className="opacity-70 hover:opacity-100 cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+
+                  <form onSubmit={handleSubmitPaymentProof} className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                      {feeInvoices.length > 0 ? (
+                        <div>
+                          <label
+                            htmlFor="student-proof-invoice"
+                            className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
+                          >
+                            Invoice / Term
+                          </label>
+                          <select
+                            id="student-proof-invoice"
+                            value={proofInvoiceId}
+                            onChange={(e) => handleSelectProofInvoice(e.target.value)}
+                            className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium"
+                          >
+                            {feeInvoices.map((inv) => {
+                              const rem = Math.max(0, inv.totalBilled - inv.totalPaid);
+                              return (
+                                <option key={inv.id} value={inv.id}>
+                                  {inv.term} ({inv.academicYear}) · Bal {formatMWK(rem)}
+                                </option>
+                              );
+                            })}
+                            <option value="">Other Term</option>
+                          </select>
+                        </div>
+                      ) : (
+                        <div>
+                          <label
+                            htmlFor="student-proof-term"
+                            className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
+                          >
+                            Term
+                          </label>
+                          <select
+                            id="student-proof-term"
+                            value={proofTerm}
+                            onChange={(e) => setProofTerm(e.target.value as TermName)}
+                            className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium"
+                          >
+                            {TERMS.map((t) => (
+                              <option key={t} value={t}>
+                                {t}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {feeInvoices.length > 0 && !proofInvoiceId && (
+                        <div>
+                          <label
+                            htmlFor="student-proof-other-term"
+                            className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
+                          >
+                            Term
+                          </label>
+                          <select
+                            id="student-proof-other-term"
+                            value={proofTerm}
+                            onChange={(e) => setProofTerm(e.target.value as TermName)}
+                            className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium"
+                          >
+                            {TERMS.map((t) => (
+                              <option key={t} value={t}>
+                                {t}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      <div>
+                        <label
+                          htmlFor="student-proof-method"
+                          className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
+                        >
+                          Payment Method
+                        </label>
+                        <select
+                          id="student-proof-method"
+                          value={proofMethod}
+                          onChange={(e) =>
+                            setProofMethod(
+                              e.target.value as 'Bank Deposit' | 'Airtel Money' | 'TNM Mpamba'
+                            )
+                          }
+                          className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium"
+                        >
+                          {STUDENT_PAYMENT_METHODS.map((m) => (
+                            <option key={m} value={m}>
+                              {m}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="student-proof-amount"
+                          className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
+                        >
+                          Amount Paid (MWK)
+                        </label>
+                        <input
+                          id="student-proof-amount"
+                          type="number"
+                          min="1"
+                          max="100000000"
+                          required
+                          value={proofAmountStr}
+                          onChange={(e) => setProofAmountStr(e.target.value)}
+                          placeholder="e.g. 50000"
+                          className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono text-sm font-semibold"
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="student-proof-reference"
+                          className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
+                        >
+                          Transaction / Slip Reference
+                        </label>
+                        <input
+                          id="student-proof-reference"
+                          type="text"
+                          maxLength={80}
+                          value={proofReference}
+                          onChange={(e) => setProofReference(e.target.value)}
+                          placeholder="e.g. NBM-88412 or Airtel ID"
+                          className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono text-xs"
+                        />
+                      </div>
+                    </div>
+
+                    {/* PDF / Image Drop Zone */}
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+                        Payment Proof File (PDF or Image, max 8 MB)
+                      </label>
+                      <div
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          setProofFileDragActive(true);
+                        }}
+                        onDragLeave={() => setProofFileDragActive(false)}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setProofFileDragActive(false);
+                          const dropped = e.dataTransfer.files?.[0] || null;
+                          void handleProofFileSelected(dropped);
+                        }}
+                        className={`rounded-xl border border-dashed p-4 transition-colors ${
+                          proofFileDragActive
+                            ? 'border-emerald-600 bg-emerald-50/70 dark:bg-emerald-950/30'
+                            : 'border-slate-300 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-900/50'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="h-9 w-9 rounded-xl bg-emerald-100/80 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                              {parsedProofFile?.fileFormat === 'image' ? (
+                                <ImageIcon className="w-4 h-4" aria-hidden="true" />
+                              ) : (
+                                <FileText className="w-4 h-4" aria-hidden="true" />
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              {parsedProofFile ? (
+                                <>
+                                  <div className="text-xs font-semibold text-slate-900 dark:text-white truncate">
+                                    {parsedProofFile.fileName}
+                                  </div>
+                                  <div className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400">
+                                    {parsedProofFile.fileFormat === 'pdf' ? 'PDF Document' : 'Image'} ·{' '}
+                                    {formatFileSizeLabel(parsedProofFile.fileSizeBytes)}
+                                  </div>
+                                </>
+                              ) : (
+                                <div className="text-xs text-slate-600 dark:text-slate-300">
+                                  Drop bank deposit slip or mobile money screenshot (.pdf, .png, .jpg, .webp)
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            {parsedProofFile && (
+                              <button
+                                type="button"
+                                onClick={() => setParsedProofFile(null)}
+                                className="min-h-[34px] px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800 cursor-pointer"
+                              >
+                                Clear
+                              </button>
+                            )}
+                            <label className="inline-flex items-center gap-1.5 min-h-[36px] px-3.5 rounded-xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer">
+                              <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+                              <span>{parsedProofFile ? 'Replace File' : 'Choose PDF / Image'}</span>
+                              <input
+                                type="file"
+                                accept=".pdf,application/pdf,image/png,image/jpeg,image/webp"
+                                className="sr-only"
+                                onChange={(e) => {
+                                  const f = e.target.files?.[0] || null;
+                                  e.currentTarget.value = '';
+                                  void handleProofFileSelected(f);
+                                }}
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+                      {proofFileError && (
+                        <div className="mt-1.5 text-xs text-rose-600 dark:text-rose-400">
+                          {proofFileError}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-end justify-between gap-3">
+                      <div className="flex-1 min-w-[220px]">
+                        <label
+                          htmlFor="student-proof-notes"
+                          className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
+                        >
+                          Optional Note
+                        </label>
+                        <input
+                          id="student-proof-notes"
+                          type="text"
+                          maxLength={240}
+                          value={proofNotes}
+                          onChange={(e) => setProofNotes(e.target.value)}
+                          placeholder="e.g. Payer name or deposit branch"
+                          className="w-full min-h-[40px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs"
+                        />
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={submittingProof || !isOnline || !parsedProofFile}
+                        className="inline-flex items-center gap-2 min-h-[40px] px-5 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-45 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>
+                          {submittingProof
+                            ? proofProgress || 'Uploading...'
+                            : 'Submit Payment Reference'}
+                        </span>
+                      </button>
+                    </div>
+                  </form>
+                </section>
+
+                {/* Submitted Payment References History */}
+                <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
+                  <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
+                    <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      Submitted Payment References ({feeSubmissions.length})
+                    </h2>
+                  </div>
+
+                  {loadingFeeSubmissions ? (
+                    <div className="py-10 text-center text-sm text-slate-500 dark:text-slate-400">
+                      Loading submitted proofs...
+                    </div>
+                  ) : feeSubmissions.length === 0 ? (
+                    <div className="py-10 px-6 text-center text-xs text-slate-500 dark:text-slate-400">
+                      No payment references submitted yet.
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-sm">
+                        <thead>
+                          <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 text-xs text-slate-500 dark:text-slate-400">
+                            <th className="py-3 px-4 font-medium">Date &amp; Term</th>
+                            <th className="py-3 px-3 font-medium">Channel &amp; Ref</th>
+                            <th className="py-3 px-3 font-medium">File</th>
+                            <th className="py-3 px-3 font-medium text-right">Amount</th>
+                            <th className="py-3 px-3 font-medium">Status</th>
+                            <th className="py-3 px-4 font-medium text-right">Proof</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                          {feeSubmissions.map((sub) => (
+                            <tr key={sub.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30">
+                              <td className="py-3 px-4">
+                                <div className="font-mono text-xs text-slate-900 dark:text-slate-100">
+                                  {sub.submittedDate}
+                                </div>
+                                <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                                  {sub.term} · {sub.academicYear}
+                                </div>
+                              </td>
+                              <td className="py-3 px-3">
+                                <div className="text-xs font-medium text-slate-800 dark:text-slate-200">
+                                  {sub.method}
+                                </div>
+                                <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                                  {sub.reference || '—'}
+                                </div>
+                              </td>
+                              <td className="py-3 px-3 text-xs text-slate-600 dark:text-slate-300">
+                                <div className="truncate max-w-[180px]">{sub.fileName}</div>
+                                <div className="text-[11px] font-mono text-slate-400">
+                                  {sub.fileFormat === 'pdf' ? 'PDF' : 'Image'} ·{' '}
+                                  {formatFileSizeLabel(sub.fileSizeBytes)}
+                                </div>
+                              </td>
+                              <td className="py-3 px-3 text-right font-mono text-xs tabular-nums font-semibold">
+                                {formatMWK(sub.amount)}
+                              </td>
+                              <td className="py-3 px-3 text-xs">
+                                <div
+                                  className={`font-semibold ${
+                                    sub.status === 'Approved'
+                                      ? 'text-emerald-700 dark:text-emerald-400'
+                                      : sub.status === 'Rejected'
+                                      ? 'text-rose-600 dark:text-rose-400'
+                                      : 'text-amber-700 dark:text-amber-400'
+                                  }`}
+                                >
+                                  {sub.status}
+                                </div>
+                                {sub.receiptNo && (
+                                  <div className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400">
+                                    {sub.receiptNo}
+                                  </div>
+                                )}
+                                {sub.reviewNote && (
+                                  <div className="text-[11px] text-slate-500 dark:text-slate-400 max-w-[200px]">
+                                    {sub.reviewNote}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="py-3 px-4 text-right whitespace-nowrap">
+                                <button
+                                  type="button"
+                                  onClick={() => setPreviewSubmission(sub)}
+                                  className="inline-flex items-center gap-1 min-h-[34px] px-3 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                                >
+                                  <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+                                  <span>View</span>
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </section>
+              </div>
+            )}
           </>
         )}
       </main>
@@ -1856,7 +3158,50 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
         onClose={() => setActiveReaderResource(null)}
       />
 
-      <OfflineIndicator />
+      {/* Payment Proof Preview Modal */}
+      <PaymentProofPreviewModal
+        submission={previewSubmission}
+        onClose={() => setPreviewSubmission(null)}
+      />
+
+      {/* Compact Centered Bottom Navigation Bar: Exam Results, Library, Fees */}
+      {!portalLoading && activePortal && summary && (
+        <nav
+          aria-label="Student portal sections"
+          className="fixed bottom-3 sm:bottom-4 left-0 right-0 z-30 px-4 pointer-events-none pb-[env(safe-area-inset-bottom)] print:hidden"
+        >
+          <div className="pointer-events-auto mx-auto w-full max-w-[360px] sm:max-w-md bg-white/95 dark:bg-[#161B22]/95 backdrop-blur-md border border-slate-200/90 dark:border-slate-800 rounded-2xl shadow-lg shadow-slate-900/10 dark:shadow-black/45 p-1.5 grid grid-cols-3 items-center gap-1.5">
+            {(
+              [
+                { id: 'results', label: 'Exam Results', icon: Award },
+                { id: 'library', label: 'Library', icon: BookOpen },
+                { id: 'fees', label: 'Fees', icon: Banknote },
+              ] as const
+            ).map((item) => {
+              const Icon = item.icon;
+              const active = activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleSelectTab(active ? 'dashboard' : item.id)}
+                  aria-pressed={active}
+                  className={`flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2 min-h-[44px] px-1.5 sm:px-3 py-1 rounded-xl text-[10.5px] sm:text-xs font-semibold leading-none whitespace-nowrap cursor-pointer transition-colors ${
+                    active
+                      ? 'bg-emerald-700 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  <Icon className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  <span className="truncate max-w-full">{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </nav>
+      )}
+
+      <OfflineIndicator hasBottomNav={!portalLoading && Boolean(activePortal && summary)} />
     </div>
   );
 };

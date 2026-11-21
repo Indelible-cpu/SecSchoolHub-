@@ -24,6 +24,7 @@ export type TeacherRole =
   | 'Head Teacher'
   | 'Deputy Head'
   | 'Head of Department'
+  | 'Form Teacher'
   | 'Form Master'
   | 'Subject Teacher'
   | 'School Librarian'
@@ -48,6 +49,7 @@ export interface School {
   defaultTuitionMWK: number;
   defaultGpfMWK: number;
   defaultExamFeeMWK: number;
+  logoDataUrl?: string;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
@@ -94,6 +96,7 @@ export interface StudentPortal {
   boardingStatus: BoardingStatus;
   registrationCode: string;
   status: StudentStatus;
+  logoDataUrl?: string;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
@@ -145,6 +148,7 @@ export interface StudentLink {
   stream: string;
   boardingStatus: BoardingStatus;
   studentEmail: string;
+  logoDataUrl?: string;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
@@ -181,6 +185,7 @@ export interface StaffLink {
   assignedForm: string;
   staffEmail: string;
   status: 'Active' | 'On Leave';
+  logoDataUrl?: string;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
@@ -269,6 +274,61 @@ export interface FeePayment {
   reference: string;
   term: TermName;
   createdAt?: Timestamp;
+}
+
+export interface StudentPortalFeeInvoice {
+  id: string;
+  ownerId: string;
+  schoolId: string;
+  registrationCode: string;
+  studentId: string;
+  studentName: string;
+  formLevel: FormLevel;
+  stream: string;
+  term: TermName;
+  academicYear: string;
+  tuitionFee: number;
+  gpfFee: number;
+  examFee: number;
+  otherFee: number;
+  totalBilled: number;
+  totalPaid: number;
+  status: InvoiceStatus;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export type FeeSubmissionStatus = 'Pending' | 'Approved' | 'Rejected';
+export type FeeSubmissionFileFormat = 'pdf' | 'image';
+
+export interface StudentFeeSubmission {
+  id: string;
+  ownerId: string;
+  schoolId: string;
+  studentId: string;
+  studentName: string;
+  admissionNo: string;
+  formLevel: FormLevel;
+  stream: string;
+  registrationCode: string;
+  invoiceId: string;
+  term: TermName;
+  academicYear: string;
+  amount: number;
+  method: PaymentMethod;
+  reference: string;
+  notes: string;
+  fileName: string;
+  mimeType: string;
+  fileFormat: FeeSubmissionFileFormat;
+  fileSizeBytes: number;
+  chunkCount: number;
+  status: FeeSubmissionStatus;
+  reviewNote: string;
+  receiptNo: string;
+  submittedDate: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
 }
 
 export interface AttendanceRecord {
@@ -453,6 +513,7 @@ export interface CatalogBookMirror {
 
 export type DigitalResourceCategory = 'Book' | 'Past Paper' | 'Revision Guide' | 'Set Book';
 export type DigitalResourceFormLevel = 'All' | 'Form 1' | 'Form 2' | 'Form 3' | 'Form 4';
+export type DigitalStorageFormat = 'text' | 'pdf' | 'image';
 
 export interface DigitalLibraryResource {
   id: string;
@@ -466,8 +527,29 @@ export interface DigitalLibraryResource {
   examYear: string;
   summary: string;
   content: string;
+  storageFormat?: DigitalStorageFormat;
+  fileName?: string;
+  mimeType?: string;
+  fileSizeBytes?: number;
+  chunkCount?: number;
   allowOffline: boolean;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
+
+export type AnnouncementAudience = 'Teachers' | 'Librarian' | 'Bursar' | 'Students';
+
+export interface SchoolAnnouncement {
+  id: string;
+  ownerId: string;
+  schoolId: string;
+  title: string;
+  message: string;
+  targetAudiences: AnnouncementAudience[];
+  publishedDate: string;
+  authorName: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
 

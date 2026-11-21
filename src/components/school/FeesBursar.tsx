@@ -4,18 +4,24 @@ import {
   BellRing,
   CheckCircle2,
   Download,
+  Eye,
   FileDown,
+  FileText,
+  Image as ImageIcon,
   Layers,
+  Lock,
   MessageSquare,
   Plus,
   Send,
   SlidersHorizontal,
   Trash2,
   X,
+  XCircle,
 } from 'lucide-react';
 import {
   FeeInvoice,
   FeePayment,
+  FeeSubmissionStatus,
   FormLevel,
   InvoiceStatus,
   PaymentMethod,
@@ -24,6 +30,7 @@ import {
   SmsLog,
   SmsNotificationType,
   Student,
+  StudentFeeSubmission,
   TermName,
 } from '../../school/types';
 import {
@@ -35,11 +42,14 @@ import {
   isGovernmentSchool,
   TERMS,
 } from '../../school/malawi';
+import { formatFileSizeLabel } from '../../school/digitalMaterialParser';
 import { downloadFeesPdfReport } from '../../school/pdfReports';
 import {
+  approveStudentFeeSubmission,
   billEntireFormBatch,
   createFeeInvoice,
   recordAtomicFeePayment,
+  rejectStudentFeeSubmission,
   removeFeeInvoice,
 } from '../../school/firestoreService';
 import {
@@ -51,6 +61,7 @@ import {
   wasLowBalanceAlertSentRecently,
 } from '../../school/smsService';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
+import { PaymentProofPreviewModal } from './PaymentProofPreviewModal';
 
 interface FeesBursarProps {
   school: School;
@@ -58,8 +69,10 @@ interface FeesBursarProps {
   students: Student[];
   invoices: FeeInvoice[];
   payments: FeePayment[];
+  feeSubmissions?: StudentFeeSubmission[];
   smsLogs: SmsLog[];
   smsConfig: SmsConfig | null;
+  canWriteFees?: boolean;
 }
 
 const PAYMENT_METHODS: PaymentMethod[] = [
@@ -86,12 +99,15 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
   students,
   invoices,
   payments,
+  feeSubmissions = [],
   smsLogs,
   smsConfig,
+  canWriteFees = true,
 }) => {
-  const [viewMode, setViewMode] = useState<'invoices' | 'receipts' | 'sms'>('invoices');
+  const [viewMode, setViewMode] = useState<'invoices' | 'receipts' | 'proofs' | 'sms'>('invoices');
   const [termFilter, setTermFilter] = useState<TermName>(school.currentTerm);
   const [statusFilter, setStatusFilter] = useState<'all' | InvoiceStatus>('all');
+  const [proofStatusFilter, setProofStatusFilter] = useState<'all' | FeeSubmissionStatus>('all');
   const [smsTypeFilter, setSmsTypeFilter] = useState<'all' | SmsNotificationType>('all');
 
   // Gateway & toast feedback
@@ -144,6 +160,22 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
   const [deletingInvoice, setDeletingInvoice] = useState(false);
   const [deleteInvoiceError, setDeleteInvoiceError] = useState('');
 
+  // Payment proof review & preview
+  const [previewSubmission, setPreviewSubmission] = useState<StudentFeeSubmission | null>(null);
+  const [approveTarget, setApproveTarget] = useState<StudentFeeSubmission | null>(null);
+  const [approveInvoiceId, setApproveInvoiceId] = useState('');
+  const [approveAmountStr, setApproveAmountStr] = useState('');
+  const [approveMethod, setApproveMethod] = useState<PaymentMethod>('Bank Deposit');
+  const [approveRef, setApproveRef] = useState('');
+  const [approveNote, setApproveNote] = useState('');
+  const [approveBusy, setApproveBusy] = useState(false);
+  const [approveError, setApproveError] = useState('');
+
+  const [rejectTarget, setRejectTarget] = useState<StudentFeeSubmission | null>(null);
+  const [rejectNote, setRejectNote] = useState('');
+  const [rejectBusy, setRejectBusy] = useState(false);
+  const [rejectError, setRejectError] = useState('');
+
   useEffect(() => {
     let active = true;
     fetchSmsGatewayStatus().then((status) => {
@@ -194,6 +226,26 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
   const filteredPayments = useMemo(() => {
     return payments.filter((p) => p.term === termFilter);
   }, [payments, termFilter]);
+
+  const filteredSubmissions = useMemo(() => {
+    return feeSubmissions.filter((sub) => {
+      if (sub.term !== termFilter) return false;
+      if (proofStatusFilter !== 'all' && sub.status !== proofStatusFilter) return false;
+      return true;
+    });
+  }, [feeSubmissions, proofStatusFilter, termFilter]);
+
+  const pendingProofCounts = useMemo(() => {
+    const allPending = feeSubmissions.filter((s) => s.status === 'Pending');
+    const inTerm = allPending.filter((s) => s.term === termFilter).length;
+    const firstOtherTerm = allPending.find((s) => s.term !== termFilter)?.term || null;
+    return {
+      total: allPending.length,
+      inTerm,
+      otherTermCount: allPending.length - inTerm,
+      firstOtherTerm,
+    };
+  }, [feeSubmissions, termFilter]);
 
   const filteredSmsLogs = useMemo(() => {
     return smsLogs.filter((log) => {
@@ -256,6 +308,7 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
   }, [lowBalanceCandidates, skipRecentAlerts]);
 
   const openBillModal = (scope: 'single' | 'form') => {
+    if (!canWriteFees) return;
     setBillScope(scope);
     setBillStudentId(activeStudents[0]?.id || '');
     setTuitionStr(String(school.defaultTuitionMWK));
@@ -268,6 +321,7 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
 
   const handleCreateBills = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canWriteFees) return;
     setBillError('');
     setBillingBusy(true);
     try {
@@ -295,6 +349,7 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
           examFee: exam,
           otherFee: other,
           schoolType: school.schoolType,
+          registrationCode: stu.registrationCode,
         });
       } else {
         const existingStudentIds = new Set(
@@ -327,6 +382,7 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
   };
 
   const openPaymentModal = (inv: FeeInvoice) => {
+    if (!canWriteFees) return;
     const balance = Math.max(0, inv.totalBilled - inv.totalPaid);
     setPayInvoice(inv);
     setPayAmountStr(String(balance > 0 ? balance : 0));
@@ -337,7 +393,7 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
 
   const handleRecordPayment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!payInvoice) return;
+    if (!canWriteFees || !payInvoice) return;
     const amount = Number(payAmountStr);
     if (!Number.isFinite(amount) || amount <= 0) {
       setPayError('Payment amount must be greater than MK 0.');
@@ -347,6 +403,7 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
     setPayError('');
     try {
       const receiptNo = `RCT-${new Date().getFullYear()}-${String(payments.length + 101).padStart(4, '0')}`;
+      const targetStu = studentById.get(payInvoice.studentId);
       await recordAtomicFeePayment(school.id, ownerId, {
         invoiceId: payInvoice.id,
         studentId: payInvoice.studentId,
@@ -358,6 +415,7 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
         reference: payRef.trim() || 'Bursar Counter',
         receiptNo,
         term: payInvoice.term,
+        registrationCode: targetStu?.registrationCode,
       });
 
       const targetInvoice = payInvoice;
@@ -436,7 +494,162 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
     }
   };
 
+  const openApproveModal = (sub: StudentFeeSubmission) => {
+    if (!canWriteFees) return;
+    const studentInvoices = invoices.filter((inv) => inv.studentId === sub.studentId);
+    const matched =
+      studentInvoices.find((inv) => inv.id === sub.invoiceId) ||
+      studentInvoices.find((inv) => inv.term === sub.term) ||
+      studentInvoices[0] ||
+      null;
+    setApproveTarget(sub);
+    setApproveInvoiceId(matched?.id || '');
+    setApproveAmountStr(String(sub.amount));
+    setApproveMethod(sub.method);
+    setApproveRef(sub.reference || 'Student Proof Upload');
+    setApproveNote('Verified against uploaded payment reference.');
+    setApproveError('');
+  };
+
+  const handleConfirmApprove = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canWriteFees || !approveTarget) return;
+    const targetInvoice = invoices.find((inv) => inv.id === approveInvoiceId);
+    if (!targetInvoice) {
+      setApproveError('Select a student fee invoice before approving.');
+      return;
+    }
+    const amount = Number(approveAmountStr);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setApproveError('Approved payment amount must be greater than MK 0.');
+      return;
+    }
+
+    setApproveBusy(true);
+    setApproveError('');
+    try {
+      const receiptNo = `RCT-${new Date().getFullYear()}-${String(payments.length + 101).padStart(4, '0')}`;
+      await approveStudentFeeSubmission({
+        schoolId: school.id,
+        ownerId,
+        submission: approveTarget,
+        invoice: targetInvoice,
+        amount,
+        method: approveMethod,
+        reference: approveRef.trim() || 'Student Proof Upload',
+        receiptNo,
+        reviewNote: approveNote.trim(),
+      });
+
+      const student = studentById.get(targetInvoice.studentId);
+      const nextBalance = Math.max(0, targetInvoice.totalBilled - (targetInvoice.totalPaid + amount));
+      const approvedName = approveTarget.studentName;
+      setApproveTarget(null);
+
+      const notes: string[] = [];
+      let hadIssue = false;
+
+      if (effectiveSmsConfig.autoPaymentSms) {
+        const paySms = await dispatchAndLogParentSms({
+          schoolId: school.id,
+          ownerId,
+          senderLabel: effectiveSmsConfig.senderLabel,
+          invoiceId: targetInvoice.id,
+          studentId: targetInvoice.studentId,
+          studentName: targetInvoice.studentName,
+          guardianName: student?.guardianName || 'Parent/Guardian',
+          guardianPhoneRaw: student?.guardianPhone || student?.guardianSecondaryPhone || '',
+          type: 'Payment Confirmation',
+          term: targetInvoice.term,
+          amountMWK: amount,
+          balanceAfterMWK: nextBalance,
+          totalBilledMWK: targetInvoice.totalBilled,
+          method: approveMethod,
+          receiptNo,
+        });
+        if (paySms.status === 'Sent' || paySms.status === 'Simulated') {
+          notes.push(`Payment Confirmation SMS (${paySms.status}) to ${paySms.guardianPhone}`);
+        } else {
+          hadIssue = true;
+          notes.push(`Confirmation SMS ${paySms.status}: ${paySms.errorReason}`);
+        }
+      }
+
+      if (
+        effectiveSmsConfig.autoLowBalanceSms &&
+        nextBalance > 0 &&
+        nextBalance >= effectiveSmsConfig.lowBalanceThresholdMWK
+      ) {
+        const lowSms = await dispatchAndLogParentSms({
+          schoolId: school.id,
+          ownerId,
+          senderLabel: effectiveSmsConfig.senderLabel,
+          invoiceId: targetInvoice.id,
+          studentId: targetInvoice.studentId,
+          studentName: targetInvoice.studentName,
+          guardianName: student?.guardianName || 'Parent/Guardian',
+          guardianPhoneRaw: student?.guardianPhone || student?.guardianSecondaryPhone || '',
+          type: 'Low Balance Alert',
+          term: targetInvoice.term,
+          amountMWK: amount,
+          balanceAfterMWK: nextBalance,
+          totalBilledMWK: targetInvoice.totalBilled,
+        });
+        if (lowSms.status === 'Sent' || lowSms.status === 'Simulated') {
+          notes.push(`Low Balance Alert SMS (${formatMWK(nextBalance)} due)`);
+        } else {
+          hadIssue = true;
+          notes.push(`Low Balance Alert ${lowSms.status}: ${lowSms.errorReason}`);
+        }
+      }
+
+      setSmsBanner({
+        tone: hadIssue ? 'warn' : 'success',
+        text:
+          notes.length > 0
+            ? `Approved ${approvedName} (${receiptNo}) · ${notes.join(' · ')}`
+            : `Approved payment reference for ${approvedName} (${receiptNo}).`,
+      });
+    } catch (err) {
+      setApproveError(err instanceof Error ? err.message : 'Unable to approve payment reference.');
+    } finally {
+      setApproveBusy(false);
+    }
+  };
+
+  const openRejectModal = (sub: StudentFeeSubmission) => {
+    if (!canWriteFees) return;
+    setRejectTarget(sub);
+    setRejectNote('');
+    setRejectError('');
+  };
+
+  const handleConfirmReject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canWriteFees || !rejectTarget) return;
+    setRejectBusy(true);
+    setRejectError('');
+    try {
+      await rejectStudentFeeSubmission({
+        schoolId: school.id,
+        submission: rejectTarget,
+        reviewNote: rejectNote.trim() || 'Payment reference could not be verified.',
+      });
+      const rejectedName = rejectTarget.studentName;
+      setRejectTarget(null);
+      setSmsBanner({
+        tone: 'warn',
+        text: `Marked payment proof from ${rejectedName} as Rejected.`,
+      });
+    } catch (err) {
+      setRejectError(err instanceof Error ? err.message : 'Unable to reject payment reference.');
+    } finally {
+      setRejectBusy(false);
+    }
+  };
+
   const handleSendSingleLowBalanceSms = async (inv: FeeInvoice) => {
+    if (!canWriteFees) return;
     const balance = Math.max(0, inv.totalBilled - inv.totalPaid);
     if (balance <= 0) return;
     const student = studentById.get(inv.studentId);
@@ -475,7 +688,7 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
   };
 
   const handleBatchSendLowBalanceAlerts = async () => {
-    if (batchSendTargets.length === 0) return;
+    if (!canWriteFees || batchSendTargets.length === 0) return;
     setBatchSending(true);
     setBatchError('');
     let sentCount = 0;
@@ -522,6 +735,7 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
   };
 
   const openPolicyModal = () => {
+    if (!canWriteFees) return;
     setPolicyAutoPay(effectiveSmsConfig.autoPaymentSms);
     setPolicyAutoLow(effectiveSmsConfig.autoLowBalanceSms);
     setPolicyThresholdStr(String(effectiveSmsConfig.lowBalanceThresholdMWK));
@@ -532,6 +746,7 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
 
   const handleSavePolicy = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canWriteFees) return;
     setPolicySaving(true);
     setPolicyError('');
     try {
@@ -586,6 +801,23 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
           p.amount,
         ])
       );
+    } else if (viewMode === 'proofs') {
+      downloadCSV(
+        `${school.name.toLowerCase().replace(/\s+/g, '-')}-payment-proofs-${termFilter}.csv`,
+        ['Submitted Date', 'Student', 'Form', 'Term', 'Method', 'Reference', 'Amount (MWK)', 'Status', 'Receipt #', 'Review Note'],
+        filteredSubmissions.map((s) => [
+          s.submittedDate,
+          s.studentName,
+          `Form ${s.formLevel}${s.stream}`,
+          s.term,
+          s.method,
+          s.reference || '',
+          s.amount,
+          s.status,
+          s.receiptNo || '',
+          s.reviewNote || '',
+        ])
+      );
     } else {
       downloadCSV(
         `${school.name.toLowerCase().replace(/\s+/g, '-')}-sms-alerts-${termFilter}.csv`,
@@ -620,6 +852,8 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
       ? filteredInvoices.length > 0
       : viewMode === 'receipts'
       ? filteredPayments.length > 0
+      : viewMode === 'proofs'
+      ? filteredSubmissions.length > 0
       : filteredSmsLogs.length > 0;
 
   return (
@@ -721,30 +955,34 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={openPolicyModal}
-              className="inline-flex items-center gap-1.5 min-h-[40px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>SMS Policy</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setBatchError('');
-                setBatchSmsOpen(true);
-              }}
-              disabled={lowBalanceCandidates.length === 0}
-              className="inline-flex items-center gap-1.5 min-h-[40px] px-3 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-950/30 text-xs font-semibold text-amber-900 dark:text-amber-200 hover:bg-amber-100/70 dark:hover:bg-amber-950/50 disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <BellRing className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Send Balance Alerts ({lowBalanceCandidates.length})</span>
-            </button>
+            {canWriteFees && (
+              <>
+                <button
+                  type="button"
+                  onClick={openPolicyModal}
+                  className="inline-flex items-center gap-1.5 min-h-[40px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>SMS Policy</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBatchError('');
+                    setBatchSmsOpen(true);
+                  }}
+                  disabled={lowBalanceCandidates.length === 0}
+                  className="inline-flex items-center gap-1.5 min-h-[40px] px-3 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-950/30 text-xs font-semibold text-amber-900 dark:text-amber-200 hover:bg-amber-100/70 dark:hover:bg-amber-950/50 disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <BellRing className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Send Balance Alerts ({lowBalanceCandidates.length})</span>
+                </button>
+              </>
+            )}
             <button
               type="button"
               onClick={handleDownloadPdf}
-              disabled={viewMode === 'sms' ? filteredInvoices.length === 0 : !hasRowsForExport}
+              disabled={viewMode === 'sms' || viewMode === 'proofs' ? filteredInvoices.length === 0 : !hasRowsForExport}
               className="inline-flex items-center gap-1.5 min-h-[40px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <FileDown className="w-3.5 h-3.5" aria-hidden="true" />
@@ -759,34 +997,47 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
               <Download className="w-3.5 h-3.5" aria-hidden="true" />
               <span>Export CSV</span>
             </button>
-            <button
-              type="button"
-              onClick={() => openBillModal('form')}
-              disabled={activeStudents.length === 0}
-              className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Layers className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Bill Form</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => openBillModal('single')}
-              disabled={activeStudents.length === 0}
-              className="inline-flex items-center gap-1.5 min-h-[40px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>New Invoice</span>
-            </button>
+            {canWriteFees && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => openBillModal('form')}
+                  disabled={activeStudents.length === 0}
+                  className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <Layers className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Bill Form</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openBillModal('single')}
+                  disabled={activeStudents.length === 0}
+                  className="inline-flex items-center gap-1.5 min-h-[40px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>New Invoice</span>
+                </button>
+              </>
+            )}
           </div>
         </div>
 
+        {!canWriteFees && (
+          <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/70 px-3.5 py-2.5 flex items-center gap-2.5 text-xs text-slate-700 dark:text-slate-300">
+            <Lock className="w-3.5 h-3.5 text-slate-500 shrink-0" aria-hidden="true" />
+            <span>
+              <strong>Read-Only View:</strong> Invoicing, fee collection, and SMS billing alerts are assigned to the School Bursar and Head Teacher. Use the Role Switcher in the sidebar if you need to act as School Bursar.
+            </span>
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-900">
+            <div className="flex flex-wrap items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-900">
               <button
                 type="button"
                 onClick={() => setViewMode('invoices')}
-                className={`min-h-[36px] px-3 rounded-lg text-xs font-semibold cursor-pointer ${
+                className={`min-h-[36px] px-3 rounded-lg text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0 ${
                   viewMode === 'invoices'
                     ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
                     : 'text-slate-600 dark:text-slate-400'
@@ -797,7 +1048,7 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
               <button
                 type="button"
                 onClick={() => setViewMode('receipts')}
-                className={`min-h-[36px] px-3 rounded-lg text-xs font-semibold cursor-pointer ${
+                className={`min-h-[36px] px-3 rounded-lg text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0 ${
                   viewMode === 'receipts'
                     ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
                     : 'text-slate-600 dark:text-slate-400'
@@ -807,8 +1058,24 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
               </button>
               <button
                 type="button"
+                onClick={() => setViewMode('proofs')}
+                className={`min-h-[36px] px-3 rounded-lg text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0 inline-flex items-center gap-1.5 ${
+                  viewMode === 'proofs'
+                    ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400'
+                }`}
+              >
+                <span>Proofs ({filteredSubmissions.length})</span>
+                {pendingProofCounts.total > 0 && (
+                  <span className="font-mono text-[11px] font-bold text-amber-700 dark:text-amber-400">
+                    · {pendingProofCounts.total} pending
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
                 onClick={() => setViewMode('sms')}
-                className={`min-h-[36px] px-3 rounded-lg text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5 ${
+                className={`min-h-[36px] px-3 rounded-lg text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0 inline-flex items-center gap-1.5 ${
                   viewMode === 'sms'
                     ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
                     : 'text-slate-600 dark:text-slate-400'
@@ -842,6 +1109,25 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
                   onClick={() => setStatusFilter(st)}
                   className={`min-h-[36px] px-3 rounded-lg text-xs font-medium cursor-pointer ${
                     statusFilter === st
+                      ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  {st === 'all' ? 'All' : st}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {viewMode === 'proofs' && (
+            <div className="flex items-center gap-1.5">
+              {(['all', 'Pending', 'Approved', 'Rejected'] as const).map((st) => (
+                <button
+                  key={st}
+                  type="button"
+                  onClick={() => setProofStatusFilter(st)}
+                  className={`min-h-[36px] px-3 rounded-lg text-xs font-medium cursor-pointer ${
+                    proofStatusFilter === st
                       ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900'
                       : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
                   }`}
@@ -897,7 +1183,9 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
                     <th className="py-3 px-4 font-medium text-right">Paid</th>
                     <th className="py-3 px-4 font-medium text-right">Balance</th>
                     <th className="py-3 px-4 font-medium">Status</th>
-                    <th className="py-3 px-4 font-medium text-right">Action</th>
+                    {canWriteFees && (
+                      <th className="py-3 px-4 font-medium text-right">Action</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
@@ -943,47 +1231,49 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
                             {inv.status}
                           </span>
                         </td>
-                        <td className="py-3 px-4 text-right whitespace-nowrap">
-                          <div className="inline-flex items-center gap-1.5">
-                            {balance > 0 && (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={() => handleSendSingleLowBalanceSms(inv)}
-                                  disabled={isSendingSms}
-                                  title={
-                                    formattedPhone
-                                      ? `Send Low Balance SMS to ${formattedPhone}`
-                                      : 'Guardian phone missing — click to log skipped check'
-                                  }
-                                  className="inline-flex items-center gap-1 min-h-[36px] px-2.5 rounded-lg border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 text-xs font-medium disabled:opacity-50 cursor-pointer"
-                                >
-                                  <BellRing className="w-3.5 h-3.5" aria-hidden="true" />
-                                  <span>{isSendingSms ? 'Sending...' : 'Alert'}</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => openPaymentModal(inv)}
-                                  className="inline-flex items-center gap-1 min-h-[36px] px-3 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer"
-                                >
-                                  <Banknote className="w-3.5 h-3.5" aria-hidden="true" />
-                                  <span>Pay</span>
-                                </button>
-                              </>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setDeleteInvoiceError('');
-                                setConfirmInvoice(inv);
-                              }}
-                              aria-label={`Delete invoice for ${inv.studentName}`}
-                              className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </td>
+                        {canWriteFees && (
+                          <td className="py-3 px-4 text-right whitespace-nowrap">
+                            <div className="inline-flex items-center gap-1.5">
+                              {balance > 0 && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSendSingleLowBalanceSms(inv)}
+                                    disabled={isSendingSms}
+                                    title={
+                                      formattedPhone
+                                        ? `Send Low Balance SMS to ${formattedPhone}`
+                                        : 'Guardian phone missing — click to log skipped check'
+                                    }
+                                    className="inline-flex items-center gap-1 min-h-[36px] px-2.5 rounded-lg border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 text-xs font-medium disabled:opacity-50 cursor-pointer"
+                                  >
+                                    <BellRing className="w-3.5 h-3.5" aria-hidden="true" />
+                                    <span>{isSendingSms ? 'Sending...' : 'Alert'}</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => openPaymentModal(inv)}
+                                    className="inline-flex items-center gap-1 min-h-[36px] px-3 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer"
+                                  >
+                                    <Banknote className="w-3.5 h-3.5" aria-hidden="true" />
+                                    <span>Pay</span>
+                                  </button>
+                                </>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDeleteInvoiceError('');
+                                  setConfirmInvoice(inv);
+                                }}
+                                aria-label={`Delete invoice for ${inv.studentName}`}
+                                className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        )}
                       </tr>
                     );
                   })}
@@ -1032,6 +1322,146 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
               </table>
             </div>
           )
+        ) : viewMode === 'proofs' ? (
+          <>
+            {pendingProofCounts.otherTermCount > 0 && pendingProofCounts.firstOtherTerm && (
+              <div className="px-4 py-2.5 border-b border-amber-200 dark:border-amber-900 bg-amber-50/70 dark:bg-amber-950/30 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-900 dark:text-amber-200">
+                <span>
+                  {pendingProofCounts.otherTermCount} pending payment proof{pendingProofCounts.otherTermCount === 1 ? '' : 's'} submitted under {pendingProofCounts.firstOtherTerm}.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setTermFilter(pendingProofCounts.firstOtherTerm!)}
+                  className="font-semibold underline underline-offset-2 cursor-pointer"
+                >
+                  Switch to {pendingProofCounts.firstOtherTerm}
+                </button>
+              </div>
+            )}
+            {filteredSubmissions.length === 0 ? (
+              <div className="py-12 px-6 text-center text-sm text-slate-500 dark:text-slate-400">
+                No student payment references uploaded for {termFilter}
+                {proofStatusFilter !== 'all' ? ` with status ${proofStatusFilter}` : ''}.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 text-xs text-slate-500 dark:text-slate-400">
+                      <th className="py-3 px-4 font-medium">Date</th>
+                      <th className="py-3 px-4 font-medium">Student</th>
+                      <th className="py-3 px-4 font-medium">Channel &amp; Ref</th>
+                      <th className="py-3 px-4 font-medium">Proof File</th>
+                      <th className="py-3 px-4 font-medium text-right">Amount</th>
+                      <th className="py-3 px-4 font-medium">Status</th>
+                      <th className="py-3 px-4 font-medium text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                    {filteredSubmissions.map((sub) => (
+                      <tr key={sub.id} className="align-top hover:bg-slate-50/80 dark:hover:bg-slate-800/30">
+                        <td className="py-3 px-4 font-mono tabular-nums text-xs text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                          {sub.submittedDate}
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="font-medium text-slate-900 dark:text-slate-100">
+                            {sub.studentName}
+                          </div>
+                          <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 mt-0.5">
+                            Form {sub.formLevel}{sub.stream} · {sub.admissionNo}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="text-xs font-medium text-slate-800 dark:text-slate-200">
+                            {sub.method}
+                          </div>
+                          <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 mt-0.5">
+                            {sub.reference || '—'}
+                          </div>
+                          {sub.notes && (
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 max-w-xs truncate">
+                              {sub.notes}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="inline-flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300">
+                            {sub.fileFormat === 'pdf' ? (
+                              <FileText className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" aria-hidden="true" />
+                            ) : (
+                              <ImageIcon className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400 shrink-0" aria-hidden="true" />
+                            )}
+                            <span className="truncate max-w-[160px]">{sub.fileName}</span>
+                          </div>
+                          <div className="text-[11px] font-mono text-slate-400 mt-0.5">
+                            {sub.fileFormat.toUpperCase()} · {formatFileSizeLabel(sub.fileSizeBytes)}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 text-right font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                          {formatMWK(sub.amount)}
+                        </td>
+                        <td className="py-3 px-4">
+                          <div
+                            className={`text-xs font-semibold ${
+                              sub.status === 'Approved'
+                                ? 'text-emerald-700 dark:text-emerald-400'
+                                : sub.status === 'Rejected'
+                                ? 'text-rose-600 dark:text-rose-400'
+                                : 'text-amber-700 dark:text-amber-400'
+                            }`}
+                          >
+                            {sub.status}
+                          </div>
+                          {sub.receiptNo && (
+                            <div className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400 mt-0.5">
+                              {sub.receiptNo}
+                            </div>
+                          )}
+                          {sub.reviewNote && (
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 max-w-xs">
+                              {sub.reviewNote}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                          <div className="inline-flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setPreviewSubmission(sub)}
+                              className="inline-flex items-center gap-1 min-h-[34px] px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+                              <span>View</span>
+                            </button>
+                            {canWriteFees && sub.status === 'Pending' && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => openApproveModal(sub)}
+                                  className="inline-flex items-center gap-1 min-h-[34px] px-2.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer"
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" />
+                                  <span>Approve</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openRejectModal(sub)}
+                                  className="inline-flex items-center gap-1 min-h-[34px] px-2.5 rounded-lg border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-xs font-semibold cursor-pointer"
+                                >
+                                  <XCircle className="w-3.5 h-3.5" aria-hidden="true" />
+                                  <span>Reject</span>
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
         ) : filteredSmsLogs.length === 0 ? (
           <div className="py-12 px-6 text-center text-sm text-slate-500 dark:text-slate-400 space-y-2">
             <div>
@@ -1645,7 +2075,8 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
           setDeletingInvoice(true);
           setDeleteInvoiceError('');
           try {
-            await removeFeeInvoice(school.id, confirmInvoice.id);
+            const stu = studentById.get(confirmInvoice.studentId);
+            await removeFeeInvoice(school.id, confirmInvoice.id, stu?.registrationCode);
             setConfirmInvoice(null);
           } catch (err) {
             setDeleteInvoiceError(
@@ -1655,6 +2086,222 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
             setDeletingInvoice(false);
           }
         }}
+      />
+
+      {/* Approve Student Payment Proof Modal */}
+      {approveTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div>
+                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                  Approve Payment Reference
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  {approveTarget.studentName} · {approveTarget.term}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setApproveTarget(null)}
+                className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmApprove} className="mt-4 space-y-4">
+              {approveError && (
+                <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
+                  {approveError}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Apply to Invoice
+                </label>
+                {(() => {
+                  const stuInvs = invoices.filter((inv) => inv.studentId === approveTarget.studentId);
+                  if (stuInvs.length === 0) {
+                    return (
+                      <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-950/30 px-3.5 py-2.5 text-xs text-amber-900 dark:text-amber-200">
+                        No fee invoice exists for {approveTarget.studentName} yet. Create a term invoice under the Invoices tab before approving this proof.
+                      </div>
+                    );
+                  }
+                  return (
+                    <select
+                      value={approveInvoiceId}
+                      onChange={(e) => setApproveInvoiceId(e.target.value)}
+                      required
+                      className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"
+                    >
+                      {stuInvs.map((inv) => (
+                        <option key={inv.id} value={inv.id}>
+                          {inv.term} {inv.academicYear} · Balance {formatMWK(Math.max(0, inv.totalBilled - inv.totalPaid))}
+                        </option>
+                      ))}
+                    </select>
+                  );
+                })()}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Verified Amount (MWK)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    required
+                    value={approveAmountStr}
+                    onChange={(e) => setApproveAmountStr(e.target.value)}
+                    className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono text-sm font-semibold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Channel
+                  </label>
+                  <select
+                    value={approveMethod}
+                    onChange={(e) => setApproveMethod(e.target.value as PaymentMethod)}
+                    className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"
+                  >
+                    {PAYMENT_METHODS.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Transaction / Deposit Reference
+                </label>
+                <input
+                  type="text"
+                  maxLength={80}
+                  value={approveRef}
+                  onChange={(e) => setApproveRef(e.target.value)}
+                  className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Bursar Note (Visible to Student)
+                </label>
+                <input
+                  type="text"
+                  maxLength={240}
+                  value={approveNote}
+                  onChange={(e) => setApproveNote(e.target.value)}
+                  className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"
+                />
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setApproveTarget(null)}
+                  className="min-h-[42px] px-4 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={approveBusy || !approveInvoiceId}
+                  className="min-h-[42px] px-5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                >
+                  {approveBusy ? 'Recording...' : 'Approve & Issue Receipt'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Reject Student Payment Proof Modal */}
+      {rejectTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div>
+                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                  Reject Payment Reference
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  {rejectTarget.studentName} · {formatMWK(rejectTarget.amount)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRejectTarget(null)}
+                className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmReject} className="mt-4 space-y-4">
+              {rejectError && (
+                <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
+                  {rejectError}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Reason for Rejection (Visible to Student)
+                </label>
+                <textarea
+                  rows={3}
+                  maxLength={240}
+                  required
+                  value={rejectNote}
+                  onChange={(e) => setRejectNote(e.target.value)}
+                  placeholder="e.g. Deposit slip unclear or transaction reference not found in bank statement."
+                  className="w-full p-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"
+                />
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRejectTarget(null)}
+                  className="min-h-[42px] px-4 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={rejectBusy}
+                  className="min-h-[42px] px-5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                >
+                  {rejectBusy ? 'Updating...' : 'Confirm Rejection'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <PaymentProofPreviewModal
+        submission={previewSubmission}
+        onClose={() => setPreviewSubmission(null)}
       />
     </div>
   );

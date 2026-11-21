@@ -1,4 +1,8 @@
-import type { DigitalResourceCategory, DigitalResourceFormLevel } from './types';
+import type {
+  DigitalResourceCategory,
+  DigitalResourceFormLevel,
+  DigitalStorageFormat,
+} from './types';
 
 export interface OfflineDigitalResourceRecord {
   id: string;
@@ -11,12 +15,18 @@ export interface OfflineDigitalResourceRecord {
   examYear: string;
   summary: string;
   content: string;
+  storageFormat?: DigitalStorageFormat;
+  fileName?: string;
+  mimeType?: string;
+  fileSizeBytes?: number;
+  chunkCount?: number;
+  fileBytes?: Uint8Array;
   allowOffline: boolean;
   savedAt: string;
 }
 
 const DB_NAME = 'SecSchoolHubOfflineLibrary';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = 'resources';
 
 function openOfflineDb(): Promise<IDBDatabase | null> {

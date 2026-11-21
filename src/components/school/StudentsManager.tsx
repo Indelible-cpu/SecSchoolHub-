@@ -53,6 +53,7 @@ import {
   StudentPayload,
 } from '../../school/firestoreService';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
+import { StudentPerformanceTrends } from './StudentPerformanceTrends';
 
 interface StudentsManagerProps {
   school: School;
@@ -123,6 +124,7 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
   const [errorMsg, setErrorMsg] = useState('');
 
   const [detailStudent, setDetailStudent] = useState<Student | null>(null);
+  const [detailTab, setDetailTab] = useState<'overview' | 'trends'>('overview');
   const [reportStudent, setReportStudent] = useState<Student | null>(null);
   const [confirmStudent, setConfirmStudent] = useState<Student | null>(null);
   const [deletingStudent, setDeletingStudent] = useState(false);
@@ -689,7 +691,10 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                       <div className="inline-flex items-center gap-1">
                         <button
                           type="button"
-                          onClick={() => setDetailStudent(s)}
+                          onClick={() => {
+                            setDetailTab('overview');
+                            setDetailStudent(s);
+                          }}
                           className="inline-flex items-center gap-1 min-h-[36px] px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-800 dark:text-slate-200 cursor-pointer"
                         >
                           <Eye className="w-3.5 h-3.5" aria-hidden="true" />
@@ -766,6 +771,52 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
               </button>
             </div>
 
+            {canViewAcademicReport && (
+              <div
+                role="tablist"
+                aria-label="Student profile sections"
+                className="inline-flex items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-900"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={detailTab === 'overview'}
+                  onClick={() => setDetailTab('overview')}
+                  className={`min-h-[34px] px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                    detailTab === 'overview'
+                      ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                  }`}
+                >
+                  Profile &amp; Library
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={detailTab === 'trends'}
+                  onClick={() => setDetailTab('trends')}
+                  className={`min-h-[34px] px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                    detailTab === 'trends'
+                      ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                  }`}
+                >
+                  Performance Trends
+                </button>
+              </div>
+            )}
+
+            {canViewAcademicReport && detailTab === 'trends' ? (
+              <StudentPerformanceTrends
+                studentId={detailData.student.id}
+                studentName={detailData.student.fullName}
+                formLevel={detailData.student.formLevel}
+                academicYear={school.academicYear}
+                assessments={assessments}
+                compact
+              />
+            ) : (
+              <>
             {/* Enrollment & Quick Summary Strip */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
               <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200/70 dark:border-slate-800">
@@ -818,6 +869,15 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                       : 'No marks'
                     : 'Academic Staff'}
                 </div>
+                {canViewAcademicReport && (
+                  <button
+                    type="button"
+                    onClick={() => setDetailTab('trends')}
+                    className="mt-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer"
+                  >
+                    View Performance Trends →
+                  </button>
+                )}
               </div>
               <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200/70 dark:border-slate-800">
                 <div className="text-slate-500 dark:text-slate-400">{school.currentTerm} Fee Balance</div>
@@ -1033,6 +1093,8 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                   </div>
                 )}
               </div>
+            )}
+              </>
             )}
 
             {/* Detail Modal Footer Actions */}

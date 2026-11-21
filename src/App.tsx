@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { collection, doc, getDoc, onSnapshot, query, where } from 'firebase/firestore';
 import {
@@ -34,17 +34,19 @@ import {
   LibraryReservation,
   LibraryTransaction,
   School,
+  SchoolAnnouncement,
   SchoolSection,
   SchoolSubject,
   SmsConfig,
   SmsLog,
   StaffLink,
   Student,
+  StudentFeeSubmission,
   Teacher,
   WorkspaceRole,
 } from './school/types';
 import { getRolePermissions, normalizeRegistrationCode } from './school/malawi';
-import { upsertUserProfile } from './school/firestoreService';
+import { syncMissingPortalFeeInvoices, upsertUserProfile } from './school/firestoreService';
 import { SchoolOnboarding } from './components/school/SchoolOnboarding';
 import { OverviewDashboard } from './components/school/OverviewDashboard';
 import { StudentsManager } from './components/school/StudentsManager';
@@ -77,6 +79,17 @@ const MOBILE_GRID_COLS: Record<number, string> = {
   6: 'grid-cols-6',
   7: 'grid-cols-7',
 };
+
+const ADMIN_ROLE_OPTIONS: { value: WorkspaceRole; label: string }[] = [
+  { value: 'Owner', label: 'School Admin (Read-Only Ops)' },
+  { value: 'Head Teacher', label: 'Act as Head Teacher' },
+  { value: 'Deputy Head', label: 'Act as Deputy Head' },
+  { value: 'Head of Department', label: 'Act as Head of Department' },
+  { value: 'Form Teacher', label: 'Act as Form Teacher' },
+  { value: 'Subject Teacher', label: 'Act as Subject Teacher' },
+  { value: 'School Bursar', label: 'Act as School Bursar' },
+  { value: 'School Librarian', label: 'Act as School Librarian' },
+];
 
 export default function App() {
   const [authReady, setAuthReady] = useState(false);
@@ -117,6 +130,7 @@ export default function App() {
   const [creatingAnotherSchool, setCreatingAnotherSchool] = useState(false);
   const [adminCheckLoading, setAdminCheckLoading] = useState(false);
   const [isAdminDoc, setIsAdminDoc] = useState(false);
+  const [adminActingRole, setAdminActingRole] = useState<WorkspaceRole | null>(null);
 
   const [students, setStudents] = useState<Student[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
@@ -124,6 +138,7 @@ export default function App() {
   const [assessments, setAssessments] = useState<Assessment[]>([]);
   const [invoices, setInvoices] = useState<FeeInvoice[]>([]);
   const [payments, setPayments] = useState<FeePayment[]>([]);
+  const [feeSubmissions, setFeeSubmissions] = useState<StudentFeeSubmission[]>([]);
   const [smsLogs, setSmsLogs] = useState<SmsLog[]>([]);
   const [smsConfig, setSmsConfig] = useState<SmsConfig | null>(null);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
@@ -132,6 +147,8 @@ export default function App() {
   const [libraryTransactions, setLibraryTransactions] = useState<LibraryTransaction[]>([]);
   const [libraryReservations, setLibraryReservations] = useState<LibraryReservation[]>([]);
   const [digitalLibraryResources, setDigitalLibraryResources] = useState<DigitalLibraryResource[]>([]);
+  const [announcements, setAnnouncements] = useState<SchoolAnnouncement[]>([]);
+  const syncedFeeMirrorRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     testConnection();
@@ -160,6 +177,7 @@ export default function App() {
         setStaffLinksLoading(false);
         setAdminCheckLoading(false);
         setIsAdminDoc(false);
+        setAdminActingRole(null);
         setPortalOverride('auto');
         setCreatingAnotherSchool(false);
         setStudents([]);
@@ -168,6 +186,7 @@ export default function App() {
         setAssessments([]);
         setInvoices([]);
         setPayments([]);
+        setFeeSubmissions([]);
         setSmsLogs([]);
         setSmsConfig(null);
         setAttendance([]);
@@ -176,6 +195,7 @@ export default function App() {
         setLibraryTransactions([]);
         setLibraryReservations([]);
         setDigitalLibraryResources([]);
+        setAnnouncements([]);
         return;
       }
 
@@ -354,8 +374,20 @@ export default function App() {
 
   const activeSchool = activeEntry?.school || null;
   const activeRole: WorkspaceRole = activeEntry?.role || 'Owner';
-  const activeStaffLink = activeEntry?.staffLink || null;
-  const rolePermissions = useMemo(() => getRolePermissions(activeRole), [activeRole]);
+  const isTrueOwner = activeEntry?.role === 'Owner';
+  const linkedStaffForActiveSchool = useMemo(() => {
+    if (!activeSchool) return null;
+    return activeStaffLinks.find((l) => l.schoolId === activeSchool.id) || null;
+  }, [activeSchool, activeStaffLinks]);
+  const effectiveRole: WorkspaceRole =
+    isTrueOwner && adminActingRole ? adminActingRole : activeRole;
+  const activeStaffLink =
+    isTrueOwner && adminActingRole
+      ? linkedStaffForActiveSchool && linkedStaffForActiveSchool.roleTitle === adminActingRole
+        ? linkedStaffForActiveSchool
+        : null
+      : activeEntry?.staffLink || null;
+  const rolePermissions = useMemo(() => getRolePermissions(effectiveRole), [effectiveRole]);
   const isPlatformAdmin = useMemo(() => {
     if (!user) return false;
     const normalizedEmail = (user.email || '').trim().toLowerCase();
@@ -400,6 +432,7 @@ export default function App() {
       setLibraryTransactions([]);
       setLibraryReservations([]);
       setDigitalLibraryResources([]);
+      setAnnouncements([]);
       return;
     }
 
@@ -407,6 +440,28 @@ export default function App() {
     const schoolOwnerId = activeSchool.ownerId;
 
     const unsubs: (() => void)[] = [];
+
+    // Announcements readable by all active school staff
+    unsubs.push(
+      onSnapshot(
+        query(collection(db, 'schools', schoolId, 'announcements'), where('ownerId', '==', schoolOwnerId)),
+        (snap) => {
+          const list = snap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<SchoolAnnouncement, 'id'>),
+          }));
+          list.sort((a, b) => {
+            const dateCmp = (b.publishedDate || '').localeCompare(a.publishedDate || '');
+            if (dateCmp !== 0) return dateCmp;
+            const tA = a.createdAt?.toMillis?.() || 0;
+            const tB = b.createdAt?.toMillis?.() || 0;
+            return tB - tA;
+          });
+          setAnnouncements(list);
+        },
+        (err) => handleFirestoreError(err, OperationType.LIST, `schools/${schoolId}/announcements`)
+      )
+    );
 
     // Students list is readable by all active school staff (Owner, Head, Deputy, Teachers, Bursar)
     unsubs.push(
@@ -468,6 +523,25 @@ export default function App() {
       );
       unsubs.push(
         onSnapshot(
+          query(collection(db, 'schools', schoolId, 'feeSubmissions'), where('ownerId', '==', schoolOwnerId)),
+          (snap) => {
+            const list = snap.docs.map((d) => ({
+              id: d.id,
+              ...(d.data() as Omit<StudentFeeSubmission, 'id'>),
+            }));
+            list.sort((a, b) => {
+              const tA = a.createdAt?.toMillis?.() || 0;
+              const tB = b.createdAt?.toMillis?.() || 0;
+              if (tA !== tB) return tB - tA;
+              return (b.submittedDate || '').localeCompare(a.submittedDate || '');
+            });
+            setFeeSubmissions(list);
+          },
+          (err) => handleFirestoreError(err, OperationType.LIST, `schools/${schoolId}/feeSubmissions`)
+        )
+      );
+      unsubs.push(
+        onSnapshot(
           query(collection(db, 'schools', schoolId, 'smsLogs'), where('ownerId', '==', schoolOwnerId)),
           (snap) => {
             const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<SmsLog, 'id'>) }));
@@ -493,6 +567,7 @@ export default function App() {
     } else {
       setInvoices([]);
       setPayments([]);
+      setFeeSubmissions([]);
       setSmsLogs([]);
       setSmsConfig(null);
     }
@@ -646,6 +721,24 @@ export default function App() {
     user,
   ]);
 
+  // Backfill any pre-existing school invoices onto student portal mirrors once per school session
+  useEffect(() => {
+    if (
+      !activeSchool ||
+      !rolePermissions.canWriteFees ||
+      students.length === 0 ||
+      invoices.length === 0
+    ) {
+      return;
+    }
+    const syncKey = `${activeSchool.id}_${students.length}_${invoices.length}`;
+    if (syncedFeeMirrorRef.current.has(syncKey)) return;
+    syncedFeeMirrorRef.current.add(syncKey);
+    syncMissingPortalFeeInvoices(activeSchool.id, activeSchool.ownerId, students, invoices).catch(
+      () => undefined
+    );
+  }, [activeSchool, invoices, rolePermissions.canWriteFees, students]);
+
   const handleGoogleSignIn = async () => {
     setAuthError('');
     setSigningIn(true);
@@ -681,7 +774,7 @@ export default function App() {
       const portalSnap = await getDoc(doc(db, 'studentPortals', normalized));
       if (!portalSnap.exists()) {
         setAuthError(
-          'Registration code not found. Check the code with your school administrator or form master.'
+          'Registration code not found. Check the code with your school administrator or form teacher.'
         );
         return;
       }
@@ -740,6 +833,7 @@ export default function App() {
   const handleSchoolSelected = async (schoolId: string) => {
     setActiveSchoolId(schoolId);
     setCreatingAnotherSchool(false);
+    setAdminActingRole(null);
     setPortalOverride('workspace');
     setActiveSection('overview');
     if (user) {
@@ -915,7 +1009,16 @@ export default function App() {
     <div className="min-h-screen flex bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100">
       {/* Desktop Left Sidebar */}
       <aside className="hidden lg:flex lg:flex-col lg:w-64 shrink-0 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-[#161B22]">
-        <div className="h-16 px-5 flex items-center border-b border-slate-200 dark:border-slate-800">
+        <div className="h-16 px-5 flex items-center gap-2.5 border-b border-slate-200 dark:border-slate-800">
+          {activeSchool.logoDataUrl && (
+            <div className="h-9 w-9 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-hidden shrink-0 flex items-center justify-center">
+              <img
+                src={activeSchool.logoDataUrl}
+                alt={`${activeSchool.name} logo`}
+                className="h-full w-full object-contain p-0.5"
+              />
+            </div>
+          )}
           <span className="text-base font-bold tracking-tight text-slate-900 dark:text-white truncate">
             {activeSchool.name}
           </span>
@@ -965,6 +1068,32 @@ export default function App() {
         </nav>
 
         <div className="p-4 border-t border-slate-200 dark:border-slate-800 space-y-3">
+          {isTrueOwner && (
+            <div>
+              <label
+                htmlFor="admin-role-switcher"
+                className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1"
+              >
+                Role Mode
+              </label>
+              <select
+                id="admin-role-switcher"
+                aria-label="Act as designated role"
+                value={adminActingRole || 'Owner'}
+                onChange={(e) => {
+                  const val = e.target.value as WorkspaceRole;
+                  setAdminActingRole(val === 'Owner' ? null : val);
+                }}
+                className="w-full min-h-[36px] px-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-800 dark:text-slate-200"
+              >
+                {ADMIN_ROLE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="text-xs">
             <div className="font-semibold text-emerald-700 dark:text-emerald-400 truncate">
               {rolePermissions.roleLabel}
@@ -991,6 +1120,15 @@ export default function App() {
         <header className="sticky top-0 z-30 h-14 lg:h-16 bg-white/95 dark:bg-[#161B22]/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800">
           <div className="h-full px-4 sm:px-6 flex items-center justify-between gap-4">
             <div className="min-w-0 flex items-center gap-2 text-sm">
+              {activeSchool.logoDataUrl && (
+                <div className="lg:hidden h-8 w-8 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-hidden shrink-0 flex items-center justify-center">
+                  <img
+                    src={activeSchool.logoDataUrl}
+                    alt={`${activeSchool.name} logo`}
+                    className="h-full w-full object-contain p-0.5"
+                  />
+                </div>
+              )}
               <span className="lg:hidden font-bold text-slate-900 dark:text-white truncate">
                 {activeSchool.name}
               </span>
@@ -1004,6 +1142,37 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
+              {isTrueOwner && !adminActingRole && (
+                <select
+                  aria-label="Act as designated role (mobile)"
+                  value="Owner"
+                  onChange={(e) => {
+                    const val = e.target.value as WorkspaceRole;
+                    setAdminActingRole(val === 'Owner' ? null : val);
+                  }}
+                  className="lg:hidden max-w-[150px] min-h-[36px] px-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-800 dark:text-slate-200"
+                >
+                  {ADMIN_ROLE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {isTrueOwner && adminActingRole && (
+                <div className="flex items-center gap-2 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-2.5 py-1.5 text-xs">
+                  <span className="hidden sm:inline font-medium text-amber-800 dark:text-amber-300">
+                    Acting as {rolePermissions.roleLabel}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setAdminActingRole(null)}
+                    className="font-semibold text-amber-900 dark:text-amber-200 hover:underline whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    Return to Admin
+                  </button>
+                </div>
+              )}
               <button
                 type="button"
                 onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
@@ -1039,6 +1208,8 @@ export default function App() {
               payments={payments}
               attendance={attendance}
               libraryLoans={libraryLoans}
+              announcements={announcements}
+              authorDisplayName={activeStaffLink?.staffName || user.displayName || 'School Admin'}
               onNavigate={setActiveSection}
             />
           )}
@@ -1068,6 +1239,7 @@ export default function App() {
               students={students}
               assessments={assessments}
               schoolSubjects={schoolSubjects}
+              canWriteMarks={rolePermissions.canWriteMarks}
               onOpenStaffSettings={
                 rolePermissions.allowedSections.includes('staff')
                   ? () => setActiveSection('staff')
@@ -1083,8 +1255,10 @@ export default function App() {
               students={students}
               invoices={invoices}
               payments={payments}
+              feeSubmissions={feeSubmissions}
               smsLogs={smsLogs}
               smsConfig={smsConfig}
+              canWriteFees={rolePermissions.canWriteFees}
             />
           )}
 
@@ -1094,6 +1268,7 @@ export default function App() {
               ownerId={activeSchool.ownerId}
               students={students}
               attendance={attendance}
+              canWriteAttendance={rolePermissions.canWriteAttendance}
             />
           )}
 
@@ -1131,12 +1306,16 @@ export default function App() {
         </main>
       </div>
 
-      {/* Mobile Bottom Navigation Bar */}
+      {/* Compact Centered Mobile Bottom Navigation Bar */}
       <nav
-        className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-[#161B22]/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 pb-safe"
+        className="lg:hidden fixed bottom-3 left-0 right-0 z-40 px-3 pointer-events-none pb-[env(safe-area-inset-bottom)] print:hidden"
         aria-label="Mobile sections"
       >
-        <div className={`grid ${mobileGridClass} h-[60px]`}>
+        <div
+          className={`pointer-events-auto mx-auto w-full ${
+            visibleNavItems.length <= 4 ? 'max-w-[360px]' : 'max-w-lg'
+          } bg-white/95 dark:bg-[#161B22]/95 backdrop-blur-md border border-slate-200/90 dark:border-slate-800 rounded-2xl shadow-lg shadow-slate-900/10 dark:shadow-black/45 p-1 grid ${mobileGridClass} items-center gap-1`}
+        >
           {visibleNavItems.map((item) => {
             const Icon = item.icon;
             const active = activeSection === item.id;
@@ -1145,14 +1324,15 @@ export default function App() {
                 key={item.id}
                 type="button"
                 onClick={() => setActiveSection(item.id)}
-                className={`flex flex-col items-center justify-center min-h-[44px] gap-0.5 cursor-pointer ${
+                aria-current={active ? 'page' : undefined}
+                className={`flex flex-col items-center justify-center min-h-[44px] px-1 py-1 rounded-xl gap-0.5 cursor-pointer transition-colors ${
                   active
-                    ? 'text-emerald-700 dark:text-emerald-400'
-                    : 'text-slate-500 dark:text-slate-400'
+                    ? 'bg-emerald-700 text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
-                <Icon className="w-4 h-4" strokeWidth={active ? 2.4 : 1.8} aria-hidden="true" />
-                <span className="text-[10px] font-medium tracking-tight truncate max-w-full px-0.5">
+                <Icon className="w-4 h-4 shrink-0" strokeWidth={active ? 2.25 : 1.85} aria-hidden="true" />
+                <span className="text-[10px] font-semibold leading-none tracking-tight truncate max-w-full">
                   {item.shortLabel}
                 </span>
               </button>

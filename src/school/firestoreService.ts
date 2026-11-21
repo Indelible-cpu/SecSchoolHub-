@@ -27,12 +27,16 @@ import {
   normalizeRegistrationCode,
 } from './malawi';
 import {
+  AnnouncementAudience,
   Assessment,
   AttendanceStatus,
   BoardingStatus,
   DigitalLibraryResource,
   DigitalResourceCategory,
   DigitalResourceFormLevel,
+  DigitalStorageFormat,
+  FeeInvoice,
+  FeeSubmissionFileFormat,
   FormLevel,
   Gender,
   InvoiceStatus,
@@ -48,10 +52,12 @@ import {
   SchoolSubject,
   SchoolType,
   Student,
+  StudentFeeSubmission,
   StudentStatus,
   TeacherRole,
   TermName,
 } from './types';
+import { base64ToUint8Array, uint8ArrayToBase64 } from './digitalMaterialParser';
 
 function clampStr(val: string, max: number): string {
   return String(val ?? '').trim().slice(0, max);
@@ -158,6 +164,7 @@ export async function updateSchoolSettings(
       | 'defaultTuitionMWK'
       | 'defaultGpfMWK'
       | 'defaultExamFeeMWK'
+      | 'logoDataUrl'
     >
   >,
   ownerId?: string
@@ -172,6 +179,9 @@ export async function updateSchoolSettings(
     if (updates.motto !== undefined) payload.motto = clampStr(updates.motto, 140);
     if (updates.academicYear !== undefined) payload.academicYear = clampStr(updates.academicYear, 20);
     if (updates.currentTerm !== undefined) payload.currentTerm = updates.currentTerm;
+    if (updates.logoDataUrl !== undefined) {
+      payload.logoDataUrl = String(updates.logoDataUrl || '').slice(0, 160000);
+    }
     if (updates.defaultTuitionMWK !== undefined) {
       payload.defaultTuitionMWK = Math.max(0, Number(updates.defaultTuitionMWK) || 0);
     }
@@ -188,7 +198,7 @@ export async function updateSchoolSettings(
     }
     await updateDoc(doc(db, 'schools', schoolId), payload);
 
-    // Sync school header metadata onto active studentLinks & staffLinks
+    // Sync school header metadata & logo onto active studentLinks, studentPortals & staffLinks
     if (
       ownerId &&
       (updates.name !== undefined ||
@@ -196,7 +206,8 @@ export async function updateSchoolSettings(
         updates.schoolType !== undefined ||
         updates.motto !== undefined ||
         updates.academicYear !== undefined ||
-        updates.currentTerm !== undefined)
+        updates.currentTerm !== undefined ||
+        updates.logoDataUrl !== undefined)
     ) {
       const linksSnap = await getDocs(
         query(collection(db, 'studentLinks'), where('ownerId', '==', ownerId))
@@ -212,6 +223,9 @@ export async function updateSchoolSettings(
           linkUpdates.academicYear = clampStr(updates.academicYear, 20);
         }
         if (updates.currentTerm !== undefined) linkUpdates.currentTerm = updates.currentTerm;
+        if (updates.logoDataUrl !== undefined) {
+          linkUpdates.logoDataUrl = String(updates.logoDataUrl || '').slice(0, 160000);
+        }
 
         const batch = writeBatch(db);
         for (const d of matchingDocs) {
@@ -234,6 +248,9 @@ export async function updateSchoolSettings(
           portalUpdates.academicYear = clampStr(updates.academicYear, 20);
         }
         if (updates.currentTerm !== undefined) portalUpdates.currentTerm = updates.currentTerm;
+        if (updates.logoDataUrl !== undefined) {
+          portalUpdates.logoDataUrl = String(updates.logoDataUrl || '').slice(0, 160000);
+        }
 
         const portalBatch = writeBatch(db);
         for (const d of matchingPortalDocs) {
@@ -247,7 +264,8 @@ export async function updateSchoolSettings(
         updates.district !== undefined ||
         updates.schoolType !== undefined ||
         updates.academicYear !== undefined ||
-        updates.currentTerm !== undefined
+        updates.currentTerm !== undefined ||
+        updates.logoDataUrl !== undefined
       ) {
         const staffLinksSnap = await getDocs(
           query(collection(db, 'staffLinks'), where('ownerId', '==', ownerId))
@@ -262,6 +280,9 @@ export async function updateSchoolSettings(
             staffUpdates.academicYear = clampStr(updates.academicYear, 20);
           }
           if (updates.currentTerm !== undefined) staffUpdates.currentTerm = updates.currentTerm;
+          if (updates.logoDataUrl !== undefined) {
+            staffUpdates.logoDataUrl = String(updates.logoDataUrl || '').slice(0, 160000);
+          }
 
           const staffBatch = writeBatch(db);
           for (const d of matchingStaffDocs) {
@@ -336,25 +357,71 @@ async function deleteStudentPortalByCode(regCode: string) {
   const cleanCode = normalizeRegistrationCode(regCode);
   if (cleanCode.length < 6) return;
 
-  const resultsSnap = await getDocs(collection(db, 'studentPortals', cleanCode, 'results'));
-  const loansSnap = await getDocs(collection(db, 'studentPortals', cleanCode, 'libraryLoans'));
-  const reservationsSnap = await getDocs(collection(db, 'studentPortals', cleanCode, 'reservations'));
-  if (
-    resultsSnap.docs.length > 0 ||
-    loansSnap.docs.length > 0 ||
-    reservationsSnap.docs.length > 0
-  ) {
-    const batch = writeBatch(db);
-    for (const d of resultsSnap.docs) {
-      batch.delete(d.ref);
+  const resultsSnap = await getDocs(
+    query(
+      collection(db, 'studentPortals', cleanCode, 'results'),
+      where('registrationCode', '==', cleanCode)
+    )
+  );
+  const loansSnap = await getDocs(
+    query(
+      collection(db, 'studentPortals', cleanCode, 'libraryLoans'),
+      where('registrationCode', '==', cleanCode)
+    )
+  );
+  const reservationsSnap = await getDocs(
+    query(
+      collection(db, 'studentPortals', cleanCode, 'reservations'),
+      where('registrationCode', '==', cleanCode)
+    )
+  );
+  const feeInvoicesSnap = await getDocs(
+    query(
+      collection(db, 'studentPortals', cleanCode, 'feeInvoices'),
+      where('registrationCode', '==', cleanCode)
+    )
+  );
+  const feeSubmissionsSnap = await getDocs(
+    query(
+      collection(db, 'studentPortals', cleanCode, 'feeSubmissions'),
+      where('registrationCode', '==', cleanCode)
+    )
+  );
+
+  for (const subDoc of feeSubmissionsSnap.docs) {
+    const chunksSnap = await getDocs(
+      query(
+        collection(db, 'studentPortals', cleanCode, 'feeSubmissions', subDoc.id, 'chunks'),
+        where('registrationCode', '==', cleanCode),
+        where('submissionId', '==', subDoc.id)
+      )
+    );
+    if (chunksSnap.docs.length > 0) {
+      for (let i = 0; i < chunksSnap.docs.length; i += 20) {
+        const chunkBatch = writeBatch(db);
+        for (const c of chunksSnap.docs.slice(i, i + 20)) {
+          chunkBatch.delete(c.ref);
+        }
+        await chunkBatch.commit();
+      }
     }
-    for (const d of loansSnap.docs) {
-      batch.delete(d.ref);
+  }
+
+  const docsToDelete = [
+    ...resultsSnap.docs,
+    ...loansSnap.docs,
+    ...reservationsSnap.docs,
+    ...feeInvoicesSnap.docs,
+    ...feeSubmissionsSnap.docs,
+  ];
+  if (docsToDelete.length > 0) {
+    for (let i = 0; i < docsToDelete.length; i += 200) {
+      const batch = writeBatch(db);
+      for (const d of docsToDelete.slice(i, i + 200)) {
+        batch.delete(d.ref);
+      }
+      await batch.commit();
     }
-    for (const d of reservationsSnap.docs) {
-      batch.delete(d.ref);
-    }
-    await batch.commit();
   }
 
   const portalRef = doc(db, 'studentPortals', cleanCode);
@@ -396,6 +463,46 @@ function buildPortalResultFields(
     grade: clampStr(assessment.grade, 10),
     gradePoint: Math.round(Number(assessment.gradePoint) || 9),
     remark: clampStr(assessment.remark, 40),
+  };
+}
+
+function buildPortalFeeInvoiceFields(
+  ownerId: string,
+  schoolId: string,
+  registrationCode: string,
+  invoice: {
+    studentId: string;
+    studentName: string;
+    formLevel: number;
+    stream: string;
+    term: TermName;
+    academicYear: string;
+    tuitionFee: number;
+    gpfFee: number;
+    examFee: number;
+    otherFee: number;
+    totalBilled: number;
+    totalPaid: number;
+    status: InvoiceStatus;
+  }
+) {
+  return {
+    ownerId,
+    schoolId,
+    registrationCode,
+    studentId: invoice.studentId,
+    studentName: clampStr(invoice.studentName, 120),
+    formLevel: Math.min(4, Math.max(1, Math.round(Number(invoice.formLevel) || 1))),
+    stream: clampStr(invoice.stream || 'A', 20) || 'A',
+    term: invoice.term,
+    academicYear: clampStr(invoice.academicYear, 20),
+    tuitionFee: Math.max(0, Number(invoice.tuitionFee) || 0),
+    gpfFee: Math.max(0, Number(invoice.gpfFee) || 0),
+    examFee: Math.max(0, Number(invoice.examFee) || 0),
+    otherFee: Math.max(0, Number(invoice.otherFee) || 0),
+    totalBilled: Math.max(0, Number(invoice.totalBilled) || 0),
+    totalPaid: Math.max(0, Number(invoice.totalPaid) || 0),
+    status: invoice.status,
   };
 }
 
@@ -568,6 +675,7 @@ export async function saveStudent(
           stream: clampStr(data.stream || 'A', 20),
           boardingStatus: data.boardingStatus,
           status: data.status,
+          logoDataUrl: String(school.logoDataUrl || '').slice(0, 160000),
           updatedAt: serverTimestamp(),
         };
 
@@ -662,6 +770,42 @@ export async function saveStudent(
             }
           }
           await loanBatch.commit();
+        }
+
+        const feeInvoicesSnap = await getDocs(
+          query(collection(db, 'schools', schoolId, 'feeInvoices'), where('ownerId', '==', ownerId))
+        );
+        const studentInvoices = feeInvoicesSnap.docs.filter(
+          (d) => (d.data() as { studentId?: string }).studentId === studentId
+        );
+
+        if (studentInvoices.length > 0) {
+          const isFreshCode = previousRegCode !== cleanRegCode || !portalSnap.exists();
+          const feeBatch = writeBatch(db);
+          for (const d of studentInvoices) {
+            const raw = d.data() as Omit<FeeInvoice, 'id'>;
+            const feePortalRef = doc(db, 'studentPortals', cleanRegCode, 'feeInvoices', d.id);
+            if (isFreshCode) {
+              feeBatch.set(feePortalRef, {
+                ...buildPortalFeeInvoiceFields(ownerId, schoolId, cleanRegCode, {
+                  ...raw,
+                  studentName: clampStr(data.fullName, 120),
+                  formLevel: cleanFormLevel,
+                  stream: cleanStream,
+                }),
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              });
+            } else {
+              feeBatch.update(feePortalRef, {
+                studentName: clampStr(data.fullName, 120),
+                formLevel: cleanFormLevel,
+                stream: cleanStream,
+                updatedAt: serverTimestamp(),
+              });
+            }
+          }
+          await feeBatch.commit();
         }
       }
     }
@@ -839,6 +983,7 @@ export async function saveTeacher(
           assignedForm: cleanAssignedForm,
           staffEmail: cleanEmail,
           status: data.status,
+          logoDataUrl: String(school.logoDataUrl || '').slice(0, 160000),
           updatedAt: serverTimestamp(),
         };
         if (linkSnap.exists()) {
@@ -1200,6 +1345,24 @@ export async function removeAssessment(schoolId: string, assessmentId: string) {
   }
 }
 
+async function resolveStudentRegCode(
+  schoolId: string,
+  studentId: string,
+  explicitRegCode?: string
+): Promise<string> {
+  const cleanExplicit = normalizeRegistrationCode(explicitRegCode || '');
+  if (cleanExplicit.length >= 6) return cleanExplicit;
+  try {
+    const stuSnap = await getDoc(doc(db, 'schools', schoolId, 'students', studentId));
+    if (stuSnap.exists()) {
+      return normalizeRegistrationCode((stuSnap.data() as { registrationCode?: string }).registrationCode);
+    }
+  } catch {
+    // Student lookup optional if code unavailable
+  }
+  return '';
+}
+
 export async function createFeeInvoice(
   schoolId: string,
   ownerId: string,
@@ -1215,6 +1378,7 @@ export async function createFeeInvoice(
     examFee: number;
     otherFee: number;
     schoolType?: SchoolType;
+    registrationCode?: string;
   }
 ) {
   const invoiceId = makeId('inv');
@@ -1225,9 +1389,16 @@ export async function createFeeInvoice(
   const exam = govTuitionOnly ? 0 : Math.max(0, Number(params.examFee) || 0);
   const other = govTuitionOnly ? 0 : Math.max(0, Number(params.otherFee) || 0);
   const totalBilled = tuition + gpf + exam + other;
+  const status: InvoiceStatus = totalBilled === 0 ? 'Paid' : 'Unpaid';
 
   try {
-    await setDoc(doc(db, 'schools', schoolId, 'feeInvoices', invoiceId), {
+    const cleanRegCode = await resolveStudentRegCode(
+      schoolId,
+      params.studentId,
+      params.registrationCode
+    );
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'schools', schoolId, 'feeInvoices', invoiceId), {
       ownerId,
       studentId: params.studentId,
       studentName: clampStr(params.studentName, 120),
@@ -1241,10 +1412,32 @@ export async function createFeeInvoice(
       otherFee: other,
       totalBilled,
       totalPaid: 0,
-      status: totalBilled === 0 ? 'Paid' : 'Unpaid',
+      status,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
+    if (cleanRegCode.length >= 6) {
+      batch.set(doc(db, 'studentPortals', cleanRegCode, 'feeInvoices', invoiceId), {
+        ...buildPortalFeeInvoiceFields(ownerId, schoolId, cleanRegCode, {
+          studentId: params.studentId,
+          studentName: params.studentName,
+          formLevel: params.formLevel,
+          stream: params.stream,
+          term: params.term,
+          academicYear: params.academicYear,
+          tuitionFee: tuition,
+          gpfFee: gpf,
+          examFee: exam,
+          otherFee: other,
+          totalBilled,
+          totalPaid: 0,
+          status,
+        }),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    await batch.commit();
     return invoiceId;
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, path);
@@ -1265,6 +1458,7 @@ export async function recordAtomicFeePayment(
     reference: string;
     receiptNo: string;
     term: TermName;
+    registrationCode?: string;
   }
 ) {
   const paymentId = makeId('pay');
@@ -1275,6 +1469,11 @@ export async function recordAtomicFeePayment(
     nextPaid >= params.totalBilled ? 'Paid' : nextPaid > 0 ? 'Partial' : 'Unpaid';
 
   try {
+    const cleanRegCode = await resolveStudentRegCode(
+      schoolId,
+      params.studentId,
+      params.registrationCode
+    );
     const batch = writeBatch(db);
     batch.set(doc(db, 'schools', schoolId, 'feePayments', paymentId), {
       ownerId,
@@ -1293,6 +1492,31 @@ export async function recordAtomicFeePayment(
       status: nextStatus,
       updatedAt: serverTimestamp(),
     });
+    if (cleanRegCode.length >= 6) {
+      const portalInvRef = doc(db, 'studentPortals', cleanRegCode, 'feeInvoices', params.invoiceId);
+      const portalInvSnap = await getDoc(portalInvRef);
+      if (portalInvSnap.exists()) {
+        batch.update(portalInvRef, {
+          totalPaid: nextPaid,
+          status: nextStatus,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        const masterInvSnap = await getDoc(doc(db, 'schools', schoolId, 'feeInvoices', params.invoiceId));
+        if (masterInvSnap.exists()) {
+          const raw = masterInvSnap.data() as Omit<FeeInvoice, 'id'>;
+          batch.set(portalInvRef, {
+            ...buildPortalFeeInvoiceFields(ownerId, schoolId, cleanRegCode, {
+              ...raw,
+              totalPaid: nextPaid,
+              status: nextStatus,
+            }),
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+    }
     await batch.commit();
     return paymentId;
   } catch (error) {
@@ -1300,12 +1524,390 @@ export async function recordAtomicFeePayment(
   }
 }
 
-export async function removeFeeInvoice(schoolId: string, invoiceId: string) {
+export async function removeFeeInvoice(
+  schoolId: string,
+  invoiceId: string,
+  registrationCode?: string
+) {
   const path = `schools/${schoolId}/feeInvoices/${invoiceId}`;
   try {
-    await deleteDoc(doc(db, 'schools', schoolId, 'feeInvoices', invoiceId));
+    let cleanRegCode = normalizeRegistrationCode(registrationCode || '');
+    if (cleanRegCode.length < 6) {
+      const invSnap = await getDoc(doc(db, 'schools', schoolId, 'feeInvoices', invoiceId));
+      if (invSnap.exists()) {
+        const studentId = (invSnap.data() as { studentId?: string }).studentId;
+        if (studentId) {
+          cleanRegCode = await resolveStudentRegCode(schoolId, studentId);
+        }
+      }
+    }
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'schools', schoolId, 'feeInvoices', invoiceId));
+    if (cleanRegCode.length >= 6) {
+      const portalInvRef = doc(db, 'studentPortals', cleanRegCode, 'feeInvoices', invoiceId);
+      const portalInvSnap = await getDoc(portalInvRef);
+      if (portalInvSnap.exists()) {
+        batch.delete(portalInvRef);
+      }
+    }
+    await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function syncMissingPortalFeeInvoices(
+  schoolId: string,
+  ownerId: string,
+  students: Student[],
+  invoices: FeeInvoice[]
+): Promise<void> {
+  if (students.length === 0 || invoices.length === 0) return;
+  const studentById = new Map<string, Student>();
+  for (const s of students) {
+    studentById.set(s.id, s);
+  }
+  const toCheck = invoices
+    .map((inv) => {
+      const stu = studentById.get(inv.studentId);
+      const regCode = normalizeRegistrationCode(stu?.registrationCode || '');
+      return { inv, regCode };
+    })
+    .filter((item) => item.regCode.length >= 6);
+
+  if (toCheck.length === 0) return;
+
+  const missingOrStale: { inv: FeeInvoice; regCode: string; exists: boolean }[] = [];
+  await Promise.all(
+    toCheck.map(async ({ inv, regCode }) => {
+      try {
+        const snap = await getDoc(doc(db, 'studentPortals', regCode, 'feeInvoices', inv.id));
+        if (!snap.exists()) {
+          missingOrStale.push({ inv, regCode, exists: false });
+        } else {
+          const data = snap.data() as Partial<FeeInvoice>;
+          if (data.totalPaid !== inv.totalPaid || data.totalBilled !== inv.totalBilled || data.status !== inv.status) {
+            missingOrStale.push({ inv, regCode, exists: true });
+          }
+        }
+      } catch {
+        // Ignore single portal sync failures
+      }
+    })
+  );
+
+  if (missingOrStale.length === 0) return;
+
+  for (let i = 0; i < missingOrStale.length; i += 150) {
+    const batch = writeBatch(db);
+    for (const item of missingOrStale.slice(i, i + 150)) {
+      const ref = doc(db, 'studentPortals', item.regCode, 'feeInvoices', item.inv.id);
+      if (item.exists) {
+        batch.update(ref, {
+          totalBilled: item.inv.totalBilled,
+          totalPaid: item.inv.totalPaid,
+          status: item.inv.status,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        batch.set(ref, {
+          ...buildPortalFeeInvoiceFields(ownerId, schoolId, item.regCode, item.inv),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+    await batch.commit();
+  }
+}
+
+export interface SubmitStudentFeeProofPayload {
+  ownerId: string;
+  schoolId: string;
+  studentId: string;
+  studentName: string;
+  admissionNo: string;
+  formLevel: FormLevel;
+  stream: string;
+  registrationCode: string;
+  invoiceId: string;
+  term: TermName;
+  academicYear: string;
+  amount: number;
+  method: PaymentMethod;
+  reference: string;
+  notes: string;
+  fileName: string;
+  mimeType: string;
+  fileFormat: FeeSubmissionFileFormat;
+  fileSizeBytes: number;
+  fileBytes: Uint8Array;
+}
+
+export async function submitStudentFeePaymentReference(
+  data: SubmitStudentFeeProofPayload,
+  onUploadProgress?: (completedChunks: number, totalChunks: number) => void
+): Promise<string> {
+  const cleanRegCode = normalizeRegistrationCode(data.registrationCode);
+  if (cleanRegCode.length < 6) {
+    throw new Error('Valid student registration code is required.');
+  }
+  if (!data.fileBytes || data.fileBytes.length === 0) {
+    throw new Error('Select a PDF or image payment proof file.');
+  }
+  if (data.fileBytes.length > 8 * 1024 * 1024) {
+    throw new Error('Payment proof file must be 8 MB or smaller.');
+  }
+  const cleanAmount = Math.round(Number(data.amount) || 0);
+  if (!Number.isFinite(cleanAmount) || cleanAmount <= 0 || cleanAmount > 100000000) {
+    throw new Error('Enter a valid payment amount in MWK.');
+  }
+
+  const submissionId = makeId('fsub');
+  const path = `studentPortals/${cleanRegCode}/feeSubmissions/${submissionId}`;
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const totalChunks = Math.ceil(data.fileBytes.length / DIGITAL_CHUNK_RAW_BYTES);
+  if (totalChunks < 1 || totalChunks > 20) {
+    throw new Error('Payment proof file exceeds maximum supported chunk count.');
+  }
+
+  try {
+    for (let startChunk = 0; startChunk < totalChunks; startChunk += CHUNK_BATCH_SIZE) {
+      const chunkBatch = writeBatch(db);
+      const endChunk = Math.min(totalChunks, startChunk + CHUNK_BATCH_SIZE);
+      for (let idx = startChunk; idx < endChunk; idx += 1) {
+        const sliceStart = idx * DIGITAL_CHUNK_RAW_BYTES;
+        const sliceEnd = Math.min(data.fileBytes.length, sliceStart + DIGITAL_CHUNK_RAW_BYTES);
+        const sliceBytes = data.fileBytes.subarray(sliceStart, sliceEnd);
+        const chunkRef = doc(
+          db,
+          'studentPortals',
+          cleanRegCode,
+          'feeSubmissions',
+          submissionId,
+          'chunks',
+          `chunk_${idx}`
+        );
+        chunkBatch.set(chunkRef, {
+          ownerId: data.ownerId,
+          schoolId: data.schoolId,
+          registrationCode: cleanRegCode,
+          submissionId,
+          chunkIndex: idx,
+          dataBase64: uint8ArrayToBase64(sliceBytes),
+          createdAt: serverTimestamp(),
+        });
+      }
+      await chunkBatch.commit();
+      onUploadProgress?.(endChunk, totalChunks);
+    }
+
+    const payload = {
+      ownerId: data.ownerId,
+      schoolId: data.schoolId,
+      studentId: data.studentId,
+      studentName: clampStr(data.studentName, 120),
+      admissionNo: clampStr(data.admissionNo || 'N/A', 40) || 'N/A',
+      formLevel: Math.min(4, Math.max(1, Math.round(Number(data.formLevel) || 1))),
+      stream: clampStr(data.stream || 'A', 20) || 'A',
+      registrationCode: cleanRegCode,
+      invoiceId: String(data.invoiceId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128),
+      term: data.term,
+      academicYear: clampStr(data.academicYear, 20),
+      amount: cleanAmount,
+      method: data.method,
+      reference: clampStr(data.reference || '', 80),
+      notes: clampStr(data.notes || '', 240),
+      fileName: clampStr(data.fileName, 160) || 'payment-proof',
+      mimeType: clampStr(data.mimeType, 100) || 'application/octet-stream',
+      fileFormat: data.fileFormat,
+      fileSizeBytes: Math.max(1, Math.round(data.fileSizeBytes)),
+      chunkCount: totalChunks,
+      status: 'Pending' as const,
+      reviewNote: '',
+      receiptNo: '',
+      submittedDate: todayIso,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'studentPortals', cleanRegCode, 'feeSubmissions', submissionId), payload);
+    batch.set(doc(db, 'schools', data.schoolId, 'feeSubmissions', submissionId), payload);
+    await batch.commit();
+
+    return submissionId;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function fetchFeeSubmissionBytes(
+  registrationCode: string,
+  submissionId: string
+): Promise<Uint8Array | null> {
+  const cleanRegCode = normalizeRegistrationCode(registrationCode);
+  const path = `studentPortals/${cleanRegCode}/feeSubmissions/${submissionId}/chunks`;
+  try {
+    const chunksSnap = await getDocs(
+      query(
+        collection(db, 'studentPortals', cleanRegCode, 'feeSubmissions', submissionId, 'chunks'),
+        where('registrationCode', '==', cleanRegCode),
+        where('submissionId', '==', submissionId)
+      )
+    );
+    if (chunksSnap.docs.length === 0) return null;
+
+    const sorted = chunksSnap.docs
+      .map((d) => d.data() as { chunkIndex?: number; dataBase64?: string })
+      .sort((a, b) => Number(a.chunkIndex || 0) - Number(b.chunkIndex || 0));
+
+    const parts = sorted.map((c) => base64ToUint8Array(String(c.dataBase64 || '')));
+    const totalLength = parts.reduce((sum, arr) => sum + arr.length, 0);
+    const merged = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const part of parts) {
+      merged.set(part, offset);
+      offset += part.length;
+    }
+    return merged;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+export async function approveStudentFeeSubmission(params: {
+  schoolId: string;
+  ownerId: string;
+  submission: StudentFeeSubmission;
+  invoice: FeeInvoice;
+  amount: number;
+  method: PaymentMethod;
+  reference: string;
+  receiptNo: string;
+  reviewNote: string;
+}): Promise<string> {
+  const paymentId = makeId('pay');
+  const path = `schools/${params.schoolId}/feeSubmissions/${params.submission.id}`;
+  const payAmount = Math.max(1, Math.round(Number(params.amount) || 0));
+  const nextPaid = params.invoice.totalPaid + payAmount;
+  const nextStatus: InvoiceStatus =
+    nextPaid >= params.invoice.totalBilled ? 'Paid' : nextPaid > 0 ? 'Partial' : 'Unpaid';
+  const cleanRegCode = normalizeRegistrationCode(params.submission.registrationCode);
+  const cleanReceipt = clampStr(params.receiptNo, 40);
+  const cleanReviewNote = clampStr(params.reviewNote, 240);
+
+  try {
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'schools', params.schoolId, 'feePayments', paymentId), {
+      ownerId: params.ownerId,
+      invoiceId: params.invoice.id,
+      studentId: params.invoice.studentId,
+      studentName: clampStr(params.invoice.studentName, 120),
+      receiptNo: cleanReceipt,
+      amount: payAmount,
+      method: params.method,
+      reference: clampStr(params.reference || 'Student Proof Upload', 80),
+      term: params.invoice.term,
+      createdAt: serverTimestamp(),
+    });
+    batch.update(doc(db, 'schools', params.schoolId, 'feeInvoices', params.invoice.id), {
+      totalPaid: nextPaid,
+      status: nextStatus,
+      updatedAt: serverTimestamp(),
+    });
+
+    if (cleanRegCode.length >= 6) {
+      const portalInvRef = doc(db, 'studentPortals', cleanRegCode, 'feeInvoices', params.invoice.id);
+      const portalInvSnap = await getDoc(portalInvRef);
+      if (portalInvSnap.exists()) {
+        batch.update(portalInvRef, {
+          totalPaid: nextPaid,
+          status: nextStatus,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        batch.set(portalInvRef, {
+          ...buildPortalFeeInvoiceFields(params.ownerId, params.schoolId, cleanRegCode, {
+            ...params.invoice,
+            totalPaid: nextPaid,
+            status: nextStatus,
+          }),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      const portalSubRef = doc(
+        db,
+        'studentPortals',
+        cleanRegCode,
+        'feeSubmissions',
+        params.submission.id
+      );
+      const portalSubSnap = await getDoc(portalSubRef);
+      if (portalSubSnap.exists()) {
+        batch.update(portalSubRef, {
+          status: 'Approved',
+          reviewNote: cleanReviewNote,
+          receiptNo: cleanReceipt,
+          invoiceId: params.invoice.id,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+
+    batch.update(doc(db, 'schools', params.schoolId, 'feeSubmissions', params.submission.id), {
+      status: 'Approved',
+      reviewNote: cleanReviewNote,
+      receiptNo: cleanReceipt,
+      invoiceId: params.invoice.id,
+      updatedAt: serverTimestamp(),
+    });
+
+    await batch.commit();
+    return paymentId;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function rejectStudentFeeSubmission(params: {
+  schoolId: string;
+  submission: StudentFeeSubmission;
+  reviewNote: string;
+}): Promise<void> {
+  const path = `schools/${params.schoolId}/feeSubmissions/${params.submission.id}`;
+  const cleanRegCode = normalizeRegistrationCode(params.submission.registrationCode);
+  const cleanReviewNote = clampStr(params.reviewNote || 'Payment reference could not be verified.', 240);
+
+  try {
+    const batch = writeBatch(db);
+    batch.update(doc(db, 'schools', params.schoolId, 'feeSubmissions', params.submission.id), {
+      status: 'Rejected',
+      reviewNote: cleanReviewNote,
+      updatedAt: serverTimestamp(),
+    });
+    if (cleanRegCode.length >= 6) {
+      const portalSubRef = doc(
+        db,
+        'studentPortals',
+        cleanRegCode,
+        'feeSubmissions',
+        params.submission.id
+      );
+      const portalSubSnap = await getDoc(portalSubRef);
+      if (portalSubSnap.exists()) {
+        batch.update(portalSubRef, {
+          status: 'Rejected',
+          reviewNote: cleanReviewNote,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 
@@ -1935,7 +2537,7 @@ export async function syncStudentCatalogMirror(schoolId: string, ownerId: string
     const [booksSnap, loansSnap, mirrorsSnap] = await Promise.all([
       getDocs(query(collection(db, 'schools', schoolId, 'libraryBooks'), where('ownerId', '==', ownerId))),
       getDocs(query(collection(db, 'schools', schoolId, 'libraryLoans'), where('ownerId', '==', ownerId))),
-      getDocs(collection(db, 'studentLibraries', schoolId, 'books')),
+      getDocs(query(collection(db, 'studentLibraries', schoolId, 'books'), where('schoolId', '==', schoolId))),
     ]);
 
     const activeLoanCountByTitle = new Map<string, number>();
@@ -2173,6 +2775,9 @@ export async function removeLibraryReservation(
   }
 }
 
+const DIGITAL_CHUNK_RAW_BYTES = 450000;
+const CHUNK_BATCH_SIZE = 8;
+
 export interface DigitalLibraryResourcePayload {
   title: string;
   author: string;
@@ -2182,14 +2787,73 @@ export interface DigitalLibraryResourcePayload {
   examYear?: string;
   summary?: string;
   content: string;
+  storageFormat?: DigitalStorageFormat;
+  fileName?: string;
+  mimeType?: string;
+  fileSizeBytes?: number;
+  chunkCount?: number;
   allowOffline: boolean;
+}
+
+async function deleteDigitalResourceChunks(schoolId: string, resourceId: string): Promise<void> {
+  const chunksSnap = await getDocs(
+    query(
+      collection(db, 'studentLibraries', schoolId, 'digitalResources', resourceId, 'chunks'),
+      where('schoolId', '==', schoolId),
+      where('resourceId', '==', resourceId)
+    )
+  );
+  if (chunksSnap.docs.length === 0) return;
+
+  for (let i = 0; i < chunksSnap.docs.length; i += 20) {
+    const batch = writeBatch(db);
+    for (const chunkDoc of chunksSnap.docs.slice(i, i + 20)) {
+      batch.delete(chunkDoc.ref);
+    }
+    await batch.commit();
+  }
+}
+
+export async function fetchDigitalResourceBytes(
+  schoolId: string,
+  resourceId: string
+): Promise<Uint8Array | null> {
+  const path = `studentLibraries/${schoolId}/digitalResources/${resourceId}/chunks`;
+  try {
+    const chunksSnap = await getDocs(
+      query(
+        collection(db, 'studentLibraries', schoolId, 'digitalResources', resourceId, 'chunks'),
+        where('schoolId', '==', schoolId),
+        where('resourceId', '==', resourceId)
+      )
+    );
+    if (chunksSnap.docs.length === 0) return null;
+
+    const sorted = chunksSnap.docs
+      .map((d) => d.data() as { chunkIndex?: number; dataBase64?: string })
+      .sort((a, b) => Number(a.chunkIndex || 0) - Number(b.chunkIndex || 0));
+
+    const parts = sorted.map((c) => base64ToUint8Array(String(c.dataBase64 || '')));
+    const totalLength = parts.reduce((sum, arr) => sum + arr.length, 0);
+    const merged = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const part of parts) {
+      merged.set(part, offset);
+      offset += part.length;
+    }
+    return merged;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
 }
 
 export async function saveDigitalResource(
   schoolId: string,
   ownerId: string,
   data: DigitalLibraryResourcePayload,
-  existingId?: string
+  existingId?: string,
+  fileBytes?: Uint8Array | null,
+  onUploadProgress?: (completedChunks: number, totalChunks: number) => void
 ): Promise<string> {
   const resourceId = existingId || makeId('dig');
   const path = `schools/${schoolId}/digitalLibrary/${resourceId}`;
@@ -2202,9 +2866,54 @@ export async function saveDigitalResource(
   const allowOffline = Boolean(data.allowOffline);
 
   try {
+    let resolvedChunkCount = Number(data.chunkCount || 0);
+    const hasNewFilePayload = fileBytes !== undefined;
+
+    if (hasNewFilePayload) {
+      if (existingId) {
+        await deleteDigitalResourceChunks(schoolId, resourceId);
+      }
+      if (fileBytes && fileBytes.length > 0) {
+        const totalChunks = Math.ceil(fileBytes.length / DIGITAL_CHUNK_RAW_BYTES);
+        resolvedChunkCount = totalChunks;
+        let uploaded = 0;
+        for (let startChunk = 0; startChunk < totalChunks; startChunk += CHUNK_BATCH_SIZE) {
+          const batch = writeBatch(db);
+          const endChunk = Math.min(totalChunks, startChunk + CHUNK_BATCH_SIZE);
+          for (let idx = startChunk; idx < endChunk; idx += 1) {
+            const sliceStart = idx * DIGITAL_CHUNK_RAW_BYTES;
+            const sliceEnd = Math.min(fileBytes.length, sliceStart + DIGITAL_CHUNK_RAW_BYTES);
+            const sliceBytes = fileBytes.subarray(sliceStart, sliceEnd);
+            const chunkRef = doc(
+              db,
+              'studentLibraries',
+              schoolId,
+              'digitalResources',
+              resourceId,
+              'chunks',
+              `chunk_${idx}`
+            );
+            batch.set(chunkRef, {
+              ownerId,
+              schoolId,
+              resourceId,
+              chunkIndex: idx,
+              dataBase64: uint8ArrayToBase64(sliceBytes),
+              createdAt: serverTimestamp(),
+            });
+          }
+          await batch.commit();
+          uploaded = endChunk;
+          onUploadProgress?.(uploaded, totalChunks);
+        }
+      } else {
+        resolvedChunkCount = 0;
+      }
+    }
+
     const schoolRef = doc(db, 'schools', schoolId, 'digitalLibrary', resourceId);
     const mirrorRef = doc(db, 'studentLibraries', schoolId, 'digitalResources', resourceId);
-    const sharedUpdate = {
+    const sharedUpdate: Record<string, unknown> = {
       title: cleanTitle,
       author: cleanAuthor,
       subject: cleanSubject,
@@ -2213,6 +2922,11 @@ export async function saveDigitalResource(
       examYear: cleanExamYear,
       summary: cleanSummary,
       content: cleanContent,
+      storageFormat: data.storageFormat || 'text',
+      fileName: clampStr(data.fileName || '', 160),
+      mimeType: clampStr(data.mimeType || '', 100),
+      fileSizeBytes: Math.max(0, Math.round(Number(data.fileSizeBytes || 0))),
+      chunkCount: Math.max(0, Math.round(resolvedChunkCount)),
       allowOffline,
       updatedAt: serverTimestamp(),
     };
@@ -2252,6 +2966,7 @@ export async function saveDigitalResource(
 export async function removeDigitalResource(schoolId: string, resourceId: string): Promise<void> {
   const path = `schools/${schoolId}/digitalLibrary/${resourceId}`;
   try {
+    await deleteDigitalResourceChunks(schoolId, resourceId);
     const batch = writeBatch(db);
     batch.delete(doc(db, 'schools', schoolId, 'digitalLibrary', resourceId));
     const mirrorRef = doc(db, 'studentLibraries', schoolId, 'digitalResources', resourceId);
@@ -2673,7 +3388,7 @@ export async function seedDemoMalawiSchool(ownerId: string): Promise<string> {
       data: {
         staffCode: 'TSC-48219',
         fullName: 'Mrs. Chimwemwe Nkhoma',
-        roleTitle: 'Form Master',
+        roleTitle: 'Form Teacher',
         subjects: ['English', 'Chichewa'],
         assignedForm: 'Form 4A',
         phone: '+265 888 510 394',
@@ -3002,6 +3717,28 @@ export async function seedDemoMalawiSchool(ownerId: string): Promise<string> {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      const regCode = demoRegCodes.get(inv.studentId);
+      if (regCode && regCode.length >= 6) {
+        batch2.set(doc(db, 'studentPortals', regCode, 'feeInvoices', inv.id), {
+          ...buildPortalFeeInvoiceFields(ownerId, schoolId, regCode, {
+            studentId: inv.studentId,
+            studentName: inv.studentName,
+            formLevel: inv.formLevel,
+            stream: inv.stream,
+            term: 'Term 2',
+            academicYear: '2026/2027',
+            tuitionFee: inv.tuition,
+            gpfFee: inv.gpf,
+            examFee: inv.exam,
+            otherFee: 0,
+            totalBilled,
+            totalPaid: 0,
+            status: 'Unpaid',
+          }),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
     }
 
     const attendanceSamples: { studentId: string; studentName: string; formLevel: FormLevel; stream: string; status: AttendanceStatus }[] = [
@@ -3249,6 +3986,14 @@ export async function seedDemoMalawiSchool(ownerId: string): Promise<string> {
       status: 'Paid',
       updatedAt: serverTimestamp(),
     });
+    const rc1 = demoRegCodes.get('stu_01');
+    if (rc1 && rc1.length >= 6) {
+      batch3.update(doc(db, 'studentPortals', rc1, 'feeInvoices', 'inv_01'), {
+        totalPaid: 122000,
+        status: 'Paid',
+        updatedAt: serverTimestamp(),
+      });
+    }
 
     // Payment 2: Partial payment via Airtel Money for stu_02 (75,000 of 122,000)
     batch3.set(doc(db, 'schools', schoolId, 'feePayments', 'pay_02'), {
@@ -3268,6 +4013,14 @@ export async function seedDemoMalawiSchool(ownerId: string): Promise<string> {
       status: 'Partial',
       updatedAt: serverTimestamp(),
     });
+    const rc2 = demoRegCodes.get('stu_02');
+    if (rc2 && rc2.length >= 6) {
+      batch3.update(doc(db, 'studentPortals', rc2, 'feeInvoices', 'inv_02'), {
+        totalPaid: 75000,
+        status: 'Partial',
+        updatedAt: serverTimestamp(),
+      });
+    }
 
     // Payment 3: Partial payment via TNM Mpamba for stu_04 (60,000 of 110,000)
     batch3.set(doc(db, 'schools', schoolId, 'feePayments', 'pay_03'), {
@@ -3287,6 +4040,14 @@ export async function seedDemoMalawiSchool(ownerId: string): Promise<string> {
       status: 'Partial',
       updatedAt: serverTimestamp(),
     });
+    const rc4 = demoRegCodes.get('stu_04');
+    if (rc4 && rc4.length >= 6) {
+      batch3.update(doc(db, 'studentPortals', rc4, 'feeInvoices', 'inv_04'), {
+        totalPaid: 60000,
+        status: 'Partial',
+        updatedAt: serverTimestamp(),
+      });
+    }
 
     await batch3.commit();
   } catch (error) {
@@ -3300,7 +4061,13 @@ export async function billEntireFormBatch(
   schoolId: string,
   ownerId: string,
   params: {
-    students: { id: string; fullName: string; formLevel: FormLevel; stream: string }[];
+    students: {
+      id: string;
+      fullName: string;
+      formLevel: FormLevel;
+      stream: string;
+      registrationCode?: string;
+    }[];
     term: TermName;
     academicYear: string;
     tuitionFee: number;
@@ -3315,30 +4082,55 @@ export async function billEntireFormBatch(
   const gpf = govTuitionOnly ? 0 : Math.max(0, Number(params.gpfFee) || 0);
   const exam = govTuitionOnly ? 0 : Math.max(0, Number(params.examFee) || 0);
   const totalBilled = tuition + gpf + exam;
+  const status: InvoiceStatus = totalBilled === 0 ? 'Paid' : 'Unpaid';
   try {
-    const batch = writeBatch(db);
-    for (const s of params.students) {
-      const invoiceId = makeId('inv');
-      batch.set(doc(db, 'schools', schoolId, 'feeInvoices', invoiceId), {
-        ownerId,
-        studentId: s.id,
-        studentName: clampStr(s.fullName, 120),
-        formLevel: Math.round(s.formLevel),
-        stream: clampStr(s.stream, 20),
-        term: params.term,
-        academicYear: clampStr(params.academicYear, 20),
-        tuitionFee: tuition,
-        gpfFee: gpf,
-        examFee: exam,
-        otherFee: 0,
-        totalBilled,
-        totalPaid: 0,
-        status: totalBilled === 0 ? 'Paid' : 'Unpaid',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+    for (let i = 0; i < params.students.length; i += 150) {
+      const batch = writeBatch(db);
+      for (const s of params.students.slice(i, i + 150)) {
+        const invoiceId = makeId('inv');
+        batch.set(doc(db, 'schools', schoolId, 'feeInvoices', invoiceId), {
+          ownerId,
+          studentId: s.id,
+          studentName: clampStr(s.fullName, 120),
+          formLevel: Math.round(s.formLevel),
+          stream: clampStr(s.stream, 20),
+          term: params.term,
+          academicYear: clampStr(params.academicYear, 20),
+          tuitionFee: tuition,
+          gpfFee: gpf,
+          examFee: exam,
+          otherFee: 0,
+          totalBilled,
+          totalPaid: 0,
+          status,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        const cleanRegCode = normalizeRegistrationCode(s.registrationCode || '');
+        if (cleanRegCode.length >= 6) {
+          batch.set(doc(db, 'studentPortals', cleanRegCode, 'feeInvoices', invoiceId), {
+            ...buildPortalFeeInvoiceFields(ownerId, schoolId, cleanRegCode, {
+              studentId: s.id,
+              studentName: s.fullName,
+              formLevel: s.formLevel,
+              stream: s.stream,
+              term: params.term,
+              academicYear: params.academicYear,
+              tuitionFee: tuition,
+              gpfFee: gpf,
+              examFee: exam,
+              otherFee: 0,
+              totalBilled,
+              totalPaid: 0,
+              status,
+            }),
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+      await batch.commit();
     }
-    await batch.commit();
     return params.students.length;
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `schools/${schoolId}/feeInvoices`);
@@ -3348,3 +4140,115 @@ export async function billEntireFormBatch(
 export function getFeeInvoiceCollectionRef(schoolId: string) {
   return collection(db, 'schools', schoolId, 'feeInvoices');
 }
+
+export interface SchoolAnnouncementPayload {
+  title: string;
+  message: string;
+  targetAudiences: AnnouncementAudience[];
+  publishedDate: string;
+  authorName: string;
+}
+
+const VALID_AUDIENCES: AnnouncementAudience[] = ['Teachers', 'Librarian', 'Bursar', 'Students'];
+
+export async function saveSchoolAnnouncement(
+  schoolId: string,
+  ownerId: string,
+  data: SchoolAnnouncementPayload,
+  existingId?: string
+): Promise<string> {
+  const announcementId = existingId || makeId('ann');
+  const path = `schools/${schoolId}/announcements/${announcementId}`;
+  const cleanAudiences = Array.from(
+    new Set(data.targetAudiences.filter((a) => VALID_AUDIENCES.includes(a)))
+  ).slice(0, 4);
+  if (cleanAudiences.length === 0) {
+    throw new Error('Select at least one audience group for this announcement.');
+  }
+
+  const cleanDate = /^\d{4}-\d{2}-\d{2}$/.test(data.publishedDate)
+    ? data.publishedDate
+    : new Date().toISOString().slice(0, 10);
+  const cleanTitle = clampStr(data.title, 120);
+  const cleanMessage = clampStr(data.message, 1000);
+  const cleanAuthor = clampStr(data.authorName || 'School Admin', 120) || 'School Admin';
+
+  try {
+    const batch = writeBatch(db);
+    const schoolAnnRef = doc(db, 'schools', schoolId, 'announcements', announcementId);
+    const studentMirrorRef = doc(db, 'studentLibraries', schoolId, 'announcements', announcementId);
+    const includesStudents = cleanAudiences.includes('Students');
+
+    if (existingId) {
+      const updateFields = {
+        title: cleanTitle,
+        message: cleanMessage,
+        targetAudiences: cleanAudiences,
+        publishedDate: cleanDate,
+        authorName: cleanAuthor,
+        updatedAt: serverTimestamp(),
+      };
+      batch.update(schoolAnnRef, updateFields);
+
+      if (includesStudents) {
+        const mirrorSnap = await getDoc(studentMirrorRef);
+        if (mirrorSnap.exists()) {
+          batch.update(studentMirrorRef, updateFields);
+        } else {
+          batch.set(studentMirrorRef, {
+            ownerId,
+            schoolId,
+            ...updateFields,
+            createdAt: serverTimestamp(),
+          });
+        }
+      } else {
+        const mirrorSnap = await getDoc(studentMirrorRef);
+        if (mirrorSnap.exists()) {
+          batch.delete(studentMirrorRef);
+        }
+      }
+    } else {
+      const createFields = {
+        ownerId,
+        schoolId,
+        title: cleanTitle,
+        message: cleanMessage,
+        targetAudiences: cleanAudiences,
+        publishedDate: cleanDate,
+        authorName: cleanAuthor,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      batch.set(schoolAnnRef, createFields);
+      if (includesStudents) {
+        batch.set(studentMirrorRef, createFields);
+      }
+    }
+
+    await batch.commit();
+    return announcementId;
+  } catch (error) {
+    handleFirestoreError(error, existingId ? OperationType.UPDATE : OperationType.CREATE, path);
+  }
+}
+
+export async function removeSchoolAnnouncement(
+  schoolId: string,
+  announcementId: string
+): Promise<void> {
+  const path = `schools/${schoolId}/announcements/${announcementId}`;
+  try {
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'schools', schoolId, 'announcements', announcementId));
+    const mirrorRef = doc(db, 'studentLibraries', schoolId, 'announcements', announcementId);
+    const mirrorSnap = await getDoc(mirrorRef);
+    if (mirrorSnap.exists()) {
+      batch.delete(mirrorRef);
+    }
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+

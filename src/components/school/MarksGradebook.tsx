@@ -5,6 +5,7 @@ import {
   Download,
   FileDown,
   FileText,
+  Lock,
   Pencil,
   Plus,
   Printer,
@@ -52,6 +53,7 @@ interface MarksGradebookProps {
   students: Student[];
   assessments: Assessment[];
   schoolSubjects?: SchoolSubject[];
+  canWriteMarks?: boolean;
   onOpenStaffSettings?: () => void;
 }
 
@@ -64,6 +66,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
   students,
   assessments,
   schoolSubjects = [],
+  canWriteMarks = true,
   onOpenStaffSettings,
 }) => {
   const [formFilter, setFormFilter] = useState<'all' | FormLevel>('all');
@@ -247,7 +250,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
   };
 
   const openNewMark = () => {
-    if (activeStudents.length === 0) return;
+    if (!canWriteMarks || activeStudents.length === 0) return;
     const defaultStudent =
       (formFilter !== 'all'
         ? activeStudents.find((s) => s.formLevel === formFilter)
@@ -266,6 +269,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
   };
 
   const openEditMark = (row: Assessment) => {
+    if (!canWriteMarks) return;
     const b = normalizeAssessmentComponents(row);
     const detected = detectNextAssessmentStage(row);
     setLockedStudentSubject(true);
@@ -406,6 +410,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
   };
 
   const handleSave = async (advanceToNextStudent: boolean) => {
+    if (!canWriteMarks) return;
     const validated = validateAndBuildPayload();
     if (validated.error || !validated.payload) {
       setErrorMsg(validated.error || 'Please check your assessment inputs.');
@@ -631,17 +636,28 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
               <Download className="w-3.5 h-3.5" aria-hidden="true" />
               <span>Export CSV</span>
             </button>
-            <button
-              type="button"
-              onClick={openNewMark}
-              disabled={activeStudents.length === 0}
-              className="inline-flex items-center gap-1.5 min-h-[40px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white text-xs font-semibold cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Record Score</span>
-            </button>
+            {canWriteMarks && (
+              <button
+                type="button"
+                onClick={openNewMark}
+                disabled={activeStudents.length === 0}
+                className="inline-flex items-center gap-1.5 min-h-[40px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white text-xs font-semibold cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Record Score</span>
+              </button>
+            )}
           </div>
         </div>
+
+        {!canWriteMarks && (
+          <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/70 px-3.5 py-2.5 flex items-center gap-2.5 text-xs text-slate-700 dark:text-slate-300">
+            <Lock className="w-3.5 h-3.5 text-slate-500 shrink-0" aria-hidden="true" />
+            <span>
+              <strong>Read-Only View:</strong> Score entry and edits are assigned to Subject Teachers, Form Teachers, HODs, Deputy Head, and Head Teacher. Use the Role Switcher in the sidebar if you need to act as an academic role.
+            </span>
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-900">
@@ -771,7 +787,9 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
                   <th className="py-3 px-3 font-medium text-right">Total</th>
                   <th className="py-3 px-3 font-medium text-right">Grade</th>
                   <th className="py-3 px-3 font-medium">Remark</th>
-                  <th className="py-3 px-4 font-medium text-right">Actions</th>
+                  {canWriteMarks && (
+                    <th className="py-3 px-4 font-medium text-right">Actions</th>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
@@ -882,27 +900,29 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
                       <td className="py-3 px-3 text-xs text-slate-600 dark:text-slate-400">
                         {a.remark}
                       </td>
-                      <td className="py-3 px-4 text-right whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => openEditMark(a)}
-                          aria-label={`Edit ${a.studentName} ${a.subject} score`}
-                          className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setDeleteAssessmentError('');
-                            setConfirmAssessment(a);
-                          }}
-                          aria-label={`Delete ${a.studentName} ${a.subject} score`}
-                          className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </td>
+                      {canWriteMarks && (
+                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => openEditMark(a)}
+                            aria-label={`Edit ${a.studentName} ${a.subject} score`}
+                            className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDeleteAssessmentError('');
+                              setConfirmAssessment(a);
+                            }}
+                            aria-label={`Delete ${a.studentName} ${a.subject} score`}
+                            className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}

@@ -12,6 +12,7 @@ import {
   BookOpen,
   UserCheck,
   FileSpreadsheet,
+  Settings,
 } from 'lucide-react';
 import {
   Assessment,
@@ -22,6 +23,7 @@ import {
   LibraryLoan,
   RolePermissions,
   School,
+  SchoolAnnouncement,
   SchoolSection,
   StaffLink,
   Student,
@@ -50,6 +52,7 @@ import {
 } from './AnalyticsCharts';
 import { ClassPerformanceTrendChart } from './ClassPerformanceTrendChart';
 import { CaDropAlertsPanel } from './CaDropAlertsPanel';
+import { AnnouncementsPanel } from './AnnouncementsPanel';
 
 interface OverviewDashboardProps {
   school: School;
@@ -62,6 +65,8 @@ interface OverviewDashboardProps {
   payments: FeePayment[];
   attendance: AttendanceRecord[];
   libraryLoans?: LibraryLoan[];
+  announcements?: SchoolAnnouncement[];
+  authorDisplayName?: string;
   onNavigate: (section: SchoolSection) => void;
 }
 
@@ -76,6 +81,8 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
   payments,
   attendance,
   libraryLoans = [],
+  announcements = [],
+  authorDisplayName = 'School Admin',
   onNavigate,
 }) => {
   const govTuitionOnly = isGovernmentSchool(school.schoolType);
@@ -235,7 +242,9 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
   }, [activeStaffLink, termAssessments]);
 
   const formTeacherRoster = useMemo(() => {
-    if (rolePermissions.role !== 'Form Master') return null;
+    if (rolePermissions.role !== 'Form Teacher' && rolePermissions.role !== 'Form Master') {
+      return null;
+    }
     const rawAssigned = (activeStaffLink?.assignedForm || '').trim();
     const match = rawAssigned.match(/form\s*([1-4])\s*([a-z0-9]*)/i);
     const targetForm = (match ? Number(match[1]) : 4) as FormLevel;
@@ -400,57 +409,100 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
   // Role Header Strip (visible across all roles)
   const RoleHeaderBanner = (
     <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-      <div>
-        <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-          {rolePermissions.roleLabel} · {school.district} · {school.schoolType}
+      <div className="flex items-center gap-3.5 min-w-0">
+        {school.logoDataUrl && (
+          <div className="h-12 w-12 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-hidden shrink-0 flex items-center justify-center">
+            <img
+              src={school.logoDataUrl}
+              alt={`${school.name} logo`}
+              className="h-full w-full object-contain p-1"
+            />
+          </div>
+        )}
+        <div className="min-w-0">
+          <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+            {rolePermissions.roleLabel} · {school.district} · {school.schoolType}
+          </div>
+          <h1 className="mt-0.5 text-lg sm:text-xl font-bold text-slate-900 dark:text-white tracking-tight truncate">
+            {rolePermissions.homeTitle}
+          </h1>
+          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400 font-mono truncate">
+            {activeStaffLink
+              ? `${activeStaffLink.staffName} (${activeStaffLink.staffCode}) · ${activeStaffLink.assignedForm} · ${school.currentTerm}`
+              : `${school.name} · ${school.currentTerm} (${school.academicYear})${
+                  govTuitionOnly ? ' · Tuition-Only Gov. Policy' : ''
+                }`}
+          </p>
         </div>
-        <h1 className="mt-0.5 text-lg sm:text-xl font-bold text-slate-900 dark:text-white tracking-tight">
-          {rolePermissions.homeTitle}
-        </h1>
-        <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400 font-mono">
-          {activeStaffLink
-            ? `${activeStaffLink.staffName} (${activeStaffLink.staffCode}) · ${activeStaffLink.assignedForm} · ${school.currentTerm}`
-            : `${school.name} · ${school.currentTerm} (${school.academicYear})${
-                govTuitionOnly ? ' · Tuition-Only Gov. Policy' : ''
-              }`}
-        </p>
       </div>
       <div className="flex flex-wrap items-center gap-2 shrink-0">
-        {rolePermissions.canWriteMarks && (
+        {rolePermissions.canManageStaff && (
+          <button
+            type="button"
+            onClick={() => onNavigate('staff')}
+            className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <Settings className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>Staff &amp; Settings</span>
+          </button>
+        )}
+        {rolePermissions.canManageStudents && (
+          <button
+            type="button"
+            onClick={() => onNavigate('students')}
+            className={`inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${
+              rolePermissions.canManageStaff
+                ? 'border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200'
+                : 'bg-emerald-700 hover:bg-emerald-800 text-white'
+            }`}
+          >
+            <Users className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>Students</span>
+          </button>
+        )}
+        {rolePermissions.canReadMarks && (
           <button
             type="button"
             onClick={() => onNavigate('marks')}
-            className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer"
+            className={`inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${
+              rolePermissions.canWriteMarks && !rolePermissions.canManageStaff
+                ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                : 'border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200'
+            }`}
           >
             <Award className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>Exam Marks</span>
+            <span>{rolePermissions.canWriteMarks ? 'Exam Marks' : 'Exam Marks (View)'}</span>
           </button>
         )}
-        {rolePermissions.canWriteFees && (
+        {rolePermissions.canReadFees && (
           <button
             type="button"
             onClick={() => onNavigate('fees')}
-            className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 cursor-pointer"
+            className={`inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${
+              rolePermissions.canWriteFees && !rolePermissions.canManageStaff && !rolePermissions.canWriteMarks
+                ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                : 'border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200'
+            }`}
           >
             <Banknote className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>Bursar Ledger</span>
+            <span>{rolePermissions.canWriteFees ? 'Bursar Ledger' : 'Bursar Ledger (View)'}</span>
           </button>
         )}
-        {rolePermissions.canWriteAttendance && (
+        {rolePermissions.canReadAttendance && (
           <button
             type="button"
             onClick={() => onNavigate('attendance')}
-            className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 cursor-pointer"
+            className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 whitespace-nowrap shrink-0 cursor-pointer"
           >
             <CalendarCheck className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>Roll Call</span>
+            <span>{rolePermissions.canWriteAttendance ? 'Roll Call' : 'Roll Call (View)'}</span>
           </button>
         )}
         {rolePermissions.canReadLibrary && (
           <button
             type="button"
             onClick={() => onNavigate('library')}
-            className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 cursor-pointer"
+            className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 whitespace-nowrap shrink-0 cursor-pointer"
           >
             <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
             <span>
@@ -548,6 +600,12 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
     return (
       <div className="space-y-6">
         {RoleHeaderBanner}
+        <AnnouncementsPanel
+          school={school}
+          rolePermissions={rolePermissions}
+          announcements={announcements}
+          authorDisplayName={authorDisplayName}
+        />
 
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
@@ -838,6 +896,12 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
     return (
       <div className="space-y-6">
         {RoleHeaderBanner}
+        <AnnouncementsPanel
+          school={school}
+          rolePermissions={rolePermissions}
+          announcements={announcements}
+          authorDisplayName={authorDisplayName}
+        />
 
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
@@ -1047,16 +1111,23 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
   }
 
   // =========================================================================
-  // 2. TEACHER / FORM MASTER / HOD HOME DASHBOARD (NO FEE DATA)
+  // 2. TEACHER / FORM TEACHER / HOD HOME DASHBOARD (NO FEE DATA)
   // =========================================================================
   if (
     rolePermissions.role === 'Subject Teacher' ||
+    rolePermissions.role === 'Form Teacher' ||
     rolePermissions.role === 'Form Master' ||
     rolePermissions.role === 'Head of Department'
   ) {
     return (
       <div className="space-y-6">
         {RoleHeaderBanner}
+        <AnnouncementsPanel
+          school={school}
+          rolePermissions={rolePermissions}
+          announcements={announcements}
+          authorDisplayName={authorDisplayName}
+        />
 
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
@@ -1157,7 +1228,8 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
           </section>
         )}
 
-        {rolePermissions.role === 'Form Master' && formTeacherRoster && (
+        {(rolePermissions.role === 'Form Teacher' || rolePermissions.role === 'Form Master') &&
+          formTeacherRoster && (
           <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -1374,6 +1446,12 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
     return (
       <div className="space-y-6">
         {RoleHeaderBanner}
+        <AnnouncementsPanel
+          school={school}
+          rolePermissions={rolePermissions}
+          announcements={announcements}
+          authorDisplayName={authorDisplayName}
+        />
 
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
@@ -1559,6 +1637,12 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
   return (
     <div className="space-y-6">
       {RoleHeaderBanner}
+      <AnnouncementsPanel
+        school={school}
+        rolePermissions={rolePermissions}
+        announcements={announcements}
+        authorDisplayName={authorDisplayName}
+      />
 
       {/* 4-Column KPI Summary Strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">

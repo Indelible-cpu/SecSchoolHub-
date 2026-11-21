@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { CheckCheck } from 'lucide-react';
+import { CheckCheck, Lock } from 'lucide-react';
 import {
   AttendanceRecord,
   AttendanceStatus,
@@ -15,6 +15,7 @@ interface AttendanceRegisterProps {
   ownerId: string;
   students: Student[];
   attendance: AttendanceRecord[];
+  canWriteAttendance?: boolean;
 }
 
 const STATUS_OPTIONS: AttendanceStatus[] = ['Present', 'Absent', 'Late', 'Excused'];
@@ -24,6 +25,7 @@ export const AttendanceRegister: React.FC<AttendanceRegisterProps> = ({
   ownerId,
   students,
   attendance,
+  canWriteAttendance = true,
 }) => {
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [formFilter, setFormFilter] = useState<FormLevel>(4);
@@ -65,6 +67,7 @@ export const AttendanceRegister: React.FC<AttendanceRegisterProps> = ({
   }, [formStudents, recordsByStudent]);
 
   const handleMark = async (student: Student, status: AttendanceStatus) => {
+    if (!canWriteAttendance) return;
     const existing = recordsByStudent.get(student.id);
     setSavingId(student.id);
     try {
@@ -84,6 +87,7 @@ export const AttendanceRegister: React.FC<AttendanceRegisterProps> = ({
   };
 
   const handleMarkAllPresent = async () => {
+    if (!canWriteAttendance) return;
     setBulkBusy(true);
     try {
       for (const s of formStudents) {
@@ -118,16 +122,27 @@ export const AttendanceRegister: React.FC<AttendanceRegisterProps> = ({
               Present: {counts.present} · Late: {counts.late} · Absent: {counts.absent} · Excused: {counts.excused}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={handleMarkAllPresent}
-            disabled={bulkBusy || formStudents.length === 0}
-            className="inline-flex items-center gap-1.5 min-h-[40px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white text-xs font-semibold cursor-pointer"
-          >
-            <CheckCheck className="w-4 h-4" aria-hidden="true" />
-            <span>{bulkBusy ? 'Marking...' : `Mark Form ${formFilter} All Present`}</span>
-          </button>
+          {canWriteAttendance && (
+            <button
+              type="button"
+              onClick={handleMarkAllPresent}
+              disabled={bulkBusy || formStudents.length === 0}
+              className="inline-flex items-center gap-1.5 min-h-[40px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white text-xs font-semibold cursor-pointer"
+            >
+              <CheckCheck className="w-4 h-4" aria-hidden="true" />
+              <span>{bulkBusy ? 'Marking...' : `Mark Form ${formFilter} All Present`}</span>
+            </button>
+          )}
         </div>
+
+        {!canWriteAttendance && (
+          <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/70 px-3.5 py-2.5 flex items-center gap-2.5 text-xs text-slate-700 dark:text-slate-300">
+            <Lock className="w-3.5 h-3.5 text-slate-500 shrink-0" aria-hidden="true" />
+            <span>
+              <strong>Read-Only View:</strong> Daily roll call marking is assigned to Form Teachers, Subject Teachers, HODs, Deputy Head, and Head Teacher. Use the Role Switcher in the sidebar if you need to act as a teaching role.
+            </span>
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center gap-3">
           <input
@@ -181,32 +196,48 @@ export const AttendanceRegister: React.FC<AttendanceRegisterProps> = ({
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-4 gap-1.5 sm:w-auto w-full">
-                    {STATUS_OPTIONS.map((st) => {
-                      const active = rec?.status === st;
-                      return (
-                        <button
-                          key={st}
-                          type="button"
-                          disabled={busy}
-                          onClick={() => handleMark(s, st)}
-                          className={`min-h-[40px] px-3 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                            active
-                              ? st === 'Present'
-                                ? 'bg-emerald-700 text-white'
-                                : st === 'Absent'
-                                ? 'bg-rose-600 text-white'
-                                : st === 'Late'
-                                ? 'bg-amber-600 text-white'
-                                : 'bg-slate-700 text-white'
-                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-                          }`}
-                        >
-                          {st}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  {canWriteAttendance ? (
+                    <div className="grid grid-cols-4 gap-1.5 sm:w-auto w-full">
+                      {STATUS_OPTIONS.map((st) => {
+                        const active = rec?.status === st;
+                        return (
+                          <button
+                            key={st}
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleMark(s, st)}
+                            className={`min-h-[40px] px-3 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                              active
+                                ? st === 'Present'
+                                  ? 'bg-emerald-700 text-white'
+                                  : st === 'Absent'
+                                  ? 'bg-rose-600 text-white'
+                                  : st === 'Late'
+                                  ? 'bg-amber-600 text-white'
+                                  : 'bg-slate-700 text-white'
+                                : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                            }`}
+                          >
+                            {st}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div
+                      className={`text-xs font-semibold px-3 py-1.5 rounded-lg border ${
+                        rec?.status === 'Present'
+                          ? 'border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/70 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-300'
+                          : rec?.status === 'Absent'
+                          ? 'border-rose-200 dark:border-rose-900/60 bg-rose-50/70 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300'
+                          : rec?.status === 'Late' || rec?.status === 'Excused'
+                          ? 'border-amber-200 dark:border-amber-900/60 bg-amber-50/70 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300'
+                          : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-500 dark:text-slate-400'
+                      }`}
+                    >
+                      {rec?.status || 'Unmarked'}
+                    </div>
+                  )}
                 </div>
               );
             })}

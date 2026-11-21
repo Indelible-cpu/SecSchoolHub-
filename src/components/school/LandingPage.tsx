@@ -61,16 +61,12 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       {/* Single-Screen Centered Split */}
       <main className="flex-1 flex items-center justify-center px-6 py-10">
         <div className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14 items-center">
-          <div className="lg:col-span-6 space-y-5">
-            <p className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-              Secondary School Portal · Forms 1–4
-            </p>
-
+          <div className="lg:col-span-6 space-y-5 text-center">
             <h1 className="text-3xl sm:text-4xl lg:text-[2.65rem] font-bold tracking-tight leading-[1.12] text-slate-900 dark:text-white text-balance">
               Manage your school in one place.
             </h1>
 
-            <p className="text-sm sm:text-base text-slate-600 dark:text-slate-400 leading-relaxed max-w-md">
+            <p className="text-sm sm:text-base text-slate-600 dark:text-slate-400 leading-relaxed max-w-md mx-auto">
               Student records, JCE &amp; MSCE exam grading, MWK fee ledgers, and school library
               circulation for administrators, staff, and students.
             </p>
@@ -81,7 +77,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           </div>
 
           <div className="lg:col-span-6 lg:pl-6">
-            <div className="w-full max-w-md lg:ml-auto bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-7 space-y-5">
+            <div className="w-full max-w-md lg:mx-auto bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-7 space-y-5">
               <div
                 role="tablist"
                 aria-label="Portal sign-in role"
@@ -111,7 +107,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 ))}
               </div>
 
-              <div>
+              <div className="text-center">
                 <h2 className="text-lg font-semibold tracking-tight text-slate-900 dark:text-white">
                   {loginIntent === 'student'
                     ? 'Student Sign In'
@@ -124,7 +120,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     ? 'Use the registration code issued by your school.'
                     : loginIntent === 'staff'
                     ? 'Teachers, Form Teachers, HODs, Librarians, and Bursars.'
-                    : 'Head Teacher and School Owner workspace.'}
+                    : 'School administration and role oversight workspace.'}
                 </p>
               </div>
 

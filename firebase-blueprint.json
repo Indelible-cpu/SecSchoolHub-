@@ -37,6 +37,7 @@
         "defaultTuitionMWK": { "type": "number" },
         "defaultGpfMWK": { "type": "number" },
         "defaultExamFeeMWK": { "type": "number" },
+        "logoDataUrl": { "type": "string", "maxLength": 160000 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -119,6 +120,7 @@
             "Head Teacher",
             "Deputy Head",
             "Head of Department",
+            "Form Teacher",
             "Form Master",
             "Subject Teacher",
             "School Librarian",
@@ -347,6 +349,7 @@
         "stream": { "type": "string", "maxLength": 20 },
         "boardingStatus": { "type": "string", "enum": ["Day Scholar", "Boarder"], "maxLength": 20 },
         "studentEmail": { "type": "string", "maxLength": 160 },
+        "logoDataUrl": { "type": "string", "maxLength": 160000 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -395,6 +398,7 @@
             "Head Teacher",
             "Deputy Head",
             "Head of Department",
+            "Form Teacher",
             "Form Master",
             "Subject Teacher",
             "School Librarian",
@@ -406,6 +410,7 @@
         "assignedForm": { "type": "string", "maxLength": 30 },
         "staffEmail": { "type": "string", "maxLength": 120 },
         "status": { "type": "string", "enum": ["Active", "On Leave"], "maxLength": 20 },
+        "logoDataUrl": { "type": "string", "maxLength": 160000 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -444,6 +449,7 @@
             "Head Teacher",
             "Deputy Head",
             "Head of Department",
+            "Form Teacher",
             "Form Master",
             "Subject Teacher",
             "School Librarian",
@@ -590,6 +596,7 @@
           "enum": ["Active", "Transferred", "Suspended", "Graduated"],
           "maxLength": 20
         },
+        "logoDataUrl": { "type": "string", "maxLength": 160000 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -1002,6 +1009,15 @@
         "examYear": { "type": "string", "maxLength": 16 },
         "summary": { "type": "string", "maxLength": 280 },
         "content": { "type": "string", "maxLength": 30000 },
+        "storageFormat": {
+          "type": "string",
+          "enum": ["text", "pdf", "image"],
+          "maxLength": 10
+        },
+        "fileName": { "type": "string", "maxLength": 160 },
+        "mimeType": { "type": "string", "maxLength": 100 },
+        "fileSizeBytes": { "type": "number" },
+        "chunkCount": { "type": "number" },
         "allowOffline": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -1018,6 +1034,183 @@
         "summary",
         "content",
         "allowOffline",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DigitalResourceChunk": {
+      "title": "Digital Library Binary Chunk",
+      "description": "Base64 binary chunk of an uploaded PDF or scanned image reading material stored under studentLibraries.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "resourceId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "chunkIndex": { "type": "number" },
+        "dataBase64": { "type": "string", "maxLength": 700000 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "resourceId",
+        "chunkIndex",
+        "dataBase64",
+        "createdAt"
+      ]
+    },
+    "StudentPortalFeeInvoice": {
+      "title": "Student Portal Fee Invoice Mirror",
+      "description": "Zero-PII term fee invoice and payment balance mirror under /studentPortals/{registrationCode}/feeInvoices/{invoiceId}.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "registrationCode": { "type": "string", "maxLength": 32 },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "formLevel": { "type": "number" },
+        "stream": { "type": "string", "maxLength": 20 },
+        "term": { "type": "string", "enum": ["Term 1", "Term 2", "Term 3"] },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "tuitionFee": { "type": "number" },
+        "gpfFee": { "type": "number" },
+        "examFee": { "type": "number" },
+        "otherFee": { "type": "number" },
+        "totalBilled": { "type": "number" },
+        "totalPaid": { "type": "number" },
+        "status": { "type": "string", "enum": ["Unpaid", "Partial", "Paid"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "registrationCode",
+        "studentId",
+        "studentName",
+        "formLevel",
+        "stream",
+        "term",
+        "academicYear",
+        "tuitionFee",
+        "gpfFee",
+        "examFee",
+        "otherFee",
+        "totalBilled",
+        "totalPaid",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StudentFeeSubmission": {
+      "title": "Student Fee Payment Proof Submission",
+      "description": "Student-submitted PDF or image payment reference for Bursar verification.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "admissionNo": { "type": "string", "maxLength": 40 },
+        "formLevel": { "type": "number" },
+        "stream": { "type": "string", "maxLength": 20 },
+        "registrationCode": { "type": "string", "maxLength": 32 },
+        "invoiceId": { "type": "string", "maxLength": 128 },
+        "term": { "type": "string", "enum": ["Term 1", "Term 2", "Term 3"] },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "amount": { "type": "number" },
+        "method": { "type": "string", "enum": ["Cash (Bursar)", "Bank Deposit", "Airtel Money", "TNM Mpamba"] },
+        "reference": { "type": "string", "maxLength": 80 },
+        "notes": { "type": "string", "maxLength": 240 },
+        "fileName": { "type": "string", "maxLength": 160 },
+        "mimeType": { "type": "string", "maxLength": 100 },
+        "fileFormat": { "type": "string", "enum": ["pdf", "image"] },
+        "fileSizeBytes": { "type": "number" },
+        "chunkCount": { "type": "number" },
+        "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected"] },
+        "reviewNote": { "type": "string", "maxLength": 240 },
+        "receiptNo": { "type": "string", "maxLength": 40 },
+        "submittedDate": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "studentId",
+        "studentName",
+        "admissionNo",
+        "formLevel",
+        "stream",
+        "registrationCode",
+        "invoiceId",
+        "term",
+        "academicYear",
+        "amount",
+        "method",
+        "reference",
+        "notes",
+        "fileName",
+        "mimeType",
+        "fileFormat",
+        "fileSizeBytes",
+        "chunkCount",
+        "status",
+        "reviewNote",
+        "receiptNo",
+        "submittedDate",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "FeeSubmissionChunk": {
+      "title": "Student Fee Submission Binary Chunk",
+      "description": "Base64 binary chunk of an uploaded PDF or image fee payment reference.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "registrationCode": { "type": "string", "maxLength": 32 },
+        "submissionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "chunkIndex": { "type": "number" },
+        "dataBase64": { "type": "string", "maxLength": 700000 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "registrationCode",
+        "submissionId",
+        "chunkIndex",
+        "dataBase64",
+        "createdAt"
+      ]
+    },
+    "SchoolAnnouncement": {
+      "title": "School Announcement",
+      "description": "Administrative announcement targeted to selected school audiences (Teachers, Librarian, Bursar, Students).",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "maxLength": 120 },
+        "message": { "type": "string", "maxLength": 1000 },
+        "targetAudiences": { "type": "array" },
+        "publishedDate": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "authorName": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "title",
+        "message",
+        "targetAudiences",
+        "publishedDate",
+        "authorName",
         "createdAt",
         "updatedAt"
       ]
@@ -1048,6 +1241,18 @@
       "schema": { "$ref": "#/entities/LibraryReservation" },
       "description": "Student library book reservations readable and requestable via their registration code."
     },
+    "/studentPortals/{registrationCode}/feeInvoices/{invoiceId}": {
+      "schema": { "$ref": "#/entities/StudentPortalFeeInvoice" },
+      "description": "Student term fee invoice and balance summary readable via their registration code."
+    },
+    "/studentPortals/{registrationCode}/feeSubmissions/{submissionId}": {
+      "schema": { "$ref": "#/entities/StudentFeeSubmission" },
+      "description": "Student fee payment reference uploads (PDF or image) readable and creatable via registration code."
+    },
+    "/studentPortals/{registrationCode}/feeSubmissions/{submissionId}/chunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/FeeSubmissionChunk" },
+      "description": "Binary file chunks for uploaded PDF and image fee payment references."
+    },
     "/studentLibraries/{schoolId}/books/{bookId}": {
       "schema": { "$ref": "#/entities/CatalogBookMirror" },
       "description": "Zero-PII school book availability catalog readable by students in that school."
@@ -1055,6 +1260,14 @@
     "/studentLibraries/{schoolId}/digitalResources/{resourceId}": {
       "schema": { "$ref": "#/entities/DigitalLibraryResource" },
       "description": "Published non-downloadable digital books and past papers readable by students in that school."
+    },
+    "/studentLibraries/{schoolId}/digitalResources/{resourceId}/chunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/DigitalResourceChunk" },
+      "description": "Binary file chunks for uploaded PDF and scanned image library materials."
+    },
+    "/studentLibraries/{schoolId}/announcements/{announcementId}": {
+      "schema": { "$ref": "#/entities/SchoolAnnouncement" },
+      "description": "Zero-PII mirror of school announcements targeted to Students."
     },
     "/studentLinks/{linkId}": {
       "schema": { "$ref": "#/entities/StudentLink" },
@@ -1092,6 +1305,10 @@
       "schema": { "$ref": "#/entities/FeePayment" },
       "description": "Immutable MWK fee payment receipts."
     },
+    "/schools/{schoolId}/feeSubmissions/{submissionId}": {
+      "schema": { "$ref": "#/entities/StudentFeeSubmission" },
+      "description": "Student-uploaded fee payment proofs (PDF or image) reviewed by the School Bursar and Head Teacher."
+    },
     "/schools/{schoolId}/attendance/{attendanceId}": {
       "schema": { "$ref": "#/entities/AttendanceRecord" },
       "description": "Daily student attendance records."
@@ -1127,6 +1344,10 @@
     "/schools/{schoolId}/digitalLibrary/{resourceId}": {
       "schema": { "$ref": "#/entities/DigitalLibraryResource" },
       "description": "Online & offline digital library collection (non-downloadable books, set books, and past papers)."
+    },
+    "/schools/{schoolId}/announcements/{announcementId}": {
+      "schema": { "$ref": "#/entities/SchoolAnnouncement" },
+      "description": "School-wide administrative announcements with role-based audience targeting."
     }
   }
 }

@@ -1,4 +1,5 @@
 import {
+  AnnouncementAudience,
   Assessment,
   DigitalResourceCategory,
   DigitalResourceFormLevel,
@@ -212,19 +213,19 @@ export function getRolePermissions(role: WorkspaceRole): RolePermissions {
     return {
       role,
       roleLabel: 'School Owner / Admin',
-      homeTitle: 'Head Teacher Dashboard',
+      homeTitle: 'School Admin Dashboard',
       allowedSections: ['overview', 'students', 'marks', 'fees', 'attendance', 'library', 'staff'],
       canManageSchool: true,
       canManageStaff: true,
       canManageStudents: true,
       canReadMarks: true,
-      canWriteMarks: true,
+      canWriteMarks: false,
       canReadFees: true,
-      canWriteFees: true,
+      canWriteFees: false,
       canReadAttendance: true,
-      canWriteAttendance: true,
+      canWriteAttendance: false,
       canReadLibrary: true,
-      canWriteLibrary: true,
+      canWriteLibrary: false,
       canReadTeachers: true,
     };
   }
@@ -313,17 +314,17 @@ export function getRolePermissions(role: WorkspaceRole): RolePermissions {
     };
   }
 
-  // Head of Department, Form Master (Form Teacher), Subject Teacher
+  // Head of Department, Form Teacher, Subject Teacher
   const roleLabel =
     role === 'Head of Department'
       ? 'Head of Department (HOD)'
-      : role === 'Form Master'
-      ? 'Form Teacher (Form Master)'
+      : role === 'Form Teacher' || role === 'Form Master'
+      ? 'Form Teacher'
       : role;
   const homeTitle =
     role === 'Head of Department'
       ? 'HOD Department Dashboard'
-      : role === 'Form Master'
+      : role === 'Form Teacher' || role === 'Form Master'
       ? 'Form Teacher Dashboard'
       : 'Teacher Home Dashboard';
 
@@ -1286,3 +1287,47 @@ export function detectCaDownwardAlerts(
 
   return { alerts, byAssessmentId, studentSummaries, pairedCount };
 }
+
+export const ANNOUNCEMENT_AUDIENCE_OPTIONS: {
+  value: AnnouncementAudience;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: 'Teachers',
+    label: 'Teachers',
+    description: 'Teachers, Form Teachers, HODs, Deputy Head & Head Teacher',
+  },
+  {
+    value: 'Librarian',
+    label: 'Librarian',
+    description: 'School Librarian',
+  },
+  {
+    value: 'Bursar',
+    label: 'Bursar',
+    description: 'School Bursar',
+  },
+  {
+    value: 'Students',
+    label: 'Students',
+    description: 'Visible to Students & all staff (including Teachers) except Librarian',
+  },
+];
+
+export function canRoleSeeAnnouncement(
+  targetAudiences: AnnouncementAudience[],
+  role: WorkspaceRole
+): boolean {
+  if (role === 'Owner') return true;
+  const list = Array.isArray(targetAudiences) ? targetAudiences : [];
+  if (role === 'School Librarian') {
+    return list.includes('Librarian');
+  }
+  const forStudents = list.includes('Students');
+  if (role === 'School Bursar') {
+    return list.includes('Bursar') || forStudents;
+  }
+  return list.includes('Teachers') || forStudents;
+}
+

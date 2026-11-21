@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Plus,
   Trash2,
@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   BookOpen,
   Sparkles,
+  Upload,
 } from 'lucide-react';
 import {
   FormLevel,
@@ -38,6 +39,7 @@ import {
   TeacherPayload,
   updateSchoolSettings,
 } from '../../school/firestoreService';
+import { processSchoolLogoFile } from '../../school/schoolLogoHelper';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 
 interface StaffAndSettingsProps {
@@ -55,14 +57,14 @@ const TEACHER_ROLES: TeacherRole[] = [
   'Head Teacher',
   'Deputy Head',
   'Head of Department',
-  'Form Master',
+  'Form Teacher',
   'Subject Teacher',
   'School Librarian',
   'School Bursar',
 ];
 
 function getRoleDisplayLabel(role: TeacherRole): string {
-  if (role === 'Form Master') return 'Form Master (Form Teacher)';
+  if (role === 'Form Teacher' || role === 'Form Master') return 'Form Teacher';
   if (role === 'Head of Department') return 'Head of Department (HOD)';
   return role;
 }
@@ -71,7 +73,8 @@ function getRoleAccessSummary(role: TeacherRole): string {
   if (role === 'Head Teacher') return 'Full Academics, Attendance, Library & Bursar Access';
   if (role === 'Deputy Head') return 'Students, Marks, Attendance, Library & Staff Directory';
   if (role === 'Head of Department') return 'HOD: Department Subjects, Marks, Attendance & Library';
-  if (role === 'Form Master') return 'Form Teacher: Class Roster, Daily Attendance, Marks & Library';
+  if (role === 'Form Teacher' || role === 'Form Master')
+    return 'Form Teacher: Class Roster, Daily Attendance, Marks & Library';
   if (role === 'School Librarian') return 'School Library Circulation, Analytics & Student Borrower Lookup (no marks/fees)';
   if (role === 'School Bursar') return 'Bursar Fee Ledger (MWK) & Student Lookup';
   return 'Subject Teacher: Exam Marks Gradebook, Roll Call & Library';
@@ -101,6 +104,10 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
   const [examFee, setExamFee] = useState(
     isGovernmentSchool(school.schoolType) ? '0' : String(school.defaultExamFeeMWK)
   );
+  const [logoDataUrl, setLogoDataUrl] = useState(school.logoDataUrl || '');
+  const [logoProcessing, setLogoProcessing] = useState(false);
+  const [logoError, setLogoError] = useState('');
+  const logoInputRef = useRef<HTMLInputElement>(null);
   const [savingSettings, setSavingSettings] = useState(false);
   const [savedSettingsFlash, setSavedSettingsFlash] = useState(false);
 
@@ -115,6 +122,9 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
     setTuition(String(school.defaultTuitionMWK));
     setGpf(isGovernmentSchool(school.schoolType) ? '0' : String(school.defaultGpfMWK));
     setExamFee(isGovernmentSchool(school.schoolType) ? '0' : String(school.defaultExamFeeMWK));
+    setLogoDataUrl(school.logoDataUrl || '');
+    setLogoError('');
+    setLogoProcessing(false);
   }, [school]);
 
   // Add / Edit Teacher Modal
@@ -187,6 +197,22 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
     }
   };
 
+  const handleLogoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !canManageStaffAndSettings) return;
+    setLogoError('');
+    setLogoProcessing(true);
+    try {
+      const processed = await processSchoolLogoFile(file);
+      setLogoDataUrl(processed);
+    } catch (err) {
+      setLogoError(err instanceof Error ? err.message : 'Unable to load school logo image.');
+    } finally {
+      setLogoProcessing(false);
+    }
+  };
+
   const handleSaveSchool = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canManageStaffAndSettings) return;
@@ -204,6 +230,7 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
           defaultTuitionMWK: Number(tuition) || 0,
           defaultGpfMWK: govTuitionOnly ? 0 : Number(gpf) || 0,
           defaultExamFeeMWK: govTuitionOnly ? 0 : Number(examFee) || 0,
+          logoDataUrl,
         },
         ownerId
       );
@@ -747,6 +774,72 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
               <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
                 Owner Only
               </span>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+              School Logo
+            </label>
+            <div className="flex items-center gap-3.5">
+              <div className="h-14 w-14 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 flex items-center justify-center overflow-hidden shrink-0">
+                {logoDataUrl ? (
+                  <img
+                    src={logoDataUrl}
+                    alt={`${name || school.name} logo`}
+                    className="h-full w-full object-contain p-1"
+                  />
+                ) : (
+                  <Building2 className="w-6 h-6 text-slate-400" aria-hidden="true" />
+                )}
+              </div>
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <input
+                  ref={logoInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                  disabled={!canManageStaffAndSettings || logoProcessing}
+                  onChange={handleLogoFileChange}
+                  className="sr-only"
+                />
+                {canManageStaffAndSettings && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={logoProcessing}
+                      onClick={() => logoInputRef.current?.click()}
+                      className="inline-flex items-center gap-1.5 min-h-[34px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>
+                        {logoProcessing
+                          ? 'Processing...'
+                          : logoDataUrl
+                          ? 'Replace Logo'
+                          : 'Upload Logo'}
+                      </span>
+                    </button>
+                    {logoDataUrl && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLogoDataUrl('');
+                          setLogoError('');
+                        }}
+                        className="min-h-[34px] px-2.5 rounded-xl text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                )}
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  PNG, JPG, WebP, or SVG. Shown on portals and PDF reports after saving.
+                </p>
+              </div>
+            </div>
+            {logoError && (
+              <p className="mt-1.5 text-xs text-rose-600 dark:text-rose-400">{logoError}</p>
             )}
           </div>
 
