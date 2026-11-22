@@ -6,13 +6,13 @@ import {
   Users,
   Award,
   Banknote,
-  CalendarCheck,
   BookOpen,
   Settings,
   LogOut,
   Moon,
   Sun,
   ShieldAlert,
+  Clock,
 } from 'lucide-react';
 import {
   auth,
@@ -39,22 +39,31 @@ import {
   SchoolSubject,
   SmsConfig,
   SmsLog,
+  StaffAttendanceRecord,
   StaffLink,
+  StaffTimebookEntry,
   Student,
+  StudentCase,
   StudentFeeSubmission,
   Teacher,
+  TimebookAuditLog,
+  TimebookCorrectionRequest,
+  TimebookSettings,
+  TimebookSuspiciousLog,
   WorkspaceRole,
 } from './school/types';
 import { getRolePermissions, normalizeRegistrationCode } from './school/malawi';
 import { syncMissingPortalFeeInvoices, upsertUserProfile } from './school/firestoreService';
+import { buildDefaultTimebookSettings } from './school/timebookUtils';
+import { syncTimebookPolicyToServer } from './school/timebookApi';
 import { SchoolOnboarding } from './components/school/SchoolOnboarding';
 import { OverviewDashboard } from './components/school/OverviewDashboard';
 import { StudentsManager } from './components/school/StudentsManager';
 import { MarksGradebook } from './components/school/MarksGradebook';
 import { FeesBursar } from './components/school/FeesBursar';
-import { AttendanceRegister } from './components/school/AttendanceRegister';
 import { SchoolLibrary } from './components/school/SchoolLibrary';
 import { StaffAndSettings } from './components/school/StaffAndSettings';
+import { StaffTimebookStaffView } from './components/school/StaffTimebookStaffView';
 import { StudentResultsPortal } from './components/school/StudentResultsPortal';
 import { LandingPage } from './components/school/LandingPage';
 import { PWAInstallButton } from './components/PWAInstallButton';
@@ -65,8 +74,8 @@ const NAV_ITEMS: { id: SchoolSection; label: string; shortLabel: string; icon: t
   { id: 'students', label: 'Students (Form 1–4)', shortLabel: 'Students', icon: Users },
   { id: 'marks', label: 'Exam Marks', shortLabel: 'Marks', icon: Award },
   { id: 'fees', label: 'Fees & Bursar (MK)', shortLabel: 'Fees', icon: Banknote },
-  { id: 'attendance', label: 'Attendance', shortLabel: 'Roll Call', icon: CalendarCheck },
   { id: 'library', label: 'School Library', shortLabel: 'Library', icon: BookOpen },
+  { id: 'timebook', label: 'Staff Timebook', shortLabel: 'Timebook', icon: Clock },
   { id: 'staff', label: 'Staff & Settings', shortLabel: 'Staff', icon: Settings },
 ];
 
@@ -81,7 +90,7 @@ const MOBILE_GRID_COLS: Record<number, string> = {
 };
 
 const ADMIN_ROLE_OPTIONS: { value: WorkspaceRole; label: string }[] = [
-  { value: 'Owner', label: 'School Admin (Read-Only Ops)' },
+  { value: 'Owner', label: 'School Admin' },
   { value: 'Head Teacher', label: 'Act as Head Teacher' },
   { value: 'Deputy Head', label: 'Act as Deputy Head' },
   { value: 'Head of Department', label: 'Act as Head of Department' },
@@ -105,7 +114,28 @@ export default function App() {
     }
   });
 
-  const [activeSection, setActiveSection] = useState<SchoolSection>('overview');
+  const [activeSection, setActiveSection] = useState<SchoolSection>(() => {
+    try {
+      const sectionParam = new URLSearchParams(window.location.search).get('section');
+      if (sectionParam === 'timebook') return 'timebook';
+    } catch {
+      // Ignore URL parse issues
+    }
+    return 'overview';
+  });
+  const [studentsLaunch, setStudentsLaunch] = useState<{
+    tab: 'directory' | 'attendance' | 'cases';
+    nonce: number;
+  } | null>(null);
+  const [staffLaunch, setStaffLaunch] = useState<{
+    tab: 'directory' | 'timebook' | 'presence';
+    nonce: number;
+  } | null>(null);
+  const [libraryLaunch, setLibraryLaunch] = useState<{
+    tab: 'catalog' | 'reservations' | 'online';
+    audience?: 'all' | 'teaching' | 'student';
+    nonce: number;
+  } | null>(null);
   const [loginIntent, setLoginIntent] = useState<'admin' | 'staff' | 'student'>('admin');
   const [portalOverride, setPortalOverride] = useState<'auto' | 'workspace' | 'student'>('auto');
 
@@ -142,12 +172,23 @@ export default function App() {
   const [smsLogs, setSmsLogs] = useState<SmsLog[]>([]);
   const [smsConfig, setSmsConfig] = useState<SmsConfig | null>(null);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
+  const [staffAttendance, setStaffAttendance] = useState<StaffAttendanceRecord[]>([]);
+  const [studentCases, setStudentCases] = useState<StudentCase[]>([]);
   const [libraryLoans, setLibraryLoans] = useState<LibraryLoan[]>([]);
   const [libraryBooks, setLibraryBooks] = useState<LibraryBook[]>([]);
   const [libraryTransactions, setLibraryTransactions] = useState<LibraryTransaction[]>([]);
   const [libraryReservations, setLibraryReservations] = useState<LibraryReservation[]>([]);
   const [digitalLibraryResources, setDigitalLibraryResources] = useState<DigitalLibraryResource[]>([]);
   const [announcements, setAnnouncements] = useState<SchoolAnnouncement[]>([]);
+  const [timebookSettings, setTimebookSettings] = useState<TimebookSettings | null>(null);
+  const [timebookEntries, setTimebookEntries] = useState<StaffTimebookEntry[]>([]);
+  const [timebookCorrectionRequests, setTimebookCorrectionRequests] = useState<
+    TimebookCorrectionRequest[]
+  >([]);
+  const [timebookAuditLogs, setTimebookAuditLogs] = useState<TimebookAuditLog[]>([]);
+  const [timebookSuspiciousLogs, setTimebookSuspiciousLogs] = useState<TimebookSuspiciousLog[]>(
+    []
+  );
   const syncedFeeMirrorRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -190,12 +231,19 @@ export default function App() {
         setSmsLogs([]);
         setSmsConfig(null);
         setAttendance([]);
+        setStaffAttendance([]);
+        setStudentCases([]);
         setLibraryLoans([]);
         setLibraryBooks([]);
         setLibraryTransactions([]);
         setLibraryReservations([]);
         setDigitalLibraryResources([]);
         setAnnouncements([]);
+        setTimebookSettings(null);
+        setTimebookEntries([]);
+        setTimebookCorrectionRequests([]);
+        setTimebookAuditLogs([]);
+        setTimebookSuspiciousLogs([]);
         return;
       }
 
@@ -427,12 +475,19 @@ export default function App() {
       setSmsLogs([]);
       setSmsConfig(null);
       setAttendance([]);
+      setStaffAttendance([]);
+      setStudentCases([]);
       setLibraryLoans([]);
       setLibraryBooks([]);
       setLibraryTransactions([]);
       setLibraryReservations([]);
       setDigitalLibraryResources([]);
       setAnnouncements([]);
+      setTimebookSettings(null);
+      setTimebookEntries([]);
+      setTimebookCorrectionRequests([]);
+      setTimebookAuditLogs([]);
+      setTimebookSuspiciousLogs([]);
       return;
     }
 
@@ -471,6 +526,25 @@ export default function App() {
           setStudents(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Student, 'id'>) })));
         },
         (err) => handleFirestoreError(err, OperationType.LIST, `schools/${schoolId}/students`)
+      )
+    );
+
+    unsubs.push(
+      onSnapshot(
+        query(collection(db, 'schools', schoolId, 'studentCases'), where('ownerId', '==', schoolOwnerId)),
+        (snap) => {
+          const list = snap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<StudentCase, 'id'>),
+          }));
+          list.sort((a, b) => {
+            const dateCmp = (b.incidentDate || '').localeCompare(a.incidentDate || '');
+            if (dateCmp !== 0) return dateCmp;
+            return (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0);
+          });
+          setStudentCases(list);
+        },
+        (err) => handleFirestoreError(err, OperationType.LIST, `schools/${schoolId}/studentCases`)
       )
     );
 
@@ -584,6 +658,110 @@ export default function App() {
       );
     } else {
       setAttendance([]);
+    }
+
+    if (rolePermissions.canReadStaffAttendance) {
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'schools', schoolId, 'staffAttendance'), where('ownerId', '==', schoolOwnerId)),
+          (snap) => {
+            setStaffAttendance(
+              snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<StaffAttendanceRecord, 'id'>) }))
+            );
+          },
+          (err) => handleFirestoreError(err, OperationType.LIST, `schools/${schoolId}/staffAttendance`)
+        )
+      );
+    } else {
+      setStaffAttendance([]);
+    }
+
+    // Staff Timebook Configuration (readable by all active school staff)
+    unsubs.push(
+      onSnapshot(
+        doc(db, 'schools', schoolId, 'timebookSettings', 'default'),
+        (snap) => {
+          if (snap.exists()) {
+            setTimebookSettings({
+              id: snap.id,
+              ...(snap.data() as Omit<TimebookSettings, 'id'>),
+            });
+          } else {
+            setTimebookSettings(null);
+          }
+        },
+        (err) => handleFirestoreError(err, OperationType.GET, `schools/${schoolId}/timebookSettings/default`)
+      )
+    );
+
+    // Staff Timebook Entries: Heads/Owner read whole school; individual staff read only their own entries
+    unsubs.push(
+      onSnapshot(
+        rolePermissions.canReadStaffAttendance
+          ? query(collection(db, 'schools', schoolId, 'timebookEntries'), where('ownerId', '==', schoolOwnerId))
+          : query(collection(db, 'schools', schoolId, 'timebookEntries'), where('staffUid', '==', user.uid)),
+        (snap) => {
+          const list = snap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<StaffTimebookEntry, 'id'>),
+          }));
+          list.sort((a, b) => b.date.localeCompare(a.date));
+          setTimebookEntries(list);
+        },
+        (err) => handleFirestoreError(err, OperationType.LIST, `schools/${schoolId}/timebookEntries`)
+      )
+    );
+
+    // Staff Timebook Correction Requests: Owner reads all requests; staff read only their own requests
+    unsubs.push(
+      onSnapshot(
+        rolePermissions.canManageTimebook
+          ? query(collection(db, 'schools', schoolId, 'timebookCorrectionRequests'), where('ownerId', '==', schoolOwnerId))
+          : query(collection(db, 'schools', schoolId, 'timebookCorrectionRequests'), where('staffUid', '==', user.uid)),
+        (snap) => {
+          const list = snap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<TimebookCorrectionRequest, 'id'>),
+          }));
+          list.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+          setTimebookCorrectionRequests(list);
+        },
+        (err) => handleFirestoreError(err, OperationType.LIST, `schools/${schoolId}/timebookCorrectionRequests`)
+      )
+    );
+
+    if (rolePermissions.canReadStaffAttendance) {
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'schools', schoolId, 'timebookAuditLogs'), where('ownerId', '==', schoolOwnerId)),
+          (snap) => {
+            const list = snap.docs.map((d) => ({
+              id: d.id,
+              ...(d.data() as Omit<TimebookAuditLog, 'id'>),
+            }));
+            list.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+            setTimebookAuditLogs(list);
+          },
+          (err) => handleFirestoreError(err, OperationType.LIST, `schools/${schoolId}/timebookAuditLogs`)
+        )
+      );
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'schools', schoolId, 'timebookSuspiciousLogs'), where('ownerId', '==', schoolOwnerId)),
+          (snap) => {
+            const list = snap.docs.map((d) => ({
+              id: d.id,
+              ...(d.data() as Omit<TimebookSuspiciousLog, 'id'>),
+            }));
+            list.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+            setTimebookSuspiciousLogs(list);
+          },
+          (err) => handleFirestoreError(err, OperationType.LIST, `schools/${schoolId}/timebookSuspiciousLogs`)
+        )
+      );
+    } else {
+      setTimebookAuditLogs([]);
+      setTimebookSuspiciousLogs([]);
     }
 
     if (canReadSubjects) {
@@ -717,9 +895,48 @@ export default function App() {
     rolePermissions.canReadFees,
     rolePermissions.canReadLibrary,
     rolePermissions.canReadMarks,
+    rolePermissions.canReadStaffAttendance,
+    rolePermissions.canManageTimebook,
     rolePermissions.canReadTeachers,
     user,
   ]);
+
+  // Synchronize school geofence settings and active staff roster to backend enforcement & scheduler
+  useEffect(() => {
+    if (!activeSchool || !user || !rolePermissions.canManageTimebook) return;
+    const effectiveSettings =
+      timebookSettings || buildDefaultTimebookSettings(activeSchool.id, activeSchool.ownerId);
+    syncTimebookPolicyToServer({
+      schoolId: activeSchool.id,
+      schoolName: activeSchool.name,
+      ownerId: activeSchool.ownerId,
+      settings: effectiveSettings,
+      teachers,
+    }).catch(() => undefined);
+  }, [activeSchool, rolePermissions.canManageTimebook, teachers, timebookSettings, user]);
+
+  const matchedTimebookTeacher: Teacher | null = useMemo(() => {
+    if (activeStaffLink) {
+      const fromRoster = teachers.find((t) => t.id === activeStaffLink.teacherId);
+      if (fromRoster) return fromRoster;
+      return {
+        id: activeStaffLink.teacherId,
+        ownerId: activeStaffLink.ownerId,
+        staffCode: activeStaffLink.staffCode,
+        fullName: activeStaffLink.staffName,
+        roleTitle: activeStaffLink.roleTitle,
+        subjects: activeStaffLink.subjects || [],
+        assignedForm: activeStaffLink.assignedForm || 'Unassigned',
+        phone: '',
+        staffEmail: activeStaffLink.staffEmail,
+        qualification: '',
+        status: activeStaffLink.status,
+      };
+    }
+    const email = user?.email?.trim().toLowerCase();
+    if (!email) return null;
+    return teachers.find((t) => t.staffEmail?.trim().toLowerCase() === email) || null;
+  }, [activeStaffLink, teachers, user?.email]);
 
   // Backfill any pre-existing school invoices onto student portal mirrors once per school session
   useEffect(() => {
@@ -917,9 +1134,9 @@ export default function App() {
   if (!activeSchool && (loginIntent === 'staff' || !isPlatformAdmin)) {
     const isStaffIntent = loginIntent === 'staff';
     return (
-      <div className="min-h-screen flex flex-col bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100">
-        <header className="h-14 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#161B22]">
-          <div className="max-w-4xl mx-auto h-full px-4 sm:px-6 flex items-center justify-between">
+      <div className="min-h-[100dvh] w-full flex flex-col bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100">
+        <header className="h-14 w-full border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#161B22]">
+          <div className="w-full h-full px-4 sm:px-6 flex items-center justify-between">
             <span className="text-base font-bold text-slate-900 dark:text-white">SecSchoolHub</span>
             <div className="flex items-center gap-2">
               <button
@@ -970,9 +1187,9 @@ export default function App() {
   // Onboarding is strictly restricted to authorized platform administrators
   if (isPlatformAdmin && (!activeSchool || creatingAnotherSchool)) {
     return (
-      <div className="min-h-screen bg-[#F7F8FA] dark:bg-[#0D1117]">
-        <header className="h-14 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#161B22]">
-          <div className="max-w-5xl mx-auto h-full px-4 sm:px-6 flex items-center justify-between">
+      <div className="min-h-[100dvh] w-full bg-[#F7F8FA] dark:bg-[#0D1117]">
+        <header className="h-14 w-full border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#161B22]">
+          <div className="w-full h-full px-4 sm:px-6 flex items-center justify-between">
             <span className="text-base font-bold text-slate-900 dark:text-white">SecSchoolHub</span>
             <div className="flex items-center gap-3">
               <button
@@ -1006,7 +1223,7 @@ export default function App() {
   const mobileGridClass = MOBILE_GRID_COLS[visibleNavItems.length] || 'grid-cols-4';
 
   return (
-    <div className="min-h-screen flex bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100">
+    <div className="min-h-[100dvh] w-full flex bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100">
       {/* Desktop Left Sidebar */}
       <aside className="hidden lg:flex lg:flex-col lg:w-64 shrink-0 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-[#161B22]">
         <div className="h-16 px-5 flex items-center gap-2.5 border-b border-slate-200 dark:border-slate-800">
@@ -1195,7 +1412,7 @@ export default function App() {
         </header>
 
         {/* Active Module Workspace */}
-        <main className="flex-1 p-4 sm:p-6 pb-24 lg:pb-8 max-w-7xl w-full mx-auto">
+        <main className="flex-1 px-3 sm:px-6 py-4 sm:py-6 pb-[72px] lg:pb-8 w-full">
           {activeSection === 'overview' && (
             <OverviewDashboard
               school={activeSchool}
@@ -1207,10 +1424,25 @@ export default function App() {
               invoices={invoices}
               payments={payments}
               attendance={attendance}
+              staffAttendance={staffAttendance}
+              timebookEntries={timebookEntries}
+              studentCases={studentCases}
               libraryLoans={libraryLoans}
               announcements={announcements}
               authorDisplayName={activeStaffLink?.staffName || user.displayName || 'School Admin'}
               onNavigate={setActiveSection}
+              onOpenStudents={(tab) => {
+                setStudentsLaunch({ tab, nonce: Date.now() });
+                setActiveSection('students');
+              }}
+              onOpenStaff={(tab) => {
+                setStaffLaunch({ tab, nonce: Date.now() });
+                setActiveSection('staff');
+              }}
+              onOpenLibrary={(tab, audience) => {
+                setLibraryLaunch({ tab, audience, nonce: Date.now() });
+                setActiveSection('library');
+              }}
             />
           )}
 
@@ -1222,10 +1454,18 @@ export default function App() {
               assessments={assessments}
               invoices={invoices}
               libraryLoans={rolePermissions.canReadLibrary ? libraryLoans : []}
+              studentCases={studentCases}
+              attendance={rolePermissions.canReadAttendance ? attendance : []}
               canManageStudents={rolePermissions.canManageStudents}
+              canManageStudentCases={rolePermissions.canManageStudentCases}
+              canReadAttendance={rolePermissions.canReadAttendance}
+              canWriteAttendance={rolePermissions.canWriteAttendance}
               canViewAcademicReport={rolePermissions.canReadMarks}
               canViewFees={rolePermissions.canReadFees}
               canViewLibrary={rolePermissions.canReadLibrary}
+              recordedByName={activeStaffLink?.staffName || user.displayName || 'School Admin'}
+              initialTab={studentsLaunch?.tab}
+              tabRequestNonce={studentsLaunch?.nonce}
               onOpenLibrary={
                 rolePermissions.canReadLibrary ? () => setActiveSection('library') : undefined
               }
@@ -1262,16 +1502,6 @@ export default function App() {
             />
           )}
 
-          {activeSection === 'attendance' && rolePermissions.canReadAttendance && (
-            <AttendanceRegister
-              school={activeSchool}
-              ownerId={activeSchool.ownerId}
-              students={students}
-              attendance={attendance}
-              canWriteAttendance={rolePermissions.canWriteAttendance}
-            />
-          )}
-
           {activeSection === 'library' && rolePermissions.canReadLibrary && (
             <SchoolLibrary
               school={activeSchool}
@@ -1284,6 +1514,21 @@ export default function App() {
               libraryReservations={libraryReservations}
               digitalResources={digitalLibraryResources}
               canWriteLibrary={rolePermissions.canWriteLibrary}
+              viewerRole={rolePermissions.role}
+              initialTab={libraryLaunch?.tab}
+              initialAudienceFilter={libraryLaunch?.audience}
+              tabRequestNonce={libraryLaunch?.nonce}
+            />
+          )}
+
+          {activeSection === 'timebook' && rolePermissions.allowedSections.includes('timebook') && (
+            <StaffTimebookStaffView
+              school={activeSchool}
+              user={user}
+              matchedTeacher={matchedTimebookTeacher}
+              timebookSettings={timebookSettings}
+              entries={timebookEntries}
+              correctionRequests={timebookCorrectionRequests}
             />
           )}
 
@@ -1294,7 +1539,19 @@ export default function App() {
               ownerId={activeSchool.ownerId}
               teachers={teachers}
               schoolSubjects={schoolSubjects}
+              staffAttendance={rolePermissions.canReadStaffAttendance ? staffAttendance : []}
+              timebookSettings={timebookSettings}
+              timebookEntries={timebookEntries}
+              timebookCorrectionRequests={timebookCorrectionRequests}
+              timebookAuditLogs={timebookAuditLogs}
+              timebookSuspiciousLogs={timebookSuspiciousLogs}
               canManageStaffAndSettings={rolePermissions.canManageStaff}
+              canReadStaffAttendance={rolePermissions.canReadStaffAttendance}
+              canWriteStaffAttendance={rolePermissions.canWriteStaffAttendance}
+              canManageTimebook={rolePermissions.canManageTimebook}
+              recordedByName={activeStaffLink?.staffName || user.displayName || 'School Admin'}
+              initialTab={staffLaunch?.tab}
+              tabRequestNonce={staffLaunch?.nonce}
               onSwitchSchool={handleSchoolSelected}
               onAddNewSchool={
                 isPlatformAdmin && rolePermissions.role === 'Owner'
@@ -1306,16 +1563,12 @@ export default function App() {
         </main>
       </div>
 
-      {/* Compact Centered Mobile Bottom Navigation Bar */}
+      {/* Docked Full-Width Mobile Bottom Navigation Bar */}
       <nav
-        className="lg:hidden fixed bottom-3 left-0 right-0 z-40 px-3 pointer-events-none pb-[env(safe-area-inset-bottom)] print:hidden"
+        className="lg:hidden fixed bottom-0 left-0 right-0 z-40 w-full bg-white/95 dark:bg-[#161B22]/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 pb-[env(safe-area-inset-bottom)] print:hidden"
         aria-label="Mobile sections"
       >
-        <div
-          className={`pointer-events-auto mx-auto w-full ${
-            visibleNavItems.length <= 4 ? 'max-w-[360px]' : 'max-w-lg'
-          } bg-white/95 dark:bg-[#161B22]/95 backdrop-blur-md border border-slate-200/90 dark:border-slate-800 rounded-2xl shadow-lg shadow-slate-900/10 dark:shadow-black/45 p-1 grid ${mobileGridClass} items-center gap-1`}
-        >
+        <div className={`w-full grid ${mobileGridClass} items-stretch`}>
           {visibleNavItems.map((item) => {
             const Icon = item.icon;
             const active = activeSection === item.id;
@@ -1325,9 +1578,9 @@ export default function App() {
                 type="button"
                 onClick={() => setActiveSection(item.id)}
                 aria-current={active ? 'page' : undefined}
-                className={`flex flex-col items-center justify-center min-h-[44px] px-1 py-1 rounded-xl gap-0.5 cursor-pointer transition-colors ${
+                className={`flex flex-col items-center justify-center min-h-[52px] px-1 py-1.5 gap-0.5 cursor-pointer transition-colors ${
                   active
-                    ? 'bg-emerald-700 text-white shadow-xs'
+                    ? 'bg-emerald-700 text-white'
                     : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-white'
                 }`}
               >

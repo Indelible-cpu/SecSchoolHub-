@@ -13,6 +13,7 @@ import {
   UserCheck,
   FileSpreadsheet,
   Settings,
+  ShieldAlert,
 } from 'lucide-react';
 import {
   Assessment,
@@ -25,8 +26,11 @@ import {
   School,
   SchoolAnnouncement,
   SchoolSection,
+  StaffAttendanceRecord,
   StaffLink,
+  StaffTimebookEntry,
   Student,
+  StudentCase,
   Teacher,
 } from '../../school/types';
 import {
@@ -64,10 +68,19 @@ interface OverviewDashboardProps {
   invoices: FeeInvoice[];
   payments: FeePayment[];
   attendance: AttendanceRecord[];
+  staffAttendance?: StaffAttendanceRecord[];
+  timebookEntries?: StaffTimebookEntry[];
+  studentCases?: StudentCase[];
   libraryLoans?: LibraryLoan[];
   announcements?: SchoolAnnouncement[];
   authorDisplayName?: string;
   onNavigate: (section: SchoolSection) => void;
+  onOpenStudents?: (tab: 'directory' | 'attendance' | 'cases') => void;
+  onOpenStaff?: (tab: 'directory' | 'timebook' | 'presence') => void;
+  onOpenLibrary?: (
+    tab: 'catalog' | 'reservations' | 'online',
+    audience?: 'all' | 'teaching' | 'student'
+  ) => void;
 }
 
 export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
@@ -80,12 +93,23 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
   invoices,
   payments,
   attendance,
+  staffAttendance = [],
+  timebookEntries = [],
+  studentCases = [],
   libraryLoans = [],
   announcements = [],
   authorDisplayName = 'School Admin',
   onNavigate,
+  onOpenStudents,
+  onOpenStaff,
+  onOpenLibrary,
 }) => {
   const govTuitionOnly = isGovernmentSchool(school.schoolType);
+  const isTeachingRole =
+    rolePermissions.role === 'Subject Teacher' ||
+    rolePermissions.role === 'Form Teacher' ||
+    rolePermissions.role === 'Form Master' ||
+    rolePermissions.role === 'Head of Department';
   const activeStudents = useMemo(
     () => students.filter((s) => s.status === 'Active'),
     [students]
@@ -132,6 +156,36 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
     const rate = todayRows.length > 0 ? Math.round((present / todayRows.length) * 100) : null;
     return { marked: todayRows.length, present, rate, todayRows };
   }, [attendance, todayIso]);
+
+  const staffPresenceStats = useMemo(() => {
+    const todayRows = staffAttendance.filter((a) => a.date === todayIso);
+    const present = todayRows.filter((a) => a.status === 'Present' || a.status === 'Late').length;
+    const absent = todayRows.filter((a) => a.status === 'Absent').length;
+    const onLeave = todayRows.filter((a) => a.status === 'On Leave').length;
+    return {
+      totalStaff: teachers.length,
+      marked: todayRows.length,
+      present,
+      absent,
+      onLeave,
+    };
+  }, [staffAttendance, teachers.length, todayIso]);
+
+  const studentCaseStats = useMemo(() => {
+    const activeSuspensions = studentCases.filter(
+      (c) => c.caseType === 'Suspension' && c.status !== 'Resolved'
+    ).length;
+    const rustications = studentCases.filter(
+      (c) => c.caseType === 'Rustication' || c.status === 'Rusticated'
+    ).length;
+    const openCases = studentCases.filter((c) => c.status !== 'Resolved').length;
+    return {
+      total: studentCases.length,
+      activeSuspensions,
+      rustications,
+      openCases,
+    };
+  }, [studentCases]);
 
   const formBreakdown = useMemo(() => {
     return FORM_LEVELS.map((form) => {
@@ -429,9 +483,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
           <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400 font-mono truncate">
             {activeStaffLink
               ? `${activeStaffLink.staffName} (${activeStaffLink.staffCode}) · ${activeStaffLink.assignedForm} · ${school.currentTerm}`
-              : `${school.name} · ${school.currentTerm} (${school.academicYear})${
-                  govTuitionOnly ? ' · Tuition-Only Gov. Policy' : ''
-                }`}
+              : `${school.name} · ${school.currentTerm} (${school.academicYear})`}
           </p>
         </div>
       </div>
@@ -471,7 +523,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
             }`}
           >
             <Award className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>{rolePermissions.canWriteMarks ? 'Exam Marks' : 'Exam Marks (View)'}</span>
+            <span>Exam Marks</span>
           </button>
         )}
         {rolePermissions.canReadFees && (
@@ -485,28 +537,34 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
             }`}
           >
             <Banknote className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>{rolePermissions.canWriteFees ? 'Bursar Ledger' : 'Bursar Ledger (View)'}</span>
+            <span>Bursar Ledger</span>
           </button>
         )}
-        {rolePermissions.canReadAttendance && (
+        {rolePermissions.canWriteAttendance && (
           <button
             type="button"
-            onClick={() => onNavigate('attendance')}
+            onClick={() =>
+              onOpenStudents ? onOpenStudents('attendance') : onNavigate('students')
+            }
             className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 whitespace-nowrap shrink-0 cursor-pointer"
           >
             <CalendarCheck className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>{rolePermissions.canWriteAttendance ? 'Roll Call' : 'Roll Call (View)'}</span>
+            <span>Student Roll Call</span>
           </button>
         )}
         {rolePermissions.canReadLibrary && (
           <button
             type="button"
-            onClick={() => onNavigate('library')}
+            onClick={() =>
+              isTeachingRole && onOpenLibrary
+                ? onOpenLibrary('online', 'teaching')
+                : onNavigate('library')
+            }
             className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 whitespace-nowrap shrink-0 cursor-pointer"
           >
             <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
             <span>
-              School Library
+              {isTeachingRole ? 'Teaching Resources' : 'School Library'}
               {overdueLibraryCount > 0 ? (
                 <span className="text-rose-600 dark:text-rose-400">
                   {' '}
@@ -520,6 +578,16 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                 </span>
               ) : null}
             </span>
+          </button>
+        )}
+        {rolePermissions.allowedSections.includes('timebook') && (
+          <button
+            type="button"
+            onClick={() => onNavigate('timebook')}
+            className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50/70 dark:bg-emerald-950/30 hover:bg-emerald-100/70 dark:hover:bg-emerald-950/50 text-xs font-semibold text-emerald-800 dark:text-emerald-300 whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <Clock className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>Staff Timebook</span>
           </button>
         )}
       </div>
@@ -687,14 +755,9 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
           {/* Active Loans & Overdue Queue */}
           <section className="lg:col-span-7 bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6">
             <div className="flex items-center justify-between gap-4">
-              <div>
-                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                  Overdue &amp; 48-Hour Return Reminders
-                </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Sorted by earliest due date so overdue and 48-hour upcoming returns are followed up first.
-                </p>
-              </div>
+              <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                Overdue &amp; 48-Hour Return Reminders
+              </h2>
               <button
                 type="button"
                 onClick={() => onNavigate('library')}
@@ -1219,10 +1282,12 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => onNavigate('library')}
+                onClick={() =>
+                  onOpenLibrary ? onOpenLibrary('online', 'teaching') : onNavigate('library')
+                }
                 className="min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
               >
-                Department Textbooks
+                Online Teaching Library
               </button>
             </div>
           </section>
@@ -1243,7 +1308,9 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => onNavigate('attendance')}
+                  onClick={() =>
+                    onOpenStudents ? onOpenStudents('attendance') : onNavigate('students')
+                  }
                   className="min-h-[36px] px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer"
                 >
                   Mark Class Roll Call
@@ -1425,10 +1492,12 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
               </h2>
               <button
                 type="button"
-                onClick={() => onNavigate('attendance')}
+                onClick={() =>
+                  onOpenStudents ? onOpenStudents('attendance') : onNavigate('students')
+                }
                 className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline whitespace-nowrap cursor-pointer"
               >
-                <span>Take Roll Call</span>
+                <span>{rolePermissions.canWriteAttendance ? 'Take Roll Call' : 'Student Turnout'}</span>
                 <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
               </button>
             </div>
@@ -1698,6 +1767,73 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
               ? `${attendanceStats.present} of ${attendanceStats.marked} marked present`
               : `No register saved for ${todayIso}`}
           </div>
+        </div>
+      </div>
+
+      {/* Staff Presence & Student Disciplinary Cases Row */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+              <UserCheck className="w-4 h-4 text-emerald-600 shrink-0" aria-hidden="true" />
+              <span>Staff &amp; Teacher Presence ({todayIso})</span>
+            </div>
+            <div className="mt-2 text-xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+              {staffPresenceStats.marked > 0
+                ? `${staffPresenceStats.present} / ${staffPresenceStats.totalStaff} Present`
+                : `${staffPresenceStats.totalStaff} Staff Listed`}
+            </div>
+            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+              {staffPresenceStats.marked > 0
+                ? `Absent: ${staffPresenceStats.absent} · On Leave: ${staffPresenceStats.onLeave}`
+                : `${staffPresenceStats.totalStaff} staff · ${todayIso}`}
+              {' · '}
+              Timebook signed today: {timebookEntries.filter((e) => e.date === todayIso && (e.status === 'Present' || e.status === 'Administratively Recorded')).length}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => (onOpenStaff ? onOpenStaff('timebook') : onNavigate('staff'))}
+              className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <Clock className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+              <span>Timebook</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => (onOpenStaff ? onOpenStaff('presence') : onNavigate('staff'))}
+              className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold hover:opacity-90 whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <span>
+                {rolePermissions.canWriteStaffAttendance ? 'Check Staff' : 'Staff Turnout'}
+              </span>
+              <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+
+        <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+              <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" aria-hidden="true" />
+              <span>Student Cases (Suspensions &amp; Rustications)</span>
+            </div>
+            <div className="mt-2 text-xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+              {studentCaseStats.openCases} Open Cases
+            </div>
+            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+              Suspensions: {studentCaseStats.activeSuspensions} · Rustications: {studentCaseStats.rustications} · Total: {studentCaseStats.total}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onNavigate('students')}
+            className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <span>{rolePermissions.canManageStudentCases ? 'Manage Cases' : 'View Students'}</span>
+            <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+          </button>
         </div>
       </div>
 

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
+import { ModalBackdrop } from './ModalBackdrop';
 
 interface ConfirmDeleteModalProps {
   open: boolean;
@@ -42,11 +43,12 @@ export const ConfirmDeleteModal: React.FC<ConfirmDeleteModalProps> = ({
     !requireKeyword || typedKeyword.trim().toUpperCase() === requireKeyword.toUpperCase();
 
   return (
-    <div
+    <ModalBackdrop
+      open={open}
+      onClose={onCancel}
+      disabled={deleting}
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/65 backdrop-blur-xs p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="confirm-delete-title"
+      ariaLabelledBy="confirm-delete-title"
     >
       <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl space-y-4">
         <div className="flex items-start justify-between gap-3">
@@ -132,6 +134,6 @@ export const ConfirmDeleteModal: React.FC<ConfirmDeleteModalProps> = ({
           </button>
         </div>
       </div>
-    </div>
+    </ModalBackdrop>
   );
 };

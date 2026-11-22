@@ -1,8 +1,11 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
+  AlertOctagon,
   AlertTriangle,
   BookOpen,
   Check,
+  CheckCircle2,
+  ClipboardList,
   Clock,
   Copy,
   Download,
@@ -11,6 +14,7 @@ import {
   KeyRound,
   Pencil,
   Phone,
+  Plus,
   Printer,
   RefreshCw,
   Search,
@@ -21,6 +25,7 @@ import {
 } from 'lucide-react';
 import {
   Assessment,
+  AttendanceRecord,
   BoardingStatus,
   FeeInvoice,
   FormLevel,
@@ -28,6 +33,10 @@ import {
   LibraryLoan,
   School,
   Student,
+  StudentCase,
+  StudentCaseSeverity,
+  StudentCaseStatus,
+  StudentCaseType,
   StudentStatus,
 } from '../../school/types';
 import {
@@ -45,15 +54,29 @@ import {
   normalizeAssessmentComponents,
   normalizeRegistrationCode,
   STREAMS,
+  STUDENT_CASE_SEVERITIES,
+  STUDENT_CASE_STATUSES,
+  STUDENT_CASE_TYPES,
+  STUDENT_STATUSES,
 } from '../../school/malawi';
 import {
   issueMissingRegistrationCodes,
   removeStudent,
+  removeStudentCase,
   saveStudent,
+  saveStudentCase,
   StudentPayload,
 } from '../../school/firestoreService';
+import {
+  buildModalDraftKey,
+  clearModalDraft,
+  loadModalDraft,
+  saveModalDraft,
+} from '../../school/modalDrafts';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
+import { DraftRestoredNotice, ModalBackdrop } from './ModalBackdrop';
 import { StudentPerformanceTrends } from './StudentPerformanceTrends';
+import { StudentAttendancePanel } from './AttendanceRegister';
 
 interface StudentsManagerProps {
   school: School;
@@ -62,10 +85,18 @@ interface StudentsManagerProps {
   assessments: Assessment[];
   invoices: FeeInvoice[];
   libraryLoans?: LibraryLoan[];
+  studentCases?: StudentCase[];
+  attendance?: AttendanceRecord[];
   canManageStudents?: boolean;
+  canManageStudentCases?: boolean;
+  canReadAttendance?: boolean;
+  canWriteAttendance?: boolean;
   canViewAcademicReport?: boolean;
   canViewFees?: boolean;
   canViewLibrary?: boolean;
+  recordedByName?: string;
+  initialTab?: 'directory' | 'attendance' | 'cases';
+  tabRequestNonce?: number;
   onOpenLibrary?: () => void;
 }
 
@@ -99,6 +130,46 @@ const EMPTY_FORM: StudentPayload = {
   status: 'Active',
 };
 
+interface StudentFormDraft {
+  formState: StudentPayload;
+  regCodeAuto: boolean;
+  entryYearAuto: boolean;
+}
+
+interface StudentCaseFormState {
+  studentId: string;
+  caseType: StudentCaseType;
+  severity: StudentCaseSeverity;
+  status: StudentCaseStatus;
+  title: string;
+  description: string;
+  actionTaken: string;
+  incidentDate: string;
+  suspensionEndDate: string;
+  guardianNotified: boolean;
+  syncStudentStatus: StudentStatus | '';
+}
+
+function getStudentStatusTextClass(status: StudentStatus): string {
+  if (status === 'Active') return 'text-emerald-700 dark:text-emerald-400';
+  if (status === 'Rusticated') return 'text-rose-700 dark:text-rose-400';
+  if (status === 'Suspended') return 'text-rose-600 dark:text-rose-400';
+  return 'text-amber-700 dark:text-amber-400';
+}
+
+function getCaseTypeTextClass(caseType: StudentCaseType): string {
+  if (caseType === 'Rustication') {
+    return 'bg-rose-50 dark:bg-rose-950/50 border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300';
+  }
+  if (caseType === 'Suspension') {
+    return 'bg-amber-50 dark:bg-amber-950/50 border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-300';
+  }
+  if (caseType === 'Misconduct' || caseType === 'Truancy') {
+    return 'bg-orange-50 dark:bg-orange-950/40 border-orange-200 dark:border-orange-900 text-orange-800 dark:text-orange-300';
+  }
+  return 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300';
+}
+
 export const StudentsManager: React.FC<StudentsManagerProps> = ({
   school,
   ownerId,
@@ -106,22 +177,40 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
   assessments,
   invoices,
   libraryLoans = [],
+  studentCases = [],
+  attendance = [],
   canManageStudents = true,
+  canManageStudentCases = false,
+  canReadAttendance = false,
+  canWriteAttendance = false,
   canViewAcademicReport = true,
   canViewFees = true,
   canViewLibrary = false,
+  recordedByName = 'School Admin',
+  initialTab,
+  tabRequestNonce,
   onOpenLibrary,
 }) => {
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const [sectionTab, setSectionTab] = useState<'directory' | 'attendance' | 'cases'>(() =>
+    initialTab && (initialTab !== 'attendance' || canReadAttendance) ? initialTab : 'directory'
+  );
   const [search, setSearch] = useState('');
   const [formFilter, setFormFilter] = useState<'all' | FormLevel>('all');
   const [boardingFilter, setBoardingFilter] = useState<'all' | BoardingStatus>('all');
+
+  useEffect(() => {
+    if (!tabRequestNonce || !initialTab) return;
+    if (initialTab === 'attendance' && !canReadAttendance) return;
+    setSectionTab(initialTab);
+  }, [canReadAttendance, initialTab, tabRequestNonce]);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formState, setFormState] = useState<StudentPayload>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [studentDraftRestored, setStudentDraftRestored] = useState(false);
 
   const [detailStudent, setDetailStudent] = useState<Student | null>(null);
   const [detailTab, setDetailTab] = useState<'overview' | 'trends'>('overview');
@@ -135,6 +224,57 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
   const [codeBanner, setCodeBanner] = useState('');
   const [regCodeAuto, setRegCodeAuto] = useState(true);
   const [entryYearAuto, setEntryYearAuto] = useState(true);
+
+  // Student Disciplinary Cases (Suspensions & Rustications) State
+  const [caseSearch, setCaseSearch] = useState('');
+  const [caseTypeFilter, setCaseTypeFilter] = useState<'all' | StudentCaseType>('all');
+  const [caseStatusFilter, setCaseStatusFilter] = useState<'all' | StudentCaseStatus>('all');
+  const [caseModalOpen, setCaseModalOpen] = useState(false);
+  const [editingCaseId, setEditingCaseId] = useState<string | null>(null);
+  const [caseForm, setCaseForm] = useState<StudentCaseFormState>(() => ({
+    studentId: '',
+    caseType: 'Suspension',
+    severity: 'Severe',
+    status: 'Serving Suspension',
+    title: '',
+    description: '',
+    actionTaken: '',
+    incidentDate: todayIso,
+    suspensionEndDate: '',
+    guardianNotified: true,
+    syncStudentStatus: 'Suspended',
+  }));
+  const [savingCase, setSavingCase] = useState(false);
+  const [caseError, setCaseError] = useState('');
+  const [caseDraftRestored, setCaseDraftRestored] = useState(false);
+  const [confirmCase, setConfirmCase] = useState<StudentCase | null>(null);
+  const [deletingCase, setDeletingCase] = useState(false);
+  const [deleteCaseError, setDeleteCaseError] = useState('');
+  const [caseActionBusyId, setCaseActionBusyId] = useState<string | null>(null);
+
+  const studentDraftKey = useMemo(
+    () => buildModalDraftKey(school.id, 'student_form', editingId || 'new'),
+    [school.id, editingId]
+  );
+
+  const caseDraftKey = useMemo(
+    () => buildModalDraftKey(school.id, 'student_case', editingCaseId || 'new'),
+    [school.id, editingCaseId]
+  );
+
+  useEffect(() => {
+    if (!modalOpen) return;
+    saveModalDraft<StudentFormDraft>(studentDraftKey, {
+      formState,
+      regCodeAuto,
+      entryYearAuto,
+    });
+  }, [modalOpen, studentDraftKey, formState, regCodeAuto, entryYearAuto]);
+
+  useEffect(() => {
+    if (!caseModalOpen) return;
+    saveModalDraft<StudentCaseFormState>(caseDraftKey, caseForm);
+  }, [caseModalOpen, caseDraftKey, caseForm]);
 
   const missingCodeCount = useMemo(
     () => students.filter((s) => normalizeRegistrationCode(s.registrationCode).length < 6).length,
@@ -248,51 +388,108 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
       .sort((a, b) => a.formLevel - b.formLevel || a.fullName.localeCompare(b.fullName));
   }, [boardingFilter, formFilter, search, students]);
 
-  const openCreateModal = () => {
+  const buildFreshCreateStudent = (): StudentFormDraft => {
     const nextNumber = String(students.length + 1).padStart(3, '0');
     const defaultEntryYear = getDefaultEntryYear(1, school.academicYear);
+    return {
+      entryYearAuto: true,
+      regCodeAuto: true,
+      formState: {
+        ...EMPTY_FORM,
+        admissionNo: `SCH/${defaultEntryYear}/${nextNumber}`,
+        entryYear: defaultEntryYear,
+        registrationCode: makeUniqueRegCode(1, 'A', defaultEntryYear, null),
+      },
+    };
+  };
+
+  const buildFreshEditStudent = (student: Student): StudentFormDraft => {
+    const inferredYear = inferStudentEntryYear(student, school.academicYear);
+    const hasExistingCode = normalizeRegistrationCode(student.registrationCode).length >= 6;
+    return {
+      entryYearAuto: !student.entryYear,
+      regCodeAuto: !hasExistingCode,
+      formState: {
+        admissionNo: student.admissionNo,
+        fullName: student.fullName,
+        gender: student.gender,
+        formLevel: student.formLevel,
+        stream: student.stream,
+        entryYear: inferredYear,
+        boardingStatus: student.boardingStatus,
+        guardianName: student.guardianName,
+        guardianPhone: student.guardianPhone,
+        guardianSecondaryPhone: student.guardianSecondaryPhone || '',
+        guardianRelationship: student.guardianRelationship || '',
+        emergencyContactName: student.emergencyContactName || '',
+        emergencyContactPhone: student.emergencyContactPhone || '',
+        emergencyNotes: student.emergencyNotes || '',
+        studentEmail: student.studentEmail || '',
+        registrationCode: hasExistingCode
+          ? student.registrationCode || ''
+          : makeUniqueRegCode(student.formLevel, student.stream, inferredYear, student.id),
+        status: student.status,
+      },
+    };
+  };
+
+  const openCreateModal = () => {
+    const key = buildModalDraftKey(school.id, 'student_form', 'new');
+    const draft = loadModalDraft<StudentFormDraft>(key);
+    const fresh = buildFreshCreateStudent();
     setEditingId(null);
-    setEntryYearAuto(true);
-    setRegCodeAuto(true);
-    setFormState({
-      ...EMPTY_FORM,
-      admissionNo: `SCH/${defaultEntryYear}/${nextNumber}`,
-      entryYear: defaultEntryYear,
-      registrationCode: makeUniqueRegCode(1, 'A', defaultEntryYear, null),
-    });
+    if (draft?.formState) {
+      setEntryYearAuto(draft.entryYearAuto);
+      setRegCodeAuto(draft.regCodeAuto);
+      setFormState(draft.formState);
+      setStudentDraftRestored(true);
+    } else {
+      setEntryYearAuto(fresh.entryYearAuto);
+      setRegCodeAuto(fresh.regCodeAuto);
+      setFormState(fresh.formState);
+      setStudentDraftRestored(false);
+    }
     setErrorMsg('');
     setModalOpen(true);
   };
 
   const openEditModal = (student: Student) => {
-    const inferredYear = inferStudentEntryYear(student, school.academicYear);
-    const hasExistingCode = normalizeRegistrationCode(student.registrationCode).length >= 6;
+    const key = buildModalDraftKey(school.id, 'student_form', student.id);
+    const draft = loadModalDraft<StudentFormDraft>(key);
+    const fresh = buildFreshEditStudent(student);
     setEditingId(student.id);
-    setEntryYearAuto(!student.entryYear);
-    setRegCodeAuto(!hasExistingCode);
-    setFormState({
-      admissionNo: student.admissionNo,
-      fullName: student.fullName,
-      gender: student.gender,
-      formLevel: student.formLevel,
-      stream: student.stream,
-      entryYear: inferredYear,
-      boardingStatus: student.boardingStatus,
-      guardianName: student.guardianName,
-      guardianPhone: student.guardianPhone,
-      guardianSecondaryPhone: student.guardianSecondaryPhone || '',
-      guardianRelationship: student.guardianRelationship || '',
-      emergencyContactName: student.emergencyContactName || '',
-      emergencyContactPhone: student.emergencyContactPhone || '',
-      emergencyNotes: student.emergencyNotes || '',
-      studentEmail: student.studentEmail || '',
-      registrationCode: hasExistingCode
-        ? student.registrationCode || ''
-        : makeUniqueRegCode(student.formLevel, student.stream, inferredYear, student.id),
-      status: student.status,
-    });
+    if (draft?.formState) {
+      setEntryYearAuto(draft.entryYearAuto);
+      setRegCodeAuto(draft.regCodeAuto);
+      setFormState(draft.formState);
+      setStudentDraftRestored(true);
+    } else {
+      setEntryYearAuto(fresh.entryYearAuto);
+      setRegCodeAuto(fresh.regCodeAuto);
+      setFormState(fresh.formState);
+      setStudentDraftRestored(false);
+    }
     setErrorMsg('');
     setModalOpen(true);
+  };
+
+  const handleDiscardStudentDraft = () => {
+    clearModalDraft(studentDraftKey);
+    if (editingId) {
+      const target = students.find((s) => s.id === editingId);
+      if (target) {
+        const fresh = buildFreshEditStudent(target);
+        setEntryYearAuto(fresh.entryYearAuto);
+        setRegCodeAuto(fresh.regCodeAuto);
+        setFormState(fresh.formState);
+      }
+    } else {
+      const fresh = buildFreshCreateStudent();
+      setEntryYearAuto(fresh.entryYearAuto);
+      setRegCodeAuto(fresh.regCodeAuto);
+      setFormState(fresh.formState);
+    }
+    setStudentDraftRestored(false);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -336,11 +533,209 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
         editingId || undefined,
         school
       );
+      clearModalDraft(studentDraftKey);
+      setStudentDraftRestored(false);
       setModalOpen(false);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to save student.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const buildFreshCaseForm = (preselectedStudentId?: string): StudentCaseFormState => ({
+    studentId: preselectedStudentId || students[0]?.id || '',
+    caseType: 'Suspension',
+    severity: 'Severe',
+    status: 'Serving Suspension',
+    title: '',
+    description: '',
+    actionTaken: '',
+    incidentDate: todayIso,
+    suspensionEndDate: '',
+    guardianNotified: true,
+    syncStudentStatus: 'Suspended',
+  });
+
+  const buildFreshEditCaseForm = (item: StudentCase): StudentCaseFormState => ({
+    studentId: item.studentId,
+    caseType: item.caseType,
+    severity: item.severity,
+    status: item.status,
+    title: item.title,
+    description: item.description,
+    actionTaken: item.actionTaken || '',
+    incidentDate: item.incidentDate || todayIso,
+    suspensionEndDate: item.suspensionEndDate || '',
+    guardianNotified: Boolean(item.guardianNotified),
+    syncStudentStatus: '',
+  });
+
+  const openCreateCaseModal = (preselectedStudentId?: string) => {
+    if (!canManageStudentCases) return;
+    const key = buildModalDraftKey(school.id, 'student_case', 'new');
+    const draft = loadModalDraft<StudentCaseFormState>(key);
+    const fresh = buildFreshCaseForm(preselectedStudentId);
+    setEditingCaseId(null);
+    if (draft && draft.studentId) {
+      setCaseForm(
+        preselectedStudentId ? { ...draft, studentId: preselectedStudentId } : draft
+      );
+      setCaseDraftRestored(true);
+    } else {
+      setCaseForm(fresh);
+      setCaseDraftRestored(false);
+    }
+    setCaseError('');
+    setCaseModalOpen(true);
+  };
+
+  const openEditCaseModal = (item: StudentCase) => {
+    if (!canManageStudentCases) return;
+    const key = buildModalDraftKey(school.id, 'student_case', item.id);
+    const draft = loadModalDraft<StudentCaseFormState>(key);
+    const fresh = buildFreshEditCaseForm(item);
+    setEditingCaseId(item.id);
+    if (draft && draft.title) {
+      setCaseForm(draft);
+      setCaseDraftRestored(true);
+    } else {
+      setCaseForm(fresh);
+      setCaseDraftRestored(false);
+    }
+    setCaseError('');
+    setCaseModalOpen(true);
+  };
+
+  const handleDiscardCaseDraft = () => {
+    clearModalDraft(caseDraftKey);
+    if (editingCaseId) {
+      const found = studentCases.find((c) => c.id === editingCaseId);
+      if (found) {
+        setCaseForm(buildFreshEditCaseForm(found));
+      }
+    } else {
+      setCaseForm(buildFreshCaseForm());
+    }
+    setCaseDraftRestored(false);
+  };
+
+  const handleCaseTypeChange = (nextType: StudentCaseType) => {
+    setCaseForm((prev) => {
+      if (editingCaseId) {
+        return { ...prev, caseType: nextType };
+      }
+      if (nextType === 'Suspension') {
+        return {
+          ...prev,
+          caseType: nextType,
+          severity: 'Severe',
+          status: 'Serving Suspension',
+          syncStudentStatus: 'Suspended',
+        };
+      }
+      if (nextType === 'Rustication') {
+        return {
+          ...prev,
+          caseType: nextType,
+          severity: 'Severe',
+          status: 'Rusticated',
+          syncStudentStatus: 'Rusticated',
+        };
+      }
+      return {
+        ...prev,
+        caseType: nextType,
+        severity: nextType === 'Warning' || nextType === 'Truancy' ? 'Minor' : 'Moderate',
+        status: 'Open',
+        syncStudentStatus: '',
+      };
+    });
+  };
+
+  const handleSaveCase = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canManageStudentCases) return;
+    const targetStudent = students.find((s) => s.id === caseForm.studentId);
+    if (!targetStudent) {
+      setCaseError('Please select a student for this case.');
+      return;
+    }
+    if (caseForm.title.trim().length < 2) {
+      setCaseError('Case title must be at least 2 characters.');
+      return;
+    }
+    if (caseForm.description.trim().length < 2) {
+      setCaseError('Please describe the incident or disciplinary reason.');
+      return;
+    }
+
+    setSavingCase(true);
+    setCaseError('');
+    try {
+      await saveStudentCase(
+        school.id,
+        ownerId,
+        {
+          studentId: targetStudent.id,
+          studentName: targetStudent.fullName,
+          admissionNo: targetStudent.admissionNo,
+          formLevel: targetStudent.formLevel,
+          stream: targetStudent.stream,
+          caseType: caseForm.caseType,
+          severity: caseForm.severity,
+          status: caseForm.status,
+          title: caseForm.title.trim(),
+          description: caseForm.description.trim(),
+          actionTaken: caseForm.actionTaken.trim(),
+          incidentDate: caseForm.incidentDate,
+          suspensionEndDate: caseForm.suspensionEndDate,
+          guardianNotified: caseForm.guardianNotified,
+          recordedBy: recordedByName,
+          syncStudentStatus: caseForm.syncStudentStatus,
+        },
+        editingCaseId || undefined
+      );
+      clearModalDraft(caseDraftKey);
+      setCaseDraftRestored(false);
+      setCaseModalOpen(false);
+    } catch (err) {
+      setCaseError(err instanceof Error ? err.message : 'Unable to save student case.');
+    } finally {
+      setSavingCase(false);
+    }
+  };
+
+  const handleQuickResolveCase = async (item: StudentCase) => {
+    if (!canManageStudentCases) return;
+    setCaseActionBusyId(item.id);
+    try {
+      const targetStudent = students.find((s) => s.id === item.studentId);
+      await saveStudentCase(
+        school.id,
+        ownerId,
+        {
+          studentId: item.studentId,
+          studentName: item.studentName,
+          admissionNo: item.admissionNo,
+          formLevel: item.formLevel,
+          stream: item.stream,
+          caseType: item.caseType,
+          severity: item.severity,
+          status: 'Resolved',
+          title: item.title,
+          description: item.description,
+          actionTaken: item.actionTaken,
+          incidentDate: item.incidentDate,
+          suspensionEndDate: item.suspensionEndDate,
+          guardianNotified: item.guardianNotified,
+          recordedBy: recordedByName,
+          syncStudentStatus: targetStudent?.status === 'Suspended' ? 'Active' : '',
+        },
+        item.id
+      );
+    } finally {
+      setCaseActionBusyId(null);
     }
   };
 
@@ -391,6 +786,39 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
     );
   };
 
+  const caseMetrics = useMemo(() => {
+    const activeSuspensions = studentCases.filter(
+      (c) => c.status === 'Serving Suspension' || (c.caseType === 'Suspension' && c.status !== 'Resolved')
+    ).length;
+    const rustications = studentCases.filter(
+      (c) => c.caseType === 'Rustication' || c.status === 'Rusticated'
+    ).length;
+    const openCases = studentCases.filter(
+      (c) => c.status === 'Open' || c.status === 'Under Review' || c.status === 'Appealed'
+    ).length;
+    return {
+      total: studentCases.length,
+      activeSuspensions,
+      rustications,
+      openCases,
+    };
+  }, [studentCases]);
+
+  const filteredCases = useMemo(() => {
+    const q = caseSearch.trim().toLowerCase();
+    return studentCases.filter((c) => {
+      if (caseTypeFilter !== 'all' && c.caseType !== caseTypeFilter) return false;
+      if (caseStatusFilter !== 'all' && c.status !== caseStatusFilter) return false;
+      if (!q) return true;
+      return (
+        c.studentName.toLowerCase().includes(q) ||
+        c.admissionNo.toLowerCase().includes(q) ||
+        c.title.toLowerCase().includes(q) ||
+        c.description.toLowerCase().includes(q)
+      );
+    });
+  }, [caseSearch, caseStatusFilter, caseTypeFilter, studentCases]);
+
   const detailData = useMemo(() => {
     if (!detailStudent) return null;
     const liveStudent = students.find((s) => s.id === detailStudent.id) || detailStudent;
@@ -409,6 +837,7 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
       overdueLoans: [],
       returnedCount: 0,
     };
+    const cases = studentCases.filter((c) => c.studentId === liveStudent.id);
     return {
       student: liveStudent,
       billed,
@@ -416,8 +845,9 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
       balance: Math.max(0, billed - paid),
       standing,
       librarySummary,
+      cases,
     };
-  }, [assessments, detailStudent, invoices, libraryByStudentId, school.currentTerm, students]);
+  }, [assessments, detailStudent, invoices, libraryByStudentId, school.currentTerm, studentCases, students]);
 
   const reportData = useMemo(() => {
     if (!reportStudent) return null;
@@ -444,51 +874,126 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
       {/* Toolbar */}
       <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-              Student Registry
-            </h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono">
-              {filtered.length} of {students.length} students
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {canManageStudents && missingCodeCount > 0 && (
-              <button
-                type="button"
-                onClick={handleIssueMissingCodes}
-                disabled={issuingCodes}
-                className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 py-2 rounded-xl border border-emerald-700/30 bg-emerald-50/70 dark:bg-emerald-950/40 text-xs font-semibold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100/70 disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <KeyRound className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>
-                  {issuingCodes ? 'Issuing Codes...' : `Issue Missing Codes (${missingCodeCount})`}
-                </span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={handleExportCSV}
-              disabled={filtered.length === 0}
-              className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
+          <div className="space-y-2">
+            <div>
+              <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                Students ({students.length})
+              </h1>
+            </div>
+            <div
+              role="tablist"
+              aria-label="Students workspace tabs"
+              className="inline-flex flex-wrap items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-900"
             >
-              <Download className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Export CSV</span>
-            </button>
-            {canManageStudents && (
               <button
                 type="button"
-                onClick={openCreateModal}
-                className="inline-flex items-center gap-1.5 min-h-[40px] px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+                role="tab"
+                aria-selected={sectionTab === 'directory'}
+                onClick={() => setSectionTab('directory')}
+                className={`min-h-[34px] px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                  sectionTab === 'directory'
+                    ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                }`}
               >
-                <UserPlus className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>Add Student</span>
+                Student Directory ({students.length})
               </button>
-            )}
+              {canReadAttendance && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={sectionTab === 'attendance'}
+                  onClick={() => setSectionTab('attendance')}
+                  className={`min-h-[34px] px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                    sectionTab === 'attendance'
+                      ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                  }`}
+                >
+                  {canWriteAttendance ? 'Roll Call & Turnout' : 'Student Turnout'}
+                </button>
+              )}
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sectionTab === 'cases'}
+                onClick={() => setSectionTab('cases')}
+                className={`inline-flex items-center gap-1.5 min-h-[34px] px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                  sectionTab === 'cases'
+                    ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                }`}
+              >
+                <AlertOctagon className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" aria-hidden="true" />
+                <span>Suspensions &amp; Cases ({studentCases.length})</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {sectionTab === 'directory' ? (
+              <>
+                {canManageStudents && missingCodeCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleIssueMissingCodes}
+                    disabled={issuingCodes}
+                    className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 py-2 rounded-xl border border-emerald-700/30 bg-emerald-50/70 dark:bg-emerald-950/40 text-xs font-semibold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100/70 disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <KeyRound className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>
+                      {issuingCodes ? 'Issuing Codes...' : `Issue Missing Codes (${missingCodeCount})`}
+                    </span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleExportCSV}
+                  disabled={filtered.length === 0}
+                  className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Export CSV</span>
+                </button>
+                {canManageStudentCases && (
+                  <button
+                    type="button"
+                    onClick={() => openCreateCaseModal()}
+                    disabled={students.length === 0}
+                    className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 py-2 rounded-xl border border-rose-200 dark:border-rose-900/70 bg-rose-50/80 dark:bg-rose-950/35 text-xs font-semibold text-rose-700 dark:text-rose-300 hover:bg-rose-100/80 disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <AlertOctagon className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Record Case</span>
+                  </button>
+                )}
+                {canManageStudents && (
+                  <button
+                    type="button"
+                    onClick={openCreateModal}
+                    className="inline-flex items-center gap-1.5 min-h-[40px] px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <UserPlus className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Add Student</span>
+                  </button>
+                )}
+              </>
+            ) : sectionTab === 'cases' ? (
+              canManageStudentCases && (
+                <button
+                  type="button"
+                  onClick={() => openCreateCaseModal()}
+                  disabled={students.length === 0}
+                  className="inline-flex items-center gap-1.5 min-h-[40px] px-4 py-2 rounded-xl bg-rose-700 hover:bg-rose-800 text-white text-xs font-semibold disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Record Student Case</span>
+                </button>
+              )
+            ) : null}
           </div>
         </div>
 
-        {codeBanner && (
+        {codeBanner && sectionTab === 'directory' && (
           <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 px-3.5 py-2 text-xs text-emerald-800 dark:text-emerald-200 flex items-center justify-between gap-2">
             <span>{codeBanner}</span>
             <button
@@ -501,53 +1006,296 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
           </div>
         )}
 
-        <div className="flex flex-col md:flex-row md:items-center gap-3">
-          <div className="relative flex-1">
-            <Search
-              className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2"
-              aria-hidden="true"
-            />
-            <input
-              type="search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search student, admission #, reg code, guardian, or phone..."
-              className="w-full min-h-[42px] pl-10 pr-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
-            />
-          </div>
+        {sectionTab === 'directory' ? (
+          <div className="flex flex-col md:flex-row md:items-center gap-3">
+            <div className="relative flex-1">
+              <Search
+                className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2"
+                aria-hidden="true"
+              />
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search student, admission #, reg code, guardian, or phone..."
+                className="w-full min-h-[42px] pl-10 pr-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+              />
+            </div>
 
-          <div className="flex items-center gap-1.5 overflow-x-auto">
-            {(['all', 1, 2, 3, 4] as const).map((f) => (
-              <button
-                key={f}
-                type="button"
-                onClick={() => setFormFilter(f)}
-                className={`min-h-[38px] px-3 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer ${
-                  formFilter === f
-                    ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
-                }`}
+            <div className="flex items-center gap-1.5 overflow-x-auto">
+              {(['all', 1, 2, 3, 4] as const).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setFormFilter(f)}
+                  className={`min-h-[38px] px-3 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer ${
+                    formFilter === f
+                      ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  {f === 'all' ? 'All Forms' : `Form ${f}`}
+                </button>
+              ))}
+            </div>
+
+            <select
+              aria-label="Filter by boarding status"
+              value={boardingFilter}
+              onChange={(e) => setBoardingFilter(e.target.value as 'all' | BoardingStatus)}
+              className="min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200"
+            >
+              <option value="all">All Boarding</option>
+              <option value="Day Scholar">Day Scholar</option>
+              <option value="Boarder">Boarder</option>
+            </select>
+          </div>
+        ) : sectionTab === 'cases' ? (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200/70 dark:border-slate-800">
+                <div className="text-slate-500 dark:text-slate-400">Total Cases Logged</div>
+                <div className="mt-1 text-lg font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+                  {caseMetrics.total}
+                </div>
+              </div>
+              <div className="p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/25 border border-amber-200/70 dark:border-amber-900/50">
+                <div className="text-amber-800 dark:text-amber-300">Active Suspensions</div>
+                <div className="mt-1 text-lg font-bold font-mono tabular-nums text-amber-800 dark:text-amber-300">
+                  {caseMetrics.activeSuspensions}
+                </div>
+              </div>
+              <div className="p-3 rounded-xl bg-rose-50/70 dark:bg-rose-950/25 border border-rose-200/70 dark:border-rose-900/50">
+                <div className="text-rose-800 dark:text-rose-300">Rustications</div>
+                <div className="mt-1 text-lg font-bold font-mono tabular-nums text-rose-700 dark:text-rose-300">
+                  {caseMetrics.rustications}
+                </div>
+              </div>
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200/70 dark:border-slate-800">
+                <div className="text-slate-500 dark:text-slate-400">Open / Under Review</div>
+                <div className="mt-1 text-lg font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+                  {caseMetrics.openCases}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col md:flex-row md:items-center gap-3">
+              <div className="relative flex-1">
+                <Search
+                  className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2"
+                  aria-hidden="true"
+                />
+                <input
+                  type="search"
+                  value={caseSearch}
+                  onChange={(e) => setCaseSearch(e.target.value)}
+                  placeholder="Search cases by student name, admission #, title, or notes..."
+                  className="w-full min-h-[42px] pl-10 pr-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+                />
+              </div>
+
+              <select
+                aria-label="Filter cases by type"
+                value={caseTypeFilter}
+                onChange={(e) => setCaseTypeFilter(e.target.value as 'all' | StudentCaseType)}
+                className="min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200"
               >
-                {f === 'all' ? 'All Forms' : `Form ${f}`}
-              </button>
-            ))}
-          </div>
+                <option value="all">All Case Types</option>
+                {STUDENT_CASE_TYPES.map((ct) => (
+                  <option key={ct} value={ct}>
+                    {ct}
+                  </option>
+                ))}
+              </select>
 
-          <select
-            aria-label="Filter by boarding status"
-            value={boardingFilter}
-            onChange={(e) => setBoardingFilter(e.target.value as 'all' | BoardingStatus)}
-            className="min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200"
-          >
-            <option value="all">All Boarding</option>
-            <option value="Day Scholar">Day Scholar</option>
-            <option value="Boarder">Boarder</option>
-          </select>
-        </div>
+              <select
+                aria-label="Filter cases by status"
+                value={caseStatusFilter}
+                onChange={(e) => setCaseStatusFilter(e.target.value as 'all' | StudentCaseStatus)}
+                className="min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200"
+              >
+                <option value="all">All Case Statuses</option>
+                {STUDENT_CASE_STATUSES.map((cs) => (
+                  <option key={cs} value={cs}>
+                    {cs}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        ) : null}
       </div>
 
-      {/* Data Table */}
-      <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
+      {sectionTab === 'attendance' && canReadAttendance ? (
+        <StudentAttendancePanel
+          school={school}
+          ownerId={ownerId}
+          students={students}
+          attendance={attendance}
+          canWriteAttendance={canWriteAttendance}
+        />
+      ) : sectionTab === 'cases' ? (
+        <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
+          {filteredCases.length === 0 ? (
+            <div className="py-12 px-6 text-center space-y-3">
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                {studentCases.length === 0
+                  ? 'No student disciplinary cases, suspensions, or rustications recorded yet.'
+                  : 'No disciplinary cases match your current filter.'}
+              </p>
+              {studentCases.length === 0 && canManageStudentCases && students.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => openCreateCaseModal()}
+                  className="inline-flex items-center gap-2 min-h-[42px] px-4 rounded-xl bg-rose-700 hover:bg-rose-800 text-white text-xs font-semibold cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Record First Student Case</span>
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 text-xs text-slate-500 dark:text-slate-400">
+                    <th className="py-3 px-4 font-medium">Student</th>
+                    <th className="py-3 px-4 font-medium">Type &amp; Severity</th>
+                    <th className="py-3 px-4 font-medium">Case Summary</th>
+                    <th className="py-3 px-4 font-medium">Dates</th>
+                    <th className="py-3 px-4 font-medium">Status</th>
+                    <th className="py-3 px-4 font-medium text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                  {filteredCases.map((item) => {
+                    const matchedStu = students.find((s) => s.id === item.studentId);
+                    return (
+                      <tr key={item.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/30">
+                        <td className="py-3 px-4">
+                          {matchedStu ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDetailTab('overview');
+                                setDetailStudent(matchedStu);
+                              }}
+                              className="font-semibold text-slate-900 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 text-left cursor-pointer"
+                            >
+                              {item.studentName}
+                            </button>
+                          ) : (
+                            <div className="font-semibold text-slate-900 dark:text-slate-100">
+                              {item.studentName}
+                            </div>
+                          )}
+                          <div className="text-xs font-mono text-slate-500 dark:text-slate-400">
+                            {item.admissionNo} · Form {item.formLevel}{item.stream}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <span
+                            className={`inline-flex items-center px-2 py-0.5 rounded-lg border text-xs font-semibold ${getCaseTypeTextClass(
+                              item.caseType
+                            )}`}
+                          >
+                            {item.caseType}
+                          </span>
+                          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                            Severity: {item.severity}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 max-w-sm">
+                          <div className="font-semibold text-slate-900 dark:text-slate-100 text-xs">
+                            {item.title}
+                          </div>
+                          <p className="text-xs text-slate-600 dark:text-slate-400 line-clamp-2 mt-0.5">
+                            {item.description}
+                          </p>
+                          {item.actionTaken && (
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                              Action: {item.actionTaken}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap font-mono tabular-nums text-xs text-slate-600 dark:text-slate-300">
+                          <div>Incident: {item.incidentDate}</div>
+                          {item.suspensionEndDate && (
+                            <div className="text-[11px] text-amber-700 dark:text-amber-400">
+                              Ends: {item.suspensionEndDate}
+                            </div>
+                          )}
+                          <div className="text-[11px] text-slate-400 mt-0.5 font-sans">
+                            {item.guardianNotified ? 'Guardian notified' : 'Guardian not yet notified'}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <div
+                            className={`text-xs font-semibold ${
+                              item.status === 'Resolved'
+                                ? 'text-emerald-700 dark:text-emerald-400'
+                                : item.status === 'Rusticated'
+                                ? 'text-rose-700 dark:text-rose-400'
+                                : item.status === 'Serving Suspension'
+                                ? 'text-amber-700 dark:text-amber-400'
+                                : 'text-slate-800 dark:text-slate-200'
+                            }`}
+                          >
+                            {item.status}
+                          </div>
+                          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                            By {item.recordedBy}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                          {canManageStudentCases ? (
+                            <div className="inline-flex items-center gap-1">
+                              {item.status !== 'Resolved' && (
+                                <button
+                                  type="button"
+                                  disabled={caseActionBusyId === item.id}
+                                  onClick={() => handleQuickResolveCase(item)}
+                                  className="inline-flex items-center gap-1 min-h-[34px] px-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-xs font-semibold cursor-pointer disabled:opacity-50"
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" />
+                                  <span>{caseActionBusyId === item.id ? 'Saving...' : 'Resolve'}</span>
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => openEditCaseModal(item)}
+                                aria-label={`Edit case ${item.title}`}
+                                className="min-h-[34px] min-w-[34px] inline-flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDeleteCaseError('');
+                                  setConfirmCase(item);
+                                }}
+                                aria-label={`Delete case ${item.title}`}
+                                className="min-h-[34px] min-w-[34px] inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-slate-400">Admin managed</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : (
+        /* Data Table */
+        <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
         {filtered.length === 0 ? (
           <div className="py-12 px-6 text-center space-y-3">
             <p className="text-sm text-slate-500 dark:text-slate-400">
@@ -675,15 +1423,7 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                       )}
                     </td>
                     <td className="py-3 px-4 whitespace-nowrap">
-                      <span
-                        className={`text-xs font-semibold ${
-                          s.status === 'Active'
-                            ? 'text-emerald-700 dark:text-emerald-400'
-                            : s.status === 'Suspended'
-                            ? 'text-rose-600 dark:text-rose-400'
-                            : 'text-amber-700 dark:text-amber-400'
-                        }`}
-                      >
+                      <span className={`text-xs font-semibold ${getStudentStatusTextClass(s.status)}`}>
                         {s.status}
                       </span>
                     </td>
@@ -740,14 +1480,11 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
           </div>
         )}
       </div>
+      )}
 
       {/* Student Detail View Modal (Guardian Contact Numbers + Emergency Details) */}
       {detailData && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-        >
+        <ModalBackdrop open={Boolean(detailData)} onClose={() => setDetailStudent(null)}>
           <div className="w-full max-w-2xl rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl max-h-[92vh] overflow-y-auto space-y-5">
             <div className="flex items-start justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
               <div>
@@ -1094,6 +1831,63 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                 )}
               </div>
             )}
+            {/* Disciplinary & Case History */}
+            {(detailData.cases.length > 0 || canManageStudentCases) && (
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 space-y-3 bg-slate-50/50 dark:bg-slate-900/40">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-slate-900 dark:text-slate-100">
+                    <ClipboardList className="w-4 h-4 text-rose-600 dark:text-rose-400" aria-hidden="true" />
+                    <span>Disciplinary &amp; Case History ({detailData.cases.length})</span>
+                  </div>
+                  {canManageStudentCases && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const targetId = detailData.student.id;
+                        setDetailStudent(null);
+                        openCreateCaseModal(targetId);
+                      }}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-rose-700 dark:text-rose-400 hover:underline cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>Record Case / Suspension</span>
+                    </button>
+                  )}
+                </div>
+
+                {detailData.cases.length === 0 ? (
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    No disciplinary cases, suspensions, or rustications recorded for this student.
+                  </p>
+                ) : (
+                  <div className="divide-y divide-slate-200/70 dark:divide-slate-800 rounded-lg border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-[#161B22] overflow-hidden">
+                    {detailData.cases.map((c) => (
+                      <div key={c.id} className="px-3 py-2.5 text-xs space-y-1">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-lg border text-[11px] font-semibold ${getCaseTypeTextClass(
+                                c.caseType
+                              )}`}
+                            >
+                              {c.caseType}
+                            </span>
+                            <span className="font-semibold text-slate-900 dark:text-slate-100">
+                              {c.title}
+                            </span>
+                          </div>
+                          <span className="font-mono tabular-nums text-[11px] text-slate-500 dark:text-slate-400">
+                            {c.incidentDate}
+                            {c.suspensionEndDate ? ` → ${c.suspensionEndDate}` : ''} · {c.status}
+                          </span>
+                        </div>
+                        <p className="text-slate-600 dark:text-slate-400">{c.description}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
               </>
             )}
 
@@ -1112,6 +1906,20 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                   >
                     <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
                     <span>Edit Profile &amp; Emergency Info</span>
+                  </button>
+                )}
+                {canManageStudentCases && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetId = detailData.student.id;
+                      setDetailStudent(null);
+                      openCreateCaseModal(targetId);
+                    }}
+                    className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-rose-200 dark:border-rose-900/70 bg-rose-50/70 dark:bg-rose-950/35 hover:bg-rose-100/70 text-xs font-semibold text-rose-700 dark:text-rose-300 cursor-pointer"
+                  >
+                    <AlertOctagon className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Record Case / Suspension</span>
                   </button>
                 )}
                 {canViewAcademicReport && (
@@ -1151,16 +1959,12 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
               </button>
             </div>
           </div>
-        </div>
+        </ModalBackdrop>
       )}
 
       {/* Add / Edit Student Modal */}
       {modalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-        >
+        <ModalBackdrop open={modalOpen} disabled={saving} onClose={() => setModalOpen(false)}>
           <div className="w-full max-w-xl rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between gap-4 pb-3 border-b border-slate-100 dark:border-slate-800">
               <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
@@ -1176,6 +1980,11 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
             </div>
 
             <form onSubmit={handleSubmit} className="mt-4 space-y-5">
+              <DraftRestoredNotice
+                visible={studentDraftRestored}
+                onDiscard={handleDiscardStudentDraft}
+              />
+
               {errorMsg && (
                 <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
                   {errorMsg}
@@ -1337,10 +2146,11 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                     }
                     className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"
                   >
-                    <option value="Active">Active</option>
-                    <option value="Transferred">Transferred</option>
-                    <option value="Suspended">Suspended</option>
-                    <option value="Graduated">Graduated</option>
+                    {STUDENT_STATUSES.map((st) => (
+                      <option key={st} value={st}>
+                        {st}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
@@ -1543,16 +2353,12 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
               </div>
             </form>
           </div>
-        </div>
+        </ModalBackdrop>
       )}
 
       {/* Student Term Report Card Modal */}
       {reportStudent && reportData && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-        >
+        <ModalBackdrop open={Boolean(reportStudent && reportData)} onClose={() => setReportStudent(null)}>
           <div className="w-full max-w-2xl rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl max-h-[92vh] overflow-y-auto">
             <div className="flex items-start justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
               <div>
@@ -1695,7 +2501,240 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
               )}
             </div>
           </div>
-        </div>
+        </ModalBackdrop>
+      )}
+
+      {/* Record / Edit Student Disciplinary Case Modal */}
+      {caseModalOpen && (
+        <ModalBackdrop open={caseModalOpen} disabled={savingCase} onClose={() => setCaseModalOpen(false)}>
+          <div className="w-full max-w-xl rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between gap-4 pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div>
+                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                  {editingCaseId ? 'Edit Student Disciplinary Case' : 'Record Student Case'}
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCaseModalOpen(false)}
+                className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCase} className="mt-4 space-y-4">
+              <DraftRestoredNotice
+                visible={caseDraftRestored}
+                onDiscard={handleDiscardCaseDraft}
+              />
+
+              {caseError && (
+                <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
+                  {caseError}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Student
+                </label>
+                <select
+                  value={caseForm.studentId}
+                  disabled={Boolean(editingCaseId)}
+                  onChange={(e) => setCaseForm({ ...caseForm, studentId: e.target.value })}
+                  required
+                  className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm disabled:opacity-60"
+                >
+                  {students.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.fullName} — Form {s.formLevel}{s.stream} ({s.admissionNo} · {s.status})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Case Type
+                  </label>
+                  <select
+                    value={caseForm.caseType}
+                    onChange={(e) => handleCaseTypeChange(e.target.value as StudentCaseType)}
+                    className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"
+                  >
+                    {STUDENT_CASE_TYPES.map((ct) => (
+                      <option key={ct} value={ct}>
+                        {ct}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Severity
+                  </label>
+                  <select
+                    value={caseForm.severity}
+                    onChange={(e) =>
+                      setCaseForm({ ...caseForm, severity: e.target.value as StudentCaseSeverity })
+                    }
+                    className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"
+                  >
+                    {STUDENT_CASE_SEVERITIES.map((sv) => (
+                      <option key={sv} value={sv}>
+                        {sv}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Case Status
+                  </label>
+                  <select
+                    value={caseForm.status}
+                    onChange={(e) =>
+                      setCaseForm({ ...caseForm, status: e.target.value as StudentCaseStatus })
+                    }
+                    className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"
+                  >
+                    {STUDENT_CASE_STATUSES.map((cs) => (
+                      <option key={cs} value={cs}>
+                        {cs}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Case Title / Offence Summary
+                </label>
+                <input
+                  type="text"
+                  required
+                  maxLength={140}
+                  value={caseForm.title}
+                  onChange={(e) => setCaseForm({ ...caseForm, title: e.target.value })}
+                  placeholder="e.g. Two-week suspension for repeated dorm violation"
+                  className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Incident Details &amp; Committee Findings
+                </label>
+                <textarea
+                  rows={3}
+                  required
+                  maxLength={1200}
+                  value={caseForm.description}
+                  onChange={(e) => setCaseForm({ ...caseForm, description: e.target.value })}
+                  placeholder="Describe the incident, hearing date, witnesses, and disciplinary ruling..."
+                  className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Incident / Ruling Date
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={caseForm.incidentDate}
+                    onChange={(e) => setCaseForm({ ...caseForm, incidentDate: e.target.value })}
+                    className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Suspension Return / End Date (Optional)
+                  </label>
+                  <input
+                    type="date"
+                    value={caseForm.suspensionEndDate}
+                    onChange={(e) => setCaseForm({ ...caseForm, suspensionEndDate: e.target.value })}
+                    className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono text-sm"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Disciplinary Action / Conditions (Optional)
+                </label>
+                <input
+                  type="text"
+                  maxLength={400}
+                  value={caseForm.actionTaken}
+                  onChange={(e) => setCaseForm({ ...caseForm, actionTaken: e.target.value })}
+                  placeholder="e.g. Guardian conference required before returning to class"
+                  className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Update Student Enrollment Status
+                  </label>
+                  <select
+                    value={caseForm.syncStudentStatus}
+                    onChange={(e) =>
+                      setCaseForm({
+                        ...caseForm,
+                        syncStudentStatus: e.target.value as StudentStatus | '',
+                      })
+                    }
+                    className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"
+                  >
+                    <option value="">Keep current student status</option>
+                    <option value="Suspended">Set student status to Suspended</option>
+                    <option value="Rusticated">Set student status to Rusticated</option>
+                    <option value="Active">Restore student status to Active</option>
+                  </select>
+                </div>
+
+                <label className="flex items-center gap-2 min-h-[42px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs text-slate-800 dark:text-slate-200 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={caseForm.guardianNotified}
+                    onChange={(e) =>
+                      setCaseForm({ ...caseForm, guardianNotified: e.target.checked })
+                    }
+                    className="rounded border-slate-300"
+                  />
+                  <span>Parent / Guardian notified</span>
+                </label>
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCaseModalOpen(false)}
+                  className="min-h-[42px] px-4 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingCase}
+                  className="min-h-[42px] px-5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                >
+                  {savingCase ? 'Saving...' : editingCaseId ? 'Save Case Changes' : 'Save Student Case'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </ModalBackdrop>
       )}
 
       {/* Safe Delete Student Modal */}
@@ -1729,6 +2768,42 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
             );
           } finally {
             setDeletingStudent(false);
+          }
+        }}
+      />
+
+      {/* Safe Delete Disciplinary Case Modal */}
+      <ConfirmDeleteModal
+        open={!!confirmCase}
+        title="Delete Disciplinary Case"
+        itemName={
+          confirmCase
+            ? `${confirmCase.studentName} · ${confirmCase.caseType}: ${confirmCase.title}`
+            : ''
+        }
+        description="This permanently deletes this disciplinary case record from the school register. Student enrollment status is not changed automatically."
+        confirmLabel="Delete Case"
+        deleting={deletingCase}
+        error={deleteCaseError}
+        onCancel={() => {
+          if (!deletingCase) {
+            setConfirmCase(null);
+            setDeleteCaseError('');
+          }
+        }}
+        onConfirm={async () => {
+          if (!confirmCase) return;
+          setDeletingCase(true);
+          setDeleteCaseError('');
+          try {
+            await removeStudentCase(school.id, confirmCase.id);
+            setConfirmCase(null);
+          } catch (err) {
+            setDeleteCaseError(
+              err instanceof Error ? err.message : 'Unable to delete disciplinary case.'
+            );
+          } finally {
+            setDeletingCase(false);
           }
         }}
       />

@@ -84,7 +84,7 @@
         "registrationCode": { "type": "string", "maxLength": 32, "pattern": "^[A-Z0-9_\\-]*$" },
         "status": {
           "type": "string",
-          "enum": ["Active", "Transferred", "Suspended", "Graduated"],
+          "enum": ["Active", "Transferred", "Suspended", "Rusticated", "Graduated"],
           "maxLength": 20
         },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -593,7 +593,7 @@
         "registrationCode": { "type": "string", "maxLength": 32, "pattern": "^[A-Z0-9_\\-]+$" },
         "status": {
           "type": "string",
-          "enum": ["Active", "Transferred", "Suspended", "Graduated"],
+          "enum": ["Active", "Transferred", "Suspended", "Rusticated", "Graduated"],
           "maxLength": 20
         },
         "logoDataUrl": { "type": "string", "maxLength": 160000 },
@@ -988,7 +988,7 @@
     },
     "DigitalLibraryResource": {
       "title": "Online & Offline Digital Library Resource",
-      "description": "Non-downloadable digital textbook, set book, revision guide, or past paper readable online and offline.",
+      "description": "Digital textbook, set book, revision guide, past paper, or teaching resource readable online and offline.",
       "type": "object",
       "properties": {
         "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -1003,7 +1003,15 @@
         },
         "category": {
           "type": "string",
-          "enum": ["Book", "Past Paper", "Revision Guide", "Set Book"],
+          "enum": [
+            "Book",
+            "Past Paper",
+            "Revision Guide",
+            "Set Book",
+            "Teaching Resource",
+            "Scheme of Work",
+            "Lesson Plan"
+          ],
           "maxLength": 30
         },
         "examYear": { "type": "string", "maxLength": 16 },
@@ -1214,6 +1222,387 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "LibraryReadingSession": {
+      "title": "Digital Library Reading Session",
+      "description": "Zero-PII live reading session and progress record tracking online/offline readers and last read state per digital resource.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "resourceId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "readerKey": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "registrationCode": { "type": "string", "maxLength": 32 },
+        "mode": { "type": "string", "enum": ["online", "offline"] },
+        "isReading": { "type": "boolean" },
+        "isRead": { "type": "boolean" },
+        "lastReadPage": { "type": "number" },
+        "lastReadAtMs": { "type": "number" },
+        "expiresAtMs": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "resourceId",
+        "readerKey",
+        "registrationCode",
+        "mode",
+        "isReading",
+        "isRead",
+        "lastReadPage",
+        "lastReadAtMs",
+        "expiresAtMs",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StaffAttendanceRecord": {
+      "title": "Staff Presence Record",
+      "description": "Daily staff and teacher presence log recorded by School Admin.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "date": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "teacherId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "staffCode": { "type": "string", "maxLength": 40 },
+        "staffName": { "type": "string", "maxLength": 120 },
+        "roleTitle": {
+          "type": "string",
+          "enum": [
+            "Head Teacher",
+            "Deputy Head",
+            "Head of Department",
+            "Form Teacher",
+            "Form Master",
+            "Subject Teacher",
+            "School Librarian",
+            "School Bursar"
+          ],
+          "maxLength": 40
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Present", "Absent", "Late", "On Leave"],
+          "maxLength": 20
+        },
+        "note": { "type": "string", "maxLength": 200 },
+        "recordedBy": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "date",
+        "teacherId",
+        "staffCode",
+        "staffName",
+        "roleTitle",
+        "status",
+        "note",
+        "recordedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StudentCase": {
+      "title": "Student Disciplinary Case",
+      "description": "Administrative record of student disciplinary cases including suspensions and rustications.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "admissionNo": { "type": "string", "maxLength": 40 },
+        "formLevel": { "type": "number" },
+        "stream": { "type": "string", "maxLength": 20 },
+        "caseType": {
+          "type": "string",
+          "enum": ["Suspension", "Rustication", "Warning", "Misconduct", "Truancy", "Other"],
+          "maxLength": 30
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["Minor", "Moderate", "Severe"],
+          "maxLength": 20
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Open", "Under Review", "Serving Suspension", "Rusticated", "Resolved", "Appealed"],
+          "maxLength": 30
+        },
+        "title": { "type": "string", "maxLength": 140 },
+        "description": { "type": "string", "maxLength": 1200 },
+        "actionTaken": { "type": "string", "maxLength": 400 },
+        "incidentDate": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "suspensionEndDate": { "type": "string", "maxLength": 10 },
+        "guardianNotified": { "type": "boolean" },
+        "recordedBy": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "studentId",
+        "studentName",
+        "admissionNo",
+        "formLevel",
+        "stream",
+        "caseType",
+        "severity",
+        "status",
+        "title",
+        "description",
+        "actionTaken",
+        "incidentDate",
+        "suspensionEndDate",
+        "guardianNotified",
+        "recordedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "TimebookSettings": {
+      "title": "TimebookSettings",
+      "description": "GPS geofence, attendance deadline, timezone, holidays, and reminder schedule per school.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "schoolId": { "type": "string", "maxLength": 128 },
+        "enabled": { "type": "boolean" },
+        "locationConfigured": { "type": "boolean" },
+        "locationLabel": { "type": "string", "maxLength": 120 },
+        "schoolLatitude": { "type": "number" },
+        "schoolLongitude": { "type": "number" },
+        "radiusMeters": { "type": "number" },
+        "maxAccuracyMeters": { "type": "number" },
+        "timezone": { "type": "string", "maxLength": 64 },
+        "windowStartHHMM": { "type": "string", "maxLength": 5 },
+        "defaultDeadlineHHMM": { "type": "string", "maxLength": 5 },
+        "categoryDeadlines": { "type": "object" },
+        "workdays": { "type": "array" },
+        "holidays": { "type": "array" },
+        "reminderSlots": { "type": "array" },
+        "remindersEnabled": { "type": "boolean" },
+        "updatedBy": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "enabled",
+        "locationConfigured",
+        "locationLabel",
+        "schoolLatitude",
+        "schoolLongitude",
+        "radiusMeters",
+        "maxAccuracyMeters",
+        "timezone",
+        "windowStartHHMM",
+        "defaultDeadlineHHMM",
+        "categoryDeadlines",
+        "workdays",
+        "holidays",
+        "reminderSlots",
+        "remindersEnabled",
+        "updatedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StaffTimebookEntry": {
+      "title": "StaffTimebookEntry",
+      "description": "Server-verified GPS Time In or administrator-authorized staff attendance record.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "schoolId": { "type": "string", "maxLength": 128 },
+        "date": { "type": "string", "maxLength": 10 },
+        "teacherId": { "type": "string", "maxLength": 128 },
+        "staffUid": { "type": "string", "maxLength": 128 },
+        "staffCode": { "type": "string", "maxLength": 30 },
+        "staffName": { "type": "string", "maxLength": 120 },
+        "roleTitle": { "type": "string", "maxLength": 40 },
+        "status": { "type": "string", "enum": ["Present", "Late", "Absent", "Pending Correction", "Administratively Recorded", "On Leave"], "maxLength": 40 },
+        "recordingMethod": { "type": "string", "enum": ["GPS Auto", "Admin Recorded"], "maxLength": 30 },
+        "timeInServer": { "type": ["string", "null"] },
+        "timeInDisplay": { "type": "string", "maxLength": 20 },
+        "gpsVerificationStatus": { "type": "string", "enum": ["Verified", "Outside Geofence", "Accuracy Insufficient", "Unavailable", "Admin Override"], "maxLength": 40 },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "distanceMeters": { "type": "number" },
+        "accuracyMeters": { "type": "number" },
+        "deadlineHHMM": { "type": "string", "maxLength": 5 },
+        "isSuspicious": { "type": "boolean" },
+        "spoofingFlags": { "type": "array" },
+        "correctionStatus": { "type": "string", "enum": ["None", "Pending", "Approved", "Rejected"], "maxLength": 20 },
+        "correctionReason": { "type": "string", "maxLength": 400 },
+        "authorizedByUid": { "type": "string", "maxLength": 128 },
+        "authorizedByName": { "type": "string", "maxLength": 120 },
+        "serverReceiptSignature": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "date",
+        "teacherId",
+        "staffUid",
+        "staffCode",
+        "staffName",
+        "roleTitle",
+        "status",
+        "recordingMethod",
+        "timeInServer",
+        "timeInDisplay",
+        "gpsVerificationStatus",
+        "latitude",
+        "longitude",
+        "distanceMeters",
+        "accuracyMeters",
+        "deadlineHHMM",
+        "isSuspicious",
+        "spoofingFlags",
+        "correctionStatus",
+        "correctionReason",
+        "authorizedByUid",
+        "authorizedByName",
+        "serverReceiptSignature",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "TimebookCorrectionRequest": {
+      "title": "TimebookCorrectionRequest",
+      "description": "Staff-submitted attendance correction request reviewed by school administrator.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "schoolId": { "type": "string", "maxLength": 128 },
+        "date": { "type": "string", "maxLength": 10 },
+        "teacherId": { "type": "string", "maxLength": 128 },
+        "staffUid": { "type": "string", "maxLength": 128 },
+        "staffCode": { "type": "string", "maxLength": 30 },
+        "staffName": { "type": "string", "maxLength": 120 },
+        "roleTitle": { "type": "string", "maxLength": 40 },
+        "currentStatus": { "type": "string", "maxLength": 40 },
+        "requestedStatus": { "type": "string", "enum": ["Present", "Late", "On Leave"], "maxLength": 20 },
+        "explanation": { "type": "string", "maxLength": 600 },
+        "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected"], "maxLength": 20 },
+        "adminNote": { "type": "string", "maxLength": 400 },
+        "reviewedByUid": { "type": "string", "maxLength": 128 },
+        "reviewedByName": { "type": "string", "maxLength": 120 },
+        "reviewedAtIso": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "date",
+        "teacherId",
+        "staffUid",
+        "staffCode",
+        "staffName",
+        "roleTitle",
+        "currentStatus",
+        "requestedStatus",
+        "explanation",
+        "status",
+        "adminNote",
+        "reviewedByUid",
+        "reviewedByName",
+        "reviewedAtIso",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "TimebookAuditLog": {
+      "title": "TimebookAuditLog",
+      "description": "Immutable audit record for every administrative timebook attendance correction.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "schoolId": { "type": "string", "maxLength": 128 },
+        "entryId": { "type": "string", "maxLength": 128 },
+        "teacherId": { "type": "string", "maxLength": 128 },
+        "staffCode": { "type": "string", "maxLength": 30 },
+        "staffName": { "type": "string", "maxLength": 120 },
+        "attendanceDate": { "type": "string", "maxLength": 10 },
+        "originalStatus": { "type": "string", "maxLength": 40 },
+        "correctedStatus": { "type": "string", "maxLength": 40 },
+        "previousValues": { "type": "string", "maxLength": 600 },
+        "updatedValues": { "type": "string", "maxLength": 600 },
+        "explanation": { "type": "string", "maxLength": 600 },
+        "authorizedByUid": { "type": "string", "maxLength": 128 },
+        "authorizedByName": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "entryId",
+        "teacherId",
+        "staffCode",
+        "staffName",
+        "attendanceDate",
+        "originalStatus",
+        "correctedStatus",
+        "previousValues",
+        "updatedValues",
+        "explanation",
+        "authorizedByUid",
+        "authorizedByName",
+        "createdAt"
+      ]
+    },
+    "TimebookSuspiciousLog": {
+      "title": "TimebookSuspiciousLog",
+      "description": "Immutable security log of GPS spoofing, clock tampering, or out-of-bounds attempts.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "schoolId": { "type": "string", "maxLength": 128 },
+        "date": { "type": "string", "maxLength": 10 },
+        "teacherId": { "type": "string", "maxLength": 128 },
+        "staffUid": { "type": "string", "maxLength": 128 },
+        "staffName": { "type": "string", "maxLength": 120 },
+        "roleTitle": { "type": "string", "maxLength": 40 },
+        "reasonCode": { "type": "string", "maxLength": 80 },
+        "detail": { "type": "string", "maxLength": 600 },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "distanceMeters": { "type": "number" },
+        "accuracyMeters": { "type": "number" },
+        "clientTimestampIso": { "type": "string", "maxLength": 40 },
+        "serverTimeIso": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "date",
+        "teacherId",
+        "staffUid",
+        "staffName",
+        "roleTitle",
+        "reasonCode",
+        "detail",
+        "latitude",
+        "longitude",
+        "distanceMeters",
+        "accuracyMeters",
+        "clientTimestampIso",
+        "serverTimeIso",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -1264,6 +1653,10 @@
     "/studentLibraries/{schoolId}/digitalResources/{resourceId}/chunks/{chunkId}": {
       "schema": { "$ref": "#/entities/DigitalResourceChunk" },
       "description": "Binary file chunks for uploaded PDF and scanned image library materials."
+    },
+    "/studentLibraries/{schoolId}/readingSessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/LibraryReadingSession" },
+      "description": "Zero-PII active online/offline reading sessions for library materials."
     },
     "/studentLibraries/{schoolId}/announcements/{announcementId}": {
       "schema": { "$ref": "#/entities/SchoolAnnouncement" },
@@ -1348,6 +1741,35 @@
     "/schools/{schoolId}/announcements/{announcementId}": {
       "schema": { "$ref": "#/entities/SchoolAnnouncement" },
       "description": "School-wide administrative announcements with role-based audience targeting."
+    },
+    "/schools/{schoolId}/staffAttendance/{recordId}": {
+      "schema": { "$ref": "#/entities/StaffAttendanceRecord" },
+      "description": "Daily staff presence register managed by School Admin."
+    },
+    "/schools/{schoolId}/studentCases/{caseId}": {
+      "schema": { "$ref": "#/entities/StudentCase" },
+      "description": "Student disciplinary cases including suspensions and rustications managed by School Admin."
+    },
+    "/schools/{schoolId}/timebookSettings/{configId}": {
+      "schema": { "$ref": "#/entities/TimebookSettings" },
+      "description": "GPS geofence, attendance window, timezone, holidays, and reminder slots per school."
+    },
+    "/schools/{schoolId}/timebookEntries/{entryId}": {
+      "schema": { "$ref": "#/entities/StaffTimebookEntry" },
+      "description": "Server-verified daily Staff Timebook entries (immutable for staff, auditable overrides by admin)."
+    },
+    "/schools/{schoolId}/timebookCorrectionRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/TimebookCorrectionRequest" },
+      "description": "Staff attendance correction requests reviewed by school administrators."
+    },
+    "/schools/{schoolId}/timebookAuditLogs/{auditId}": {
+      "schema": { "$ref": "#/entities/TimebookAuditLog" },
+      "description": "Immutable audit trail of every administrative attendance correction."
+    },
+    "/schools/{schoolId}/timebookSuspiciousLogs/{logId}": {
+      "schema": { "$ref": "#/entities/TimebookSuspiciousLog" },
+      "description": "Immutable security log of GPS spoofing, clock tampering, or unauthorized date attempts."
     }
   }
 }
+

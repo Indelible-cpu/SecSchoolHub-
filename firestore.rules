@@ -68,10 +68,55 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/schools/$(schoolId)/staffAccess/$(staffAccessKey(request.auth.token.email))).data.roleTitle;
     }
 
+    function staffTeacherId(schoolId) {
+      return get(/databases/$(database)/documents/schools/$(schoolId)/staffAccess/$(staffAccessKey(request.auth.token.email))).data.teacherId;
+    }
+
+    function blantyreTime(ts) {
+      return ts + duration.value(2, 'h');
+    }
+
+    function pad2(n) {
+      return n < 10 ? '0' + string(n) : string(n);
+    }
+
+    function formatLocalDate(localTs) {
+      return string(localTs.year()) + '-' + pad2(localTs.month()) + '-' + pad2(localTs.day());
+    }
+
+    function localTotalMinutes(localTs) {
+      return localTs.hours() * 60 + localTs.minutes();
+    }
+
+    function parseHHMMMinutes(hhmm) {
+      return int(hhmm[0:2]) * 60 + int(hhmm[3:5]);
+    }
+
+    function isWithinTimebookWindow(schoolId, roleTitle) {
+      return exists(/databases/$(database)/documents/schools/$(schoolId)/timebookSettings/default)
+        ? (
+            get(/databases/$(database)/documents/schools/$(schoolId)/timebookSettings/default).data.enabled == true &&
+            localTotalMinutes(blantyreTime(request.time)) >= parseHHMMMinutes(get(/databases/$(database)/documents/schools/$(schoolId)/timebookSettings/default).data.windowStartHHMM) &&
+            localTotalMinutes(blantyreTime(request.time)) < (
+              roleTitle in get(/databases/$(database)/documents/schools/$(schoolId)/timebookSettings/default).data.categoryDeadlines
+                ? parseHHMMMinutes(get(/databases/$(database)/documents/schools/$(schoolId)/timebookSettings/default).data.categoryDeadlines[roleTitle])
+                : parseHHMMMinutes(get(/databases/$(database)/documents/schools/$(schoolId)/timebookSettings/default).data.defaultDeadlineHHMM)
+            )
+          )
+        : (
+            localTotalMinutes(blantyreTime(request.time)) >= 330 &&
+            localTotalMinutes(blantyreTime(request.time)) < 480
+          );
+    }
+
     function isSchoolHead(schoolId) {
       return isSchoolOwner(schoolId) || (
         hasStaffAccess(schoolId) && staffRole(schoolId) in ['Head Teacher', 'Deputy Head']
       );
+    }
+
+    function isFormTeacherStaff(schoolId) {
+      return hasStaffAccess(schoolId) && staffRole(schoolId) in ['Form Teacher', 'Form Master'];
     }
 
     function isAcademicStaff(schoolId) {
@@ -176,7 +221,7 @@ service cloud.firestore {
         && (!('emergencyNotes' in data) || (data.emergencyNotes is string && data.emergencyNotes.size() <= 240))
         && data.studentEmail is string && data.studentEmail.size() <= 160
         && (!('registrationCode' in data) || (data.registrationCode is string && data.registrationCode.size() <= 32))
-        && data.status in ['Active', 'Transferred', 'Suspended', 'Graduated']
+        && data.status in ['Active', 'Transferred', 'Suspended', 'Rusticated', 'Graduated']
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -373,7 +418,7 @@ service cloud.firestore {
         && data.stream is string && data.stream.size() >= 1 && data.stream.size() <= 20
         && data.boardingStatus in ['Day Scholar', 'Boarder']
         && isValidRegCode(data.registrationCode)
-        && data.status in ['Active', 'Transferred', 'Suspended', 'Graduated']
+        && data.status in ['Active', 'Transferred', 'Suspended', 'Rusticated', 'Graduated']
         && (!('logoDataUrl' in data) || isValidLogoDataUrl(data.logoDataUrl))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -771,7 +816,15 @@ service cloud.firestore {
         && data.author is string && data.author.size() >= 2 && data.author.size() <= 120
         && data.subject is string && data.subject.size() >= 2 && data.subject.size() <= 60
         && data.formLevel in ['All', 'Form 1', 'Form 2', 'Form 3', 'Form 4']
-        && data.category in ['Book', 'Past Paper', 'Revision Guide', 'Set Book']
+        && data.category in [
+          'Book',
+          'Past Paper',
+          'Revision Guide',
+          'Set Book',
+          'Teaching Resource',
+          'Scheme of Work',
+          'Lesson Plan'
+        ]
         && data.examYear is string && data.examYear.size() <= 16
         && data.summary is string && data.summary.size() <= 280
         && (!('storageFormat' in data) || data.storageFormat in ['text', 'pdf', 'image'])
@@ -802,6 +855,68 @@ service cloud.firestore {
         && data.chunkIndex is int && data.chunkIndex >= 0 && data.chunkIndex < 40
         && data.dataBase64 is string && data.dataBase64.size() >= 1 && data.dataBase64.size() <= 700000
         && data.createdAt is timestamp;
+    }
+
+    function isValidStaffAttendance(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'date', 'teacherId', 'staffCode', 'staffName',
+          'roleTitle', 'status', 'note', 'recordedBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'date', 'teacherId', 'staffCode', 'staffName',
+          'roleTitle', 'status', 'note', 'recordedBy', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && data.date is string && data.date.size() == 10 && data.date.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && isValidId(data.teacherId)
+        && data.staffCode is string && data.staffCode.size() >= 1 && data.staffCode.size() <= 40
+        && data.staffName is string && data.staffName.size() >= 2 && data.staffName.size() <= 120
+        && data.roleTitle in [
+          'Head Teacher', 'Deputy Head', 'Head of Department',
+          'Form Teacher', 'Form Master', 'Subject Teacher', 'School Librarian', 'School Bursar'
+        ]
+        && data.status in ['Present', 'Absent', 'Late', 'On Leave']
+        && data.note is string && data.note.size() <= 200
+        && data.recordedBy is string && data.recordedBy.size() >= 1 && data.recordedBy.size() <= 120
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStudentCase(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'studentId', 'studentName', 'admissionNo',
+          'formLevel', 'stream', 'caseType', 'severity', 'status',
+          'title', 'description', 'actionTaken', 'incidentDate',
+          'suspensionEndDate', 'guardianNotified', 'recordedBy',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'studentId', 'studentName', 'admissionNo',
+          'formLevel', 'stream', 'caseType', 'severity', 'status',
+          'title', 'description', 'actionTaken', 'incidentDate',
+          'suspensionEndDate', 'guardianNotified', 'recordedBy',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && isValidId(data.studentId)
+        && data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 120
+        && data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 40
+        && data.formLevel is int && data.formLevel >= 1 && data.formLevel <= 4
+        && data.stream is string && data.stream.size() >= 1 && data.stream.size() <= 20
+        && data.caseType in ['Suspension', 'Rustication', 'Warning', 'Misconduct', 'Truancy', 'Other']
+        && data.severity in ['Minor', 'Moderate', 'Severe']
+        && data.status in ['Open', 'Under Review', 'Serving Suspension', 'Rusticated', 'Resolved', 'Appealed']
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 140
+        && data.description is string && data.description.size() >= 2 && data.description.size() <= 1200
+        && data.actionTaken is string && data.actionTaken.size() <= 400
+        && data.incidentDate is string && data.incidentDate.size() == 10 && data.incidentDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.suspensionEndDate is string && (data.suspensionEndDate == '' || (data.suspensionEndDate.size() == 10 && data.suspensionEndDate.matches('^\\d{4}-\\d{2}-\\d{2}$')))
+        && data.guardianNotified is bool
+        && data.recordedBy is string && data.recordedBy.size() >= 1 && data.recordedBy.size() <= 120
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
     }
 
     function isValidPortalFeeInvoice(data) {
@@ -920,6 +1035,218 @@ service cloud.firestore {
         && data.authorName is string && data.authorName.size() >= 2 && data.authorName.size() <= 120
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
+    }
+
+    function isValidLibraryReadingSession(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'resourceId', 'readerKey', 'registrationCode',
+          'mode', 'isReading', 'isRead', 'lastReadPage', 'lastReadAtMs',
+          'expiresAtMs', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'resourceId', 'readerKey', 'registrationCode',
+          'mode', 'isReading', 'isRead', 'lastReadPage', 'lastReadAtMs',
+          'expiresAtMs', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && isValidId(data.resourceId)
+        && isValidId(data.readerKey)
+        && data.registrationCode is string
+        && (data.registrationCode == '' || isValidRegCode(data.registrationCode))
+        && data.mode in ['online', 'offline']
+        && data.isReading is bool
+        && data.isRead is bool
+        && data.lastReadPage is int && data.lastReadPage >= 0 && data.lastReadPage <= 5000
+        && data.lastReadAtMs is int && data.lastReadAtMs >= 0 && data.lastReadAtMs <= 9999999999999
+        && data.expiresAtMs is int && data.expiresAtMs >= 0 && data.expiresAtMs <= 9999999999999
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidHHMMFormat(val) {
+      return val is string && val.size() == 5 && val.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$');
+    }
+
+    function isValidTimebookSettings(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'enabled', 'locationConfigured', 'locationLabel',
+          'schoolLatitude', 'schoolLongitude', 'radiusMeters', 'maxAccuracyMeters',
+          'timezone', 'windowStartHHMM', 'defaultDeadlineHHMM', 'categoryDeadlines',
+          'workdays', 'holidays', 'reminderSlots', 'remindersEnabled', 'updatedBy',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'enabled', 'locationConfigured', 'locationLabel',
+          'schoolLatitude', 'schoolLongitude', 'radiusMeters', 'maxAccuracyMeters',
+          'timezone', 'windowStartHHMM', 'defaultDeadlineHHMM', 'categoryDeadlines',
+          'workdays', 'holidays', 'reminderSlots', 'remindersEnabled', 'updatedBy',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && data.enabled is bool
+        && data.locationConfigured is bool
+        && data.locationLabel is string && data.locationLabel.size() >= 1 && data.locationLabel.size() <= 120
+        && data.schoolLatitude is number && data.schoolLatitude >= -90 && data.schoolLatitude <= 90
+        && data.schoolLongitude is number && data.schoolLongitude >= -180 && data.schoolLongitude <= 180
+        && data.radiusMeters is number && data.radiusMeters >= 20 && data.radiusMeters <= 5000
+        && data.maxAccuracyMeters is number && data.maxAccuracyMeters >= 10 && data.maxAccuracyMeters <= 1000
+        && data.timezone is string && data.timezone.size() >= 3 && data.timezone.size() <= 64
+        && isValidHHMMFormat(data.windowStartHHMM)
+        && isValidHHMMFormat(data.defaultDeadlineHHMM)
+        && data.categoryDeadlines is map
+        && data.workdays is list && data.workdays.size() >= 1 && data.workdays.size() <= 7
+        && (data.workdays.size() == 0 || data.workdays[0] is int)
+        && data.holidays is list && data.holidays.size() <= 60
+        && (data.holidays.size() == 0 || data.holidays[0] is map)
+        && data.reminderSlots is list && data.reminderSlots.size() <= 8
+        && (data.reminderSlots.size() == 0 || data.reminderSlots[0] is string)
+        && data.remindersEnabled is bool
+        && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 120
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTimebookEntry(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'date', 'teacherId', 'staffUid', 'staffCode',
+          'staffName', 'roleTitle', 'status', 'recordingMethod', 'timeInServer',
+          'timeInDisplay', 'gpsVerificationStatus', 'latitude', 'longitude',
+          'distanceMeters', 'accuracyMeters', 'deadlineHHMM', 'isSuspicious',
+          'spoofingFlags', 'correctionStatus', 'correctionReason',
+          'authorizedByUid', 'authorizedByName', 'serverReceiptSignature',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'date', 'teacherId', 'staffUid', 'staffCode',
+          'staffName', 'roleTitle', 'status', 'recordingMethod', 'timeInServer',
+          'timeInDisplay', 'gpsVerificationStatus', 'latitude', 'longitude',
+          'distanceMeters', 'accuracyMeters', 'deadlineHHMM', 'isSuspicious',
+          'spoofingFlags', 'correctionStatus', 'correctionReason',
+          'authorizedByUid', 'authorizedByName', 'serverReceiptSignature',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && data.date is string && data.date.size() == 10 && data.date.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && isValidId(data.teacherId)
+        && data.staffUid is string && data.staffUid.size() <= 128
+        && data.staffCode is string && data.staffCode.size() <= 30
+        && data.staffName is string && data.staffName.size() >= 1 && data.staffName.size() <= 120
+        && data.roleTitle is string && data.roleTitle.size() >= 2 && data.roleTitle.size() <= 40
+        && data.status in ['Present', 'Late', 'Absent', 'Pending Correction', 'Administratively Recorded', 'On Leave']
+        && data.recordingMethod in ['GPS Auto', 'Admin Recorded']
+        && (data.timeInServer == null || data.timeInServer is timestamp)
+        && data.timeInDisplay is string && data.timeInDisplay.size() <= 20
+        && data.gpsVerificationStatus in ['Verified', 'Outside Geofence', 'Accuracy Insufficient', 'Unavailable', 'Admin Override']
+        && data.latitude is number && data.latitude >= -90 && data.latitude <= 90
+        && data.longitude is number && data.longitude >= -180 && data.longitude <= 180
+        && data.distanceMeters is number && data.distanceMeters >= 0 && data.distanceMeters <= 25000000
+        && data.accuracyMeters is number && data.accuracyMeters >= 0 && data.accuracyMeters <= 100000
+        && isValidHHMMFormat(data.deadlineHHMM)
+        && data.isSuspicious is bool
+        && data.spoofingFlags is list && data.spoofingFlags.size() <= 10
+        && (data.spoofingFlags.size() == 0 || data.spoofingFlags[0] is string)
+        && data.correctionStatus in ['None', 'Pending', 'Approved', 'Rejected']
+        && data.correctionReason is string && data.correctionReason.size() <= 400
+        && data.authorizedByUid is string && data.authorizedByUid.size() <= 128
+        && data.authorizedByName is string && data.authorizedByName.size() <= 120
+        && data.serverReceiptSignature is string && data.serverReceiptSignature.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTimebookCorrectionRequest(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'date', 'teacherId', 'staffUid', 'staffCode',
+          'staffName', 'roleTitle', 'currentStatus', 'requestedStatus', 'explanation',
+          'status', 'adminNote', 'reviewedByUid', 'reviewedByName', 'reviewedAtIso',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'date', 'teacherId', 'staffUid', 'staffCode',
+          'staffName', 'roleTitle', 'currentStatus', 'requestedStatus', 'explanation',
+          'status', 'adminNote', 'reviewedByUid', 'reviewedByName', 'reviewedAtIso',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && data.date is string && data.date.size() == 10 && data.date.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && isValidId(data.teacherId)
+        && isValidId(data.staffUid)
+        && data.staffCode is string && data.staffCode.size() <= 30
+        && data.staffName is string && data.staffName.size() >= 1 && data.staffName.size() <= 120
+        && data.roleTitle is string && data.roleTitle.size() >= 2 && data.roleTitle.size() <= 40
+        && data.currentStatus is string && data.currentStatus.size() <= 40
+        && data.requestedStatus in ['Present', 'Late', 'On Leave']
+        && data.explanation is string && data.explanation.size() >= 5 && data.explanation.size() <= 600
+        && data.status in ['Pending', 'Approved', 'Rejected']
+        && data.adminNote is string && data.adminNote.size() <= 400
+        && data.reviewedByUid is string && data.reviewedByUid.size() <= 128
+        && data.reviewedByName is string && data.reviewedByName.size() <= 120
+        && data.reviewedAtIso is string && data.reviewedAtIso.size() <= 40
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTimebookAuditLog(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'entryId', 'teacherId', 'staffCode', 'staffName',
+          'attendanceDate', 'originalStatus', 'correctedStatus', 'previousValues',
+          'updatedValues', 'explanation', 'authorizedByUid', 'authorizedByName', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'entryId', 'teacherId', 'staffCode', 'staffName',
+          'attendanceDate', 'originalStatus', 'correctedStatus', 'previousValues',
+          'updatedValues', 'explanation', 'authorizedByUid', 'authorizedByName', 'createdAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && isValidId(data.entryId)
+        && isValidId(data.teacherId)
+        && data.staffCode is string && data.staffCode.size() <= 30
+        && data.staffName is string && data.staffName.size() >= 1 && data.staffName.size() <= 120
+        && data.attendanceDate is string && data.attendanceDate.size() == 10 && data.attendanceDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.originalStatus is string && data.originalStatus.size() >= 1 && data.originalStatus.size() <= 40
+        && data.correctedStatus is string && data.correctedStatus.size() >= 1 && data.correctedStatus.size() <= 40
+        && data.previousValues is string && data.previousValues.size() <= 600
+        && data.updatedValues is string && data.updatedValues.size() <= 600
+        && data.explanation is string && data.explanation.size() >= 5 && data.explanation.size() <= 600
+        && isValidId(data.authorizedByUid)
+        && data.authorizedByName is string && data.authorizedByName.size() >= 1 && data.authorizedByName.size() <= 120
+        && data.createdAt is timestamp;
+    }
+
+    function isValidTimebookSuspiciousLog(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'date', 'teacherId', 'staffUid', 'staffName',
+          'roleTitle', 'reasonCode', 'detail', 'latitude', 'longitude',
+          'distanceMeters', 'accuracyMeters', 'clientTimestampIso', 'serverTimeIso',
+          'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'date', 'teacherId', 'staffUid', 'staffName',
+          'roleTitle', 'reasonCode', 'detail', 'latitude', 'longitude',
+          'distanceMeters', 'accuracyMeters', 'clientTimestampIso', 'serverTimeIso',
+          'createdAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && data.date is string && data.date.size() == 10 && data.date.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && isValidId(data.teacherId)
+        && isValidId(data.staffUid)
+        && data.staffName is string && data.staffName.size() >= 1 && data.staffName.size() <= 120
+        && data.roleTitle is string && data.roleTitle.size() >= 2 && data.roleTitle.size() <= 40
+        && data.reasonCode is string && data.reasonCode.size() >= 2 && data.reasonCode.size() <= 80
+        && data.detail is string && data.detail.size() <= 600
+        && data.latitude is number && data.latitude >= -90 && data.latitude <= 90
+        && data.longitude is number && data.longitude >= -180 && data.longitude <= 180
+        && data.distanceMeters is number && data.distanceMeters >= 0 && data.distanceMeters <= 25000000
+        && data.accuracyMeters is number && data.accuracyMeters >= 0 && data.accuracyMeters <= 100000
+        && data.clientTimestampIso is string && data.clientTimestampIso.size() <= 40
+        && data.serverTimeIso is string && data.serverTimeIso.size() <= 40
+        && data.createdAt is timestamp;
     }
 
     // --- Collection Rules ---
@@ -1281,8 +1608,9 @@ service cloud.firestore {
       }
 
       match /announcements/{announcementId} {
-        allow get: if isValidId(schoolId) && isValidId(announcementId);
-        allow list: if isValidId(schoolId) && existing().schoolId == schoolId;
+        allow get: if isValidId(schoolId) && isValidId(announcementId)
+          && (isSchoolOwner(schoolId) || 'Students' in existing().targetAudiences);
+        allow list: if isValidId(schoolId) && 'Students' in existing().targetAudiences;
         allow create: if isValidId(schoolId) && isValidId(announcementId)
           && isSchoolOwner(schoolId)
           && isValidSchoolAnnouncement(incoming())
@@ -1306,6 +1634,51 @@ service cloud.firestore {
             ])
           );
         allow delete: if isValidId(schoolId) && isValidId(announcementId) && isSchoolOwner(schoolId);
+      }
+
+      match /readingSessions/{sessionId} {
+        allow get: if isValidId(schoolId) && isValidId(sessionId);
+        allow list: if isValidId(schoolId) && existing().schoolId == schoolId;
+        allow create: if isValidId(schoolId) && isValidId(sessionId)
+          && isValidLibraryReadingSession(incoming())
+          && incoming().schoolId == schoolId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && (
+            (
+              isLibraryStaff(schoolId)
+              && incoming().ownerId == schoolOwnerId(schoolId)
+              && incoming().registrationCode == ''
+            ) || (
+              isValidRegCode(incoming().registrationCode)
+              && exists(/databases/$(database)/documents/studentPortals/$(incoming().registrationCode))
+              && get(/databases/$(database)/documents/studentPortals/$(incoming().registrationCode)).data.schoolId == schoolId
+              && get(/databases/$(database)/documents/studentPortals/$(incoming().registrationCode)).data.ownerId == incoming().ownerId
+              && get(/databases/$(database)/documents/studentPortals/$(incoming().registrationCode)).data.status == 'Active'
+            )
+          );
+        allow update: if isValidId(schoolId) && isValidId(sessionId)
+          && isValidLibraryReadingSession(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().resourceId == existing().resourceId
+          && incoming().readerKey == existing().readerKey
+          && incoming().registrationCode == existing().registrationCode
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'mode', 'isReading', 'isRead', 'lastReadPage', 'lastReadAtMs', 'expiresAtMs', 'updatedAt'
+          ])
+          && (
+            isLibraryStaff(schoolId) || (
+              isValidRegCode(existing().registrationCode)
+              && exists(/databases/$(database)/documents/studentPortals/$(existing().registrationCode))
+              && get(/databases/$(database)/documents/studentPortals/$(existing().registrationCode)).data.schoolId == schoolId
+              && get(/databases/$(database)/documents/studentPortals/$(existing().registrationCode)).data.ownerId == existing().ownerId
+              && get(/databases/$(database)/documents/studentPortals/$(existing().registrationCode)).data.status == 'Active'
+            )
+          );
+        allow delete: if isValidId(schoolId) && isValidId(sessionId) && isLibraryStaff(schoolId);
       }
     }
 
@@ -1658,7 +2031,7 @@ service cloud.firestore {
         allow delete: if isValidId(schoolId) && isValidId(submissionId) && isBursarStaff(schoolId);
       }
 
-      // Attendance records: Academic staff only
+      // Attendance records: Readable by academic staff (for turnout monitoring), writable ONLY by Form Teachers (or School Owner impersonating Form Teacher in dev)
       match /attendance/{attendanceId} {
         allow get: if isValidId(schoolId) && isValidId(attendanceId) && isAcademicStaff(schoolId);
         allow list: if isVerified() && (
@@ -1666,14 +2039,14 @@ service cloud.firestore {
           isAcademicStaff(schoolId)
         );
         allow create: if isValidId(schoolId) && isValidId(attendanceId)
-          && isAcademicStaff(schoolId)
+          && (isFormTeacherStaff(schoolId) || isSchoolOwner(schoolId))
           && isValidAttendance(incoming())
           && incoming().ownerId == schoolOwnerId(schoolId)
           && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(incoming().studentId))
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time;
         allow update: if isValidId(schoolId) && isValidId(attendanceId)
-          && isAcademicStaff(schoolId)
+          && (isFormTeacherStaff(schoolId) || isSchoolOwner(schoolId))
           && isValidAttendance(incoming())
           && incoming().ownerId == existing().ownerId
           && incoming().studentId == existing().studentId
@@ -1684,7 +2057,7 @@ service cloud.firestore {
             isAdmin() ||
             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'note', 'updatedAt'])
           );
-        allow delete: if isValidId(schoolId) && isValidId(attendanceId) && isAcademicStaff(schoolId);
+        allow delete: if isValidId(schoolId) && isValidId(attendanceId) && (isFormTeacherStaff(schoolId) || isSchoolOwner(schoolId));
       }
 
       // Automated Parent SMS Policy Settings: Bursar & Head Teacher / Owner only
@@ -1945,6 +2318,249 @@ service cloud.firestore {
             ])
           );
         allow delete: if isValidId(schoolId) && isValidId(announcementId) && isSchoolOwner(schoolId);
+      }
+
+      // Daily Staff Presence Register: Readable by School Heads/Owner, writable ONLY by School Admin / Owner
+      match /staffAttendance/{recordId} {
+        allow get: if isValidId(schoolId) && isValidId(recordId) && isSchoolHead(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isSchoolHead(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(recordId)
+          && isSchoolOwner(schoolId)
+          && isValidStaffAttendance(incoming())
+          && incoming().schoolId == schoolId
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/teachers/$(incoming().teacherId))
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && isValidId(recordId)
+          && isSchoolOwner(schoolId)
+          && isValidStaffAttendance(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().teacherId == existing().teacherId
+          && incoming().date == existing().date
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'note', 'recordedBy', 'updatedAt'])
+          );
+        allow delete: if isValidId(schoolId) && isValidId(recordId) && isSchoolOwner(schoolId);
+      }
+
+      // Student Disciplinary Cases (Suspensions, Rustications, Warnings): Readable by active school staff, managed ONLY by School Admin / Owner
+      match /studentCases/{caseId} {
+        allow get: if isValidId(schoolId) && isValidId(caseId) && isAnySchoolStaff(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isAnySchoolStaff(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(caseId)
+          && isSchoolOwner(schoolId)
+          && isValidStudentCase(incoming())
+          && incoming().schoolId == schoolId
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(incoming().studentId))
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && isValidId(caseId)
+          && isSchoolOwner(schoolId)
+          && isValidStudentCase(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().studentId == existing().studentId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'studentName', 'admissionNo', 'formLevel', 'stream',
+              'caseType', 'severity', 'status', 'title', 'description',
+              'actionTaken', 'incidentDate', 'suspensionEndDate',
+              'guardianNotified', 'recordedBy', 'updatedAt'
+            ])
+          );
+        allow delete: if isValidId(schoolId) && isValidId(caseId) && isSchoolOwner(schoolId);
+      }
+
+      // Smart GPS Staff Timebook Configuration: Readable by active staff, configurable ONLY by School Admin / Owner
+      match /timebookSettings/{configId} {
+        allow get: if isValidId(schoolId) && configId == 'default' && isAnySchoolStaff(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isAnySchoolStaff(schoolId)
+        );
+        allow create: if isValidId(schoolId) && configId == 'default'
+          && isSchoolOwner(schoolId)
+          && isValidTimebookSettings(incoming())
+          && incoming().schoolId == schoolId
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && configId == 'default'
+          && isSchoolOwner(schoolId)
+          && isValidTimebookSettings(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'enabled', 'locationConfigured', 'locationLabel', 'schoolLatitude',
+              'schoolLongitude', 'radiusMeters', 'maxAccuracyMeters', 'timezone',
+              'windowStartHHMM', 'defaultDeadlineHHMM', 'categoryDeadlines',
+              'workdays', 'holidays', 'reminderSlots', 'remindersEnabled',
+              'updatedBy', 'updatedAt'
+            ])
+          );
+        allow delete: if false;
+      }
+
+      // Smart GPS Staff Timebook Entries: Strictly non-retrospective, time-window locked for staff; corrections by Admin only
+      match /timebookEntries/{entryId} {
+        allow get: if isValidId(schoolId) && isValidId(entryId) && (
+          isSchoolHead(schoolId) ||
+          (hasStaffAccess(schoolId) && (
+            existing().staffUid == request.auth.uid ||
+            existing().teacherId == staffTeacherId(schoolId)
+          ))
+        );
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isSchoolHead(schoolId) ||
+          (hasStaffAccess(schoolId) && existing().staffUid == request.auth.uid)
+        );
+        allow create: if isValidId(schoolId) && isValidId(entryId)
+          && isValidTimebookEntry(incoming())
+          && incoming().schoolId == schoolId
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/teachers/$(incoming().teacherId))
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && (
+            (
+              isSchoolOwner(schoolId)
+              && incoming().recordingMethod == 'Admin Recorded'
+              && incoming().authorizedByUid == request.auth.uid
+            ) ||
+            (
+              hasStaffAccess(schoolId)
+              && incoming().teacherId == staffTeacherId(schoolId)
+              && incoming().staffUid == request.auth.uid
+              && incoming().date == formatLocalDate(blantyreTime(request.time))
+              && entryId == (formatLocalDate(blantyreTime(request.time)) + '_' + incoming().teacherId)
+              && incoming().recordingMethod == 'GPS Auto'
+              && incoming().status == 'Present'
+              && incoming().gpsVerificationStatus == 'Verified'
+              && incoming().timeInServer == request.time
+              && incoming().serverReceiptSignature.size() >= 16
+              && isWithinTimebookWindow(schoolId, incoming().roleTitle)
+            )
+          );
+        allow update: if isValidId(schoolId) && isValidId(entryId)
+          && isSchoolOwner(schoolId)
+          && isValidTimebookEntry(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().teacherId == existing().teacherId
+          && incoming().date == existing().date
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().authorizedByUid == request.auth.uid
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'recordingMethod', 'timeInServer', 'timeInDisplay',
+              'gpsVerificationStatus', 'correctionStatus', 'correctionReason',
+              'authorizedByUid', 'authorizedByName', 'updatedAt'
+            ])
+          );
+        allow delete: if false;
+      }
+
+      // Staff Correction Requests: Staff create own requests; Admin reviews and updates status
+      match /timebookCorrectionRequests/{requestId} {
+        allow get: if isValidId(schoolId) && isValidId(requestId) && (
+          isSchoolOwner(schoolId) ||
+          (hasStaffAccess(schoolId) && (
+            existing().staffUid == request.auth.uid ||
+            existing().teacherId == staffTeacherId(schoolId)
+          ))
+        );
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isSchoolOwner(schoolId) ||
+          (hasStaffAccess(schoolId) && existing().staffUid == request.auth.uid)
+        );
+        allow create: if isValidId(schoolId) && isValidId(requestId)
+          && isAnySchoolStaff(schoolId)
+          && isValidTimebookCorrectionRequest(incoming())
+          && incoming().schoolId == schoolId
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/teachers/$(incoming().teacherId))
+          && incoming().staffUid == request.auth.uid
+          && (isSchoolOwner(schoolId) || incoming().teacherId == staffTeacherId(schoolId))
+          && incoming().status == 'Pending'
+          && incoming().reviewedByUid == ''
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && isValidId(requestId)
+          && isSchoolOwner(schoolId)
+          && isValidTimebookCorrectionRequest(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().teacherId == existing().teacherId
+          && incoming().staffUid == existing().staffUid
+          && incoming().date == existing().date
+          && incoming().explanation == existing().explanation
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().reviewedByUid == request.auth.uid
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'adminNote', 'reviewedByUid', 'reviewedByName', 'reviewedAtIso', 'updatedAt'
+            ])
+          );
+        allow delete: if false;
+      }
+
+      // Immutable Timebook Correction Audit Logs: Append-only by School Admin / Owner; readable by Heads/Owner
+      match /timebookAuditLogs/{auditId} {
+        allow get: if isValidId(schoolId) && isValidId(auditId) && isSchoolHead(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isSchoolHead(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(auditId)
+          && isSchoolOwner(schoolId)
+          && isValidTimebookAuditLog(incoming())
+          && incoming().schoolId == schoolId
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && incoming().authorizedByUid == request.auth.uid
+          && incoming().createdAt == request.time;
+        allow update, delete: if false;
+      }
+
+      // Immutable Suspicious GPS & Anti-Tampering Security Logs
+      match /timebookSuspiciousLogs/{logId} {
+        allow get: if isValidId(schoolId) && isValidId(logId) && isSchoolHead(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isSchoolHead(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(logId)
+          && isAnySchoolStaff(schoolId)
+          && isValidTimebookSuspiciousLog(incoming())
+          && incoming().schoolId == schoolId
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && incoming().staffUid == request.auth.uid
+          && incoming().createdAt == request.time;
+        allow update, delete: if false;
       }
     }
   }

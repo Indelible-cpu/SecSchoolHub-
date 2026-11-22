@@ -12,7 +12,14 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png'],
+        includeAssets: [
+          'icon.svg',
+          'apple-touch-icon.png',
+          'pwa-192x192.png',
+          'pwa-512x512.png',
+          'pwa-maskable-512x512.png',
+          'push-sw.js',
+        ],
         manifest: {
           id: '/',
           name: 'SecSchoolHub — Secondary School Management',
@@ -46,6 +53,7 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
+          importScripts: ['/push-sw.js'],
           maximumFileSizeToCacheInBytes: 12 * 1024 * 1024,
           globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,woff,woff2}'],
           runtimeCaching: [

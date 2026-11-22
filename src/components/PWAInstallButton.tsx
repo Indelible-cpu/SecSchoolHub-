@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Download, Share, PlusSquare, MoreVertical, Smartphone, X, CheckCircle2 } from 'lucide-react';
 import { usePWAInstall } from '../hooks/usePWAInstall';
+import { ModalBackdrop } from './school/ModalBackdrop';
 
 interface PWAInstallButtonProps {
   variant?: 'header' | 'card';
@@ -70,17 +71,13 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ variant = 'h
       )}
 
       {showGuide && (
-        <div
+        <ModalBackdrop
+          open={showGuide}
+          onClose={() => setShowGuide(false)}
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/60 backdrop-blur-xs p-0 sm:p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="install-guide-title"
-          onClick={() => setShowGuide(false)}
+          ariaLabelledBy="install-guide-title"
         >
-          <div
-            className="w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
+          <div className="w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl">
             <div className="w-10 h-1 bg-slate-300 dark:bg-slate-700 rounded-full mx-auto mb-4 sm:hidden" />
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -170,7 +167,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ variant = 'h
               Done
             </button>
           </div>
-        </div>
+        </ModalBackdrop>
       )}
     </>
   );

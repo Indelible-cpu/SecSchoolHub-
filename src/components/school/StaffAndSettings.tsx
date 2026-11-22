@@ -16,9 +16,15 @@ import {
   School,
   SchoolSubject,
   SchoolType,
+  StaffAttendanceRecord,
+  StaffTimebookEntry,
   Teacher,
   TeacherRole,
   TermName,
+  TimebookAuditLog,
+  TimebookCorrectionRequest,
+  TimebookSettings,
+  TimebookSuspiciousLog,
 } from '../../school/types';
 import {
   DEFAULT_MALAWI_SUBJECT_PRESETS,
@@ -40,7 +46,12 @@ import {
   updateSchoolSettings,
 } from '../../school/firestoreService';
 import { processSchoolLogoFile } from '../../school/schoolLogoHelper';
+import { buildModalDraftKey, clearModalDraft, loadModalDraft, saveModalDraft } from '../../school/modalDrafts';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
+import { DraftRestoredNotice, ModalBackdrop } from './ModalBackdrop';
+import { StaffPresencePanel } from './AttendanceRegister';
+import { StaffTimebookAdminDashboard } from './StaffTimebookAdminDashboard';
+import { TimebookConfigCard } from './TimebookConfigCard';
 
 interface StaffAndSettingsProps {
   school: School;
@@ -48,7 +59,19 @@ interface StaffAndSettingsProps {
   ownerId: string;
   teachers: Teacher[];
   schoolSubjects: SchoolSubject[];
+  staffAttendance?: StaffAttendanceRecord[];
+  timebookSettings?: TimebookSettings | null;
+  timebookEntries?: StaffTimebookEntry[];
+  timebookCorrectionRequests?: TimebookCorrectionRequest[];
+  timebookAuditLogs?: TimebookAuditLog[];
+  timebookSuspiciousLogs?: TimebookSuspiciousLog[];
   canManageStaffAndSettings?: boolean;
+  canReadStaffAttendance?: boolean;
+  canWriteStaffAttendance?: boolean;
+  canManageTimebook?: boolean;
+  recordedByName?: string;
+  initialTab?: 'directory' | 'timebook' | 'presence';
+  tabRequestNonce?: number;
   onSwitchSchool: (schoolId: string) => void;
   onAddNewSchool?: () => void;
 }
@@ -86,10 +109,64 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
   ownerId,
   teachers,
   schoolSubjects,
+  staffAttendance = [],
+  timebookSettings = null,
+  timebookEntries = [],
+  timebookCorrectionRequests = [],
+  timebookAuditLogs = [],
+  timebookSuspiciousLogs = [],
   canManageStaffAndSettings = true,
+  canReadStaffAttendance = false,
+  canWriteStaffAttendance = false,
+  canManageTimebook = false,
+  recordedByName = 'School Admin',
+  initialTab,
+  tabRequestNonce,
   onSwitchSchool,
   onAddNewSchool,
 }) => {
+  const [staffSectionTab, setStaffSectionTab] = useState<'directory' | 'timebook' | 'presence'>(() =>
+    initialTab === 'timebook' && canReadStaffAttendance
+      ? 'timebook'
+      : initialTab === 'presence' && canReadStaffAttendance
+      ? 'presence'
+      : 'directory'
+  );
+
+  useEffect(() => {
+    if (!tabRequestNonce || !initialTab) return;
+    if ((initialTab === 'presence' || initialTab === 'timebook') && !canReadStaffAttendance) return;
+    setStaffSectionTab(initialTab);
+  }, [canReadStaffAttendance, initialTab, tabRequestNonce]);
+
+  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const todayStaffPresenceMap = useMemo(() => {
+    const map = new Map<string, StaffAttendanceRecord>();
+    for (const r of staffAttendance) {
+      if (r.date === todayIso) {
+        map.set(r.teacherId, r);
+      }
+    }
+    return map;
+  }, [staffAttendance, todayIso]);
+
+  const todayStaffTurnout = useMemo(() => {
+    let present = 0;
+    let late = 0;
+    let absent = 0;
+    let onLeave = 0;
+    for (const t of teachers) {
+      const rec = todayStaffPresenceMap.get(t.id);
+      if (!rec) continue;
+      if (rec.status === 'Present') present += 1;
+      else if (rec.status === 'Late') late += 1;
+      else if (rec.status === 'Absent') absent += 1;
+      else if (rec.status === 'On Leave') onLeave += 1;
+    }
+    const marked = present + late + absent + onLeave;
+    const rate = marked > 0 ? Math.round(((present + late) / marked) * 100) : null;
+    return { present, late, absent, onLeave, marked, rate };
+  }, [teachers, todayStaffPresenceMap]);
   // School Settings Form
   const [name, setName] = useState(school.name);
   const [district, setDistrict] = useState(school.district);
@@ -142,6 +219,17 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
   });
   const [savingTeacher, setSavingTeacher] = useState(false);
   const [teacherFormError, setTeacherFormError] = useState('');
+  const [teacherDraftRestored, setTeacherDraftRestored] = useState(false);
+
+  const teacherDraftKey = useMemo(
+    () => buildModalDraftKey(school.id, 'teacher', editingTeacher?.id),
+    [editingTeacher?.id, school.id]
+  );
+
+  useEffect(() => {
+    if (!teacherModalOpen) return;
+    saveModalDraft(teacherDraftKey, tForm);
+  }, [tForm, teacherDraftKey, teacherModalOpen]);
 
   // Safe Delete Teacher Modal
   const [confirmTeacher, setConfirmTeacher] = useState<Teacher | null>(null);
@@ -160,6 +248,18 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
   });
   const [savingSubject, setSavingSubject] = useState(false);
   const [subjectFormError, setSubjectFormError] = useState('');
+  const [subjectDraftRestored, setSubjectDraftRestored] = useState(false);
+
+  const subjectDraftKey = useMemo(
+    () => buildModalDraftKey(school.id, 'subject', editingSubject?.id),
+    [editingSubject?.id, school.id]
+  );
+
+  useEffect(() => {
+    if (!subjectModalOpen) return;
+    saveModalDraft(subjectDraftKey, subForm);
+  }, [subForm, subjectDraftKey, subjectModalOpen]);
+
   const [togglingSubjectId, setTogglingSubjectId] = useState<string | null>(null);
   const [seedingSubjects, setSeedingSubjects] = useState(false);
   const [subjectNotice, setSubjectNotice] = useState('');
@@ -243,34 +343,84 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
 
   const openAddTeacherModal = () => {
     setEditingTeacher(null);
-    setTForm({
-      staffCode: `TSC-${Math.floor(40000 + Math.random() * 50000)}`,
-      fullName: '',
-      roleTitle: 'Subject Teacher',
-      subjects: ['English'],
-      assignedForm: 'Form 1A',
-      phone: '+265 ',
-      staffEmail: '',
-      status: 'Active',
-    });
+    const key = buildModalDraftKey(school.id, 'teacher', null);
+    const saved = loadModalDraft<TeacherPayload>(key);
+    if (saved && (saved.fullName || saved.staffEmail)) {
+      setTForm(saved);
+      setTeacherDraftRestored(true);
+    } else {
+      setTForm({
+        staffCode: `TSC-${Math.floor(40000 + Math.random() * 50000)}`,
+        fullName: '',
+        roleTitle: 'Subject Teacher',
+        subjects: ['English'],
+        assignedForm: 'Form 1A',
+        phone: '+265 ',
+        staffEmail: '',
+        status: 'Active',
+      });
+      setTeacherDraftRestored(false);
+    }
     setTeacherFormError('');
     setTeacherModalOpen(true);
   };
 
   const openEditTeacherModal = (t: Teacher) => {
     setEditingTeacher(t);
-    setTForm({
-      staffCode: t.staffCode,
-      fullName: t.fullName,
-      roleTitle: t.roleTitle,
-      subjects: t.subjects.length > 0 ? t.subjects : ['English'],
-      assignedForm: t.assignedForm,
-      phone: t.phone,
-      staffEmail: t.staffEmail || '',
-      status: t.status,
-    });
+    const key = buildModalDraftKey(school.id, 'teacher', t.id);
+    const saved = loadModalDraft<TeacherPayload>(key);
+    if (
+      saved &&
+      (saved.fullName !== t.fullName ||
+        saved.staffCode !== t.staffCode ||
+        saved.roleTitle !== t.roleTitle ||
+        (saved.staffEmail || '') !== (t.staffEmail || ''))
+    ) {
+      setTForm(saved);
+      setTeacherDraftRestored(true);
+    } else {
+      setTForm({
+        staffCode: t.staffCode,
+        fullName: t.fullName,
+        roleTitle: t.roleTitle,
+        subjects: t.subjects.length > 0 ? t.subjects : ['English'],
+        assignedForm: t.assignedForm,
+        phone: t.phone,
+        staffEmail: t.staffEmail || '',
+        status: t.status,
+      });
+      setTeacherDraftRestored(false);
+    }
     setTeacherFormError('');
     setTeacherModalOpen(true);
+  };
+
+  const discardTeacherDraft = () => {
+    clearModalDraft(teacherDraftKey);
+    if (editingTeacher) {
+      setTForm({
+        staffCode: editingTeacher.staffCode,
+        fullName: editingTeacher.fullName,
+        roleTitle: editingTeacher.roleTitle,
+        subjects: editingTeacher.subjects.length > 0 ? editingTeacher.subjects : ['English'],
+        assignedForm: editingTeacher.assignedForm,
+        phone: editingTeacher.phone,
+        staffEmail: editingTeacher.staffEmail || '',
+        status: editingTeacher.status,
+      });
+    } else {
+      setTForm({
+        staffCode: `TSC-${Math.floor(40000 + Math.random() * 50000)}`,
+        fullName: '',
+        roleTitle: 'Subject Teacher',
+        subjects: ['English'],
+        assignedForm: 'Form 1A',
+        phone: '+265 ',
+        staffEmail: '',
+        status: 'Active',
+      });
+    }
+    setTeacherDraftRestored(false);
   };
 
   const handleSaveTeacher = async (e: React.FormEvent) => {
@@ -296,6 +446,8 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
         school,
         editingTeacher?.staffEmail
       );
+      clearModalDraft(teacherDraftKey);
+      setTeacherDraftRestored(false);
       setTeacherModalOpen(false);
     } catch (err) {
       setTeacherFormError(err instanceof Error ? err.message : 'Unable to save staff record.');
@@ -318,26 +470,62 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
 
   const openAddSubjectModal = () => {
     setEditingSubject(null);
-    setSubForm({
-      name: '',
-      code: '',
-      formLevels: subjectFormFilter === 'all' ? [1, 2, 3, 4] : [subjectFormFilter],
-      isCore: false,
-    });
+    const key = buildModalDraftKey(school.id, 'subject', null);
+    const saved = loadModalDraft<SchoolSubjectPayload>(key);
+    if (saved && (saved.name || saved.code)) {
+      setSubForm(saved);
+      setSubjectDraftRestored(true);
+    } else {
+      setSubForm({
+        name: '',
+        code: '',
+        formLevels: subjectFormFilter === 'all' ? [1, 2, 3, 4] : [subjectFormFilter],
+        isCore: false,
+      });
+      setSubjectDraftRestored(false);
+    }
     setSubjectFormError('');
     setSubjectModalOpen(true);
   };
 
   const openEditSubjectModal = (sub: SchoolSubject) => {
     setEditingSubject(sub);
-    setSubForm({
-      name: sub.name,
-      code: sub.code,
-      formLevels: sub.formLevels.length > 0 ? [...sub.formLevels] : [1, 2, 3, 4],
-      isCore: sub.isCore,
-    });
+    const key = buildModalDraftKey(school.id, 'subject', sub.id);
+    const saved = loadModalDraft<SchoolSubjectPayload>(key);
+    if (saved && (saved.name !== sub.name || saved.code !== sub.code)) {
+      setSubForm(saved);
+      setSubjectDraftRestored(true);
+    } else {
+      setSubForm({
+        name: sub.name,
+        code: sub.code,
+        formLevels: sub.formLevels.length > 0 ? [...sub.formLevels] : [1, 2, 3, 4],
+        isCore: sub.isCore,
+      });
+      setSubjectDraftRestored(false);
+    }
     setSubjectFormError('');
     setSubjectModalOpen(true);
+  };
+
+  const discardSubjectDraft = () => {
+    clearModalDraft(subjectDraftKey);
+    if (editingSubject) {
+      setSubForm({
+        name: editingSubject.name,
+        code: editingSubject.code,
+        formLevels: editingSubject.formLevels.length > 0 ? [...editingSubject.formLevels] : [1, 2, 3, 4],
+        isCore: editingSubject.isCore,
+      });
+    } else {
+      setSubForm({
+        name: '',
+        code: '',
+        formLevels: subjectFormFilter === 'all' ? [1, 2, 3, 4] : [subjectFormFilter],
+        isCore: false,
+      });
+    }
+    setSubjectDraftRestored(false);
   };
 
   const toggleSubFormLevel = (level: FormLevel) => {
@@ -398,6 +586,8 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
         },
         editingSubject?.id
       );
+      clearModalDraft(subjectDraftKey);
+      setSubjectDraftRestored(false);
       setSubjectModalOpen(false);
     } catch (err) {
       setSubjectFormError(err instanceof Error ? err.message : 'Unable to save subject.');
@@ -456,7 +646,91 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+    <div className="space-y-5">
+      {canReadStaffAttendance && (
+        <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+              Staff &amp; School Settings
+            </h1>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono tabular-nums">
+              {teachers.length} staff · Present today: {todayStaffTurnout.present}
+              {todayStaffTurnout.late > 0 ? ` · Late: ${todayStaffTurnout.late}` : ''}
+              {todayStaffTurnout.absent > 0 ? ` · Absent: ${todayStaffTurnout.absent}` : ''}
+              {todayStaffTurnout.rate !== null ? ` · Turnout: ${todayStaffTurnout.rate}%` : ''}
+            </p>
+          </div>
+          <div
+            role="tablist"
+            aria-label="Staff workspace tabs"
+            className="inline-flex flex-wrap items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-900"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={staffSectionTab === 'directory'}
+              onClick={() => setStaffSectionTab('directory')}
+              className={`min-h-[34px] px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                staffSectionTab === 'directory'
+                  ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              All Staff &amp; Settings
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={staffSectionTab === 'timebook'}
+              onClick={() => setStaffSectionTab('timebook')}
+              className={`min-h-[34px] px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                staffSectionTab === 'timebook'
+                  ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              Staff Timebook
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={staffSectionTab === 'presence'}
+              onClick={() => setStaffSectionTab('presence')}
+              className={`min-h-[34px] px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                staffSectionTab === 'presence'
+                  ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              Staff Presence &amp; Turnout
+            </button>
+          </div>
+        </div>
+      )}
+
+      {staffSectionTab === 'timebook' && canReadStaffAttendance ? (
+        <StaffTimebookAdminDashboard
+          school={school}
+          teachers={teachers}
+          timebookSettings={timebookSettings}
+          entries={timebookEntries}
+          correctionRequests={timebookCorrectionRequests}
+          auditLogs={timebookAuditLogs}
+          suspiciousLogs={timebookSuspiciousLogs}
+          canManageTimebook={canManageTimebook}
+          recordedByName={recordedByName}
+        />
+      ) : staffSectionTab === 'presence' && canReadStaffAttendance ? (
+        <StaffPresencePanel
+          school={school}
+          ownerId={ownerId}
+          teachers={teachers}
+          staffAttendance={staffAttendance}
+          canWriteStaffAttendance={canWriteStaffAttendance}
+          recordedByName={recordedByName}
+        />
+      ) : (
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
       <div className="lg:col-span-7 space-y-6">
         {/* Curriculum Subjects & Form Assignments */}
         <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6">
@@ -468,9 +742,6 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
                   Curriculum Subjects &amp; Forms ({schoolSubjects.length})
                 </h1>
               </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Define school subjects and toggle Form 1–4 assignments used in Exam Marks entry.
-              </p>
             </div>
             {canManageStaffAndSettings ? (
               <div className="flex flex-wrap items-center gap-2">
@@ -640,9 +911,6 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
             <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
               Teachers &amp; Staff RBAC ({teachers.length})
             </h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Assign Google emails and roles so Teachers, Form Teachers, HODs, Librarians, Bursars, and Deputy Heads get role-based dashboards.
-            </p>
           </div>
           {canManageStaffAndSettings && (
             <button
@@ -662,7 +930,11 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
               No staff members recorded yet.
             </div>
           ) : (
-            teachers.map((t) => (
+            teachers.map((t) => {
+              const todayPresence = canReadStaffAttendance
+                ? todayStaffPresenceMap.get(t.id)
+                : undefined;
+              return (
               <div key={t.id} className="py-3.5 flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -681,6 +953,21 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
                     >
                       · {t.status}
                     </span>
+                    {canReadStaffAttendance && (
+                      <span
+                        className={`text-[11px] font-semibold ${
+                          todayPresence?.status === 'Present'
+                            ? 'text-emerald-700 dark:text-emerald-400'
+                            : todayPresence?.status === 'Absent'
+                            ? 'text-rose-600 dark:text-rose-400'
+                            : todayPresence?.status === 'Late' || todayPresence?.status === 'On Leave'
+                            ? 'text-amber-700 dark:text-amber-400'
+                            : 'text-slate-400 dark:text-slate-500'
+                        }`}
+                      >
+                        · Today: {todayPresence?.status || 'Unmarked'}
+                      </span>
+                    )}
                   </div>
                   <div className="mt-0.5 text-xs text-slate-600 dark:text-slate-400">
                     {t.roleTitle} · {t.assignedForm} · {t.subjects.join(', ')}
@@ -721,7 +1008,8 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
                   </div>
                 )}
               </div>
-            ))
+              );
+            })
           )}
         </div>
         </section>
@@ -997,14 +1285,28 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
             </button>
           )}
         </form>
+
+        <TimebookConfigCard
+          school={school}
+          teachers={teachers}
+          timebookSettings={timebookSettings}
+          canManageTimebook={canManageTimebook}
+          recordedByName={recordedByName}
+          onOpenFullTimebook={
+            canReadStaffAttendance ? () => setStaffSectionTab('timebook') : undefined
+          }
+        />
       </aside>
+      </div>
+      )}
 
       {/* Add / Edit Staff Modal */}
       {teacherModalOpen && (
-        <div
+        <ModalBackdrop
+          open={teacherModalOpen}
+          onClose={() => setTeacherModalOpen(false)}
+          disabled={savingTeacher}
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
         >
           <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
@@ -1021,6 +1323,8 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
             </div>
 
             <form onSubmit={handleSaveTeacher} className="mt-4 space-y-4">
+              <DraftRestoredNotice visible={teacherDraftRestored} onDiscard={discardTeacherDraft} />
+
               {teacherFormError && (
                 <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
                   {teacherFormError}
@@ -1230,7 +1534,7 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
               </div>
             </form>
           </div>
-        </div>
+        </ModalBackdrop>
       )}
 
       {/* Safe Delete Staff Modal */}
@@ -1273,10 +1577,11 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
 
       {/* Add / Edit Curriculum Subject Modal */}
       {subjectModalOpen && (
-        <div
+        <ModalBackdrop
+          open={subjectModalOpen}
+          onClose={() => setSubjectModalOpen(false)}
+          disabled={savingSubject}
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
         >
           <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
@@ -1293,6 +1598,8 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
             </div>
 
             <form onSubmit={handleSaveSubject} className="mt-4 space-y-4">
+              <DraftRestoredNotice visible={subjectDraftRestored} onDiscard={discardSubjectDraft} />
+
               {subjectFormError && (
                 <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
                   {subjectFormError}
@@ -1427,7 +1734,7 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
               </div>
             </form>
           </div>
-        </div>
+        </ModalBackdrop>
       )}
 
       {/* Safe Delete Subject Modal */}

@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -19,6 +19,8 @@ import {
   LibraryBookImportStrategy,
   LibraryBookPayload,
 } from '../../school/firestoreService';
+import { buildModalDraftKey, clearModalDraft, loadModalDraft, saveModalDraft } from '../../school/modalDrafts';
+import { DraftRestoredNotice, ModalBackdrop } from './ModalBackdrop';
 
 interface LibraryCsvImportModalProps {
   open: boolean;
@@ -177,6 +179,7 @@ export const LibraryCsvImportModal: React.FC<LibraryCsvImportModalProps> = ({
   onClose,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const draftKey = useMemo(() => buildModalDraftKey(school.id, 'library_csv_import', 'new'), [school.id]);
   const [csvText, setCsvText] = useState('');
   const [fileName, setFileName] = useState('');
   const [showPasteBox, setShowPasteBox] = useState(false);
@@ -185,6 +188,44 @@ export const LibraryCsvImportModal: React.FC<LibraryCsvImportModalProps> = ({
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState('');
   const [importResult, setImportResult] = useState<LibraryBookImportResult | null>(null);
+  const [draftRestored, setDraftRestored] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const saved = loadModalDraft<{
+      csvText?: string;
+      fileName?: string;
+      showPasteBox?: boolean;
+      duplicateStrategy?: LibraryBookImportStrategy;
+    }>(draftKey);
+    if (saved && saved.csvText && !csvText) {
+      setCsvText(saved.csvText);
+      setFileName(saved.fileName || '');
+      setShowPasteBox(Boolean(saved.showPasteBox));
+      if (saved.duplicateStrategy) setDuplicateStrategy(saved.duplicateStrategy);
+      setDraftRestored(true);
+    }
+  }, [csvText, draftKey, open]);
+
+  useEffect(() => {
+    if (!open || importResult) return;
+    if (csvText.trim()) {
+      saveModalDraft(draftKey, {
+        csvText,
+        fileName,
+        showPasteBox,
+        duplicateStrategy,
+      });
+    }
+  }, [csvText, draftKey, duplicateStrategy, fileName, importResult, open, showPasteBox]);
+
+  const discardDraft = () => {
+    clearModalDraft(draftKey);
+    setCsvText('');
+    setFileName('');
+    setImportError('');
+    setDraftRestored(false);
+  };
 
   const existingMaps = useMemo(() => {
     const byIsbn = new Map<string, LibraryBook>();
@@ -370,6 +411,8 @@ export const LibraryCsvImportModal: React.FC<LibraryCsvImportModalProps> = ({
         duplicateStrategy
       );
       setImportResult(result);
+      clearModalDraft(draftKey);
+      setDraftRestored(false);
     } catch (err) {
       setImportError(
         err instanceof Error ? err.message : 'Unable to import books from CSV.'
@@ -380,11 +423,12 @@ export const LibraryCsvImportModal: React.FC<LibraryCsvImportModalProps> = ({
   };
 
   return (
-    <div
+    <ModalBackdrop
+      open={open}
+      onClose={onClose}
+      disabled={importing}
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/65 backdrop-blur-xs p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="library-csv-import-title"
+      ariaLabelledBy="library-csv-import-title"
     >
       <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl space-y-5">
         <div className="flex items-start justify-between gap-4">
@@ -399,9 +443,6 @@ export const LibraryCsvImportModal: React.FC<LibraryCsvImportModalProps> = ({
               >
                 Bulk Import Books from CSV
               </h2>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Upload a spreadsheet of textbooks, set books, or past papers into {school.name}.
-              </p>
             </div>
           </div>
 
@@ -415,6 +456,8 @@ export const LibraryCsvImportModal: React.FC<LibraryCsvImportModalProps> = ({
             <X className="w-4 h-4" />
           </button>
         </div>
+
+        <DraftRestoredNotice visible={draftRestored && !importResult} onDiscard={discardDraft} />
 
         {/* Upload & Template Controls */}
         <div className="rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-900/50 p-4 space-y-3">
@@ -665,6 +708,6 @@ export const LibraryCsvImportModal: React.FC<LibraryCsvImportModalProps> = ({
           )}
         </div>
       </div>
-    </div>
+    </ModalBackdrop>
   );
 };

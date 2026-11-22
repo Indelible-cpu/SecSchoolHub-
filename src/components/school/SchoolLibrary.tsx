@@ -5,6 +5,7 @@ import {
   BookCheck,
   BookmarkPlus,
   BookOpen,
+  Check,
   CheckCircle2,
   Clock,
   CloudOff,
@@ -13,7 +14,6 @@ import {
   Globe,
   History,
   Library,
-  Lock,
   Pencil,
   Plus,
   QrCode,
@@ -44,6 +44,7 @@ import {
   LibraryLoan,
   LibraryLoanStatus,
   LibraryMaterialCategory,
+  LibraryReadingSession,
   LibraryReservation,
   LibraryReservationStatus,
   LibraryTransaction,
@@ -51,6 +52,7 @@ import {
   School,
   SchoolSubject,
   Student,
+  WorkspaceRole,
 } from '../../school/types';
 import {
   addDaysToIsoDate,
@@ -63,14 +65,19 @@ import {
   getSubjectsForForm,
   isLibraryLoanDueWithin48Hours,
   isLibraryLoanOverdue,
+  isTeacherOnlyDigitalCategory,
   LIBRARY_MATERIAL_CATEGORIES,
   LIBRARY_RETURN_CONDITIONS,
   MALAWI_SUBJECTS,
+  STUDENT_DIGITAL_RESOURCE_CATEGORIES,
+  TEACHER_DIGITAL_RESOURCE_CATEGORIES,
 } from '../../school/malawi';
 import {
   createLibraryReservation,
   fetchDigitalResourceBytes,
+  flushPendingOfflineReadingSyncs,
   markLibraryLoanReturned,
+  purgeLegacyRawTextDigitalResources,
   removeDigitalResource,
   removeLibraryBook,
   removeLibraryLoan,
@@ -79,8 +86,8 @@ import {
   saveDigitalResource,
   saveLibraryBook,
   saveLibraryLoan,
-  seedDefaultDigitalResources,
   seedDefaultLibraryBooks,
+  subscribeLibraryReadingSessions,
   syncStudentCatalogMirror,
   updateLibraryReservationStatus,
 } from '../../school/firestoreService';
@@ -91,13 +98,25 @@ import {
 } from '../../school/digitalMaterialParser';
 import {
   getOfflineDigitalResources,
+  purgeOfflineRawTextResources,
   removeOfflineDigitalResource,
   saveDigitalResourceOffline,
   saveDigitalResourcesBatchOffline,
 } from '../../school/offlineLibraryDb';
+import {
+  formatLastReadLabel,
+  useLibraryReadingProgress,
+} from '../../school/readingProgressStore';
+import {
+  buildModalDraftKey,
+  clearModalDraft,
+  loadModalDraft,
+  saveModalDraft,
+} from '../../school/modalDrafts';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { LibraryBookQrModal, LibraryQrScannerModal } from './LibraryQrModals';
 import { LibraryCsvImportModal } from './LibraryCsvImportModal';
+import { DraftRestoredNotice, ModalBackdrop } from './ModalBackdrop';
 import {
   OnlineLibraryReaderModal,
   type ReadableDigitalResource,
@@ -114,9 +133,14 @@ interface SchoolLibraryProps {
   libraryReservations?: LibraryReservation[];
   digitalResources?: DigitalLibraryResource[];
   canWriteLibrary: boolean;
+  viewerRole?: WorkspaceRole;
+  initialTab?: LibraryModuleTab;
+  initialAudienceFilter?: DigitalAudienceFilter;
+  tabRequestNonce?: number;
 }
 
 type LibraryModuleTab = 'catalog' | 'reservations' | 'online';
+type DigitalAudienceFilter = 'all' | 'teaching' | 'student';
 type LibraryStatusFilter = 'All' | 'Checked Out' | 'Due Soon' | 'Overdue' | 'Returned';
 type TxActionFilter = 'All' | LibraryTransactionAction;
 type ReservationFilter = 'All' | LibraryReservationStatus;
@@ -179,9 +203,20 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
   libraryReservations = [],
   digitalResources = [],
   canWriteLibrary,
+  viewerRole,
+  initialTab,
+  initialAudienceFilter,
+  tabRequestNonce,
 }) => {
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const [activeLibraryTab, setActiveLibraryTab] = useState<LibraryModuleTab>('catalog');
+  const isTeachingRole =
+    viewerRole === 'Subject Teacher' ||
+    viewerRole === 'Form Teacher' ||
+    viewerRole === 'Form Master' ||
+    viewerRole === 'Head of Department';
+  const [activeLibraryTab, setActiveLibraryTab] = useState<LibraryModuleTab>(
+    () => initialTab || (isTeachingRole ? 'online' : 'catalog')
+  );
 
   // Ensure student catalog availability mirror stays synced for existing schools
   const syncedSchoolRef = useRef<string | null>(null);
@@ -286,14 +321,26 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
   const [reservationFeedback, setReservationFeedback] = useState('');
 
   // Online / Offline Digital Library State
+  const [digitalAudienceFilter, setDigitalAudienceFilter] = useState<DigitalAudienceFilter>(
+    () => initialAudienceFilter || (isTeachingRole ? 'teaching' : 'all')
+  );
   const [digitalCategoryFilter, setDigitalCategoryFilter] = useState<DigitalCategoryFilter>('All');
   const [digitalFormFilter, setDigitalFormFilter] = useState<DigitalResourceFormLevel | 'All'>('All');
   const [digitalSearch, setDigitalSearch] = useState('');
-  const [seedingDigital, setSeedingDigital] = useState(false);
+
+  useEffect(() => {
+    if (!tabRequestNonce) return;
+    if (initialTab) setActiveLibraryTab(initialTab);
+    if (initialAudienceFilter) {
+      setDigitalAudienceFilter(initialAudienceFilter);
+      setDigitalCategoryFilter('All');
+    }
+  }, [initialAudienceFilter, initialTab, tabRequestNonce]);
   const [readerTarget, setReaderTarget] = useState<ReadableDigitalResource | null>(null);
   const [offlineIds, setOfflineIds] = useState<Set<string>>(() => new Set());
   const [savingOfflineId, setSavingOfflineId] = useState<string | null>(null);
   const [savingAllOffline, setSavingAllOffline] = useState(false);
+  const [readingSessions, setReadingSessions] = useState<LibraryReadingSession[]>([]);
   const [digitalModalOpen, setDigitalModalOpen] = useState(false);
   const [editingDigital, setEditingDigital] = useState<DigitalLibraryResource | null>(null);
   const [digTitle, setDigTitle] = useState('');
@@ -316,14 +363,170 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
   const [deletingDigital, setDeletingDigital] = useState(false);
   const [deleteDigitalError, setDeleteDigitalError] = useState('');
 
+  const [loanDraftRestored, setLoanDraftRestored] = useState(false);
+  const [returnDraftRestored, setReturnDraftRestored] = useState(false);
+  const [bookDraftRestored, setBookDraftRestored] = useState(false);
+  const [reserveDraftRestored, setReserveDraftRestored] = useState(false);
+  const [digitalDraftRestored, setDigitalDraftRestored] = useState(false);
+
+  const loanDraftKey = useMemo(
+    () => buildModalDraftKey(school.id, 'lib_loan', editingLoan?.id || 'new'),
+    [school.id, editingLoan?.id]
+  );
+  const returnDraftKey = useMemo(
+    () => buildModalDraftKey(school.id, 'lib_return', returningLoan?.id || 'none'),
+    [school.id, returningLoan?.id]
+  );
+  const bookDraftKey = useMemo(
+    () => buildModalDraftKey(school.id, 'lib_book', editingBook?.id || 'new'),
+    [school.id, editingBook?.id]
+  );
+  const reserveDraftKey = useMemo(
+    () => buildModalDraftKey(school.id, 'lib_reserve', 'new'),
+    [school.id]
+  );
+  const digitalDraftKey = useMemo(
+    () => buildModalDraftKey(school.id, 'lib_digital', editingDigital?.id || 'new'),
+    [school.id, editingDigital?.id]
+  );
+
+  useEffect(() => {
+    if (!modalOpen) return;
+    saveModalDraft(loanDraftKey, {
+      selectedStudentId,
+      bookTitle,
+      materialType,
+      subject,
+      bookCode,
+      quantity,
+      checkoutDate,
+      dueDate,
+      loanStatus,
+      returnedDate,
+      conditionOnReturn,
+      notes,
+    });
+  }, [
+    modalOpen,
+    loanDraftKey,
+    selectedStudentId,
+    bookTitle,
+    materialType,
+    subject,
+    bookCode,
+    quantity,
+    checkoutDate,
+    dueDate,
+    loanStatus,
+    returnedDate,
+    conditionOnReturn,
+    notes,
+  ]);
+
+  useEffect(() => {
+    if (!returningLoan) return;
+    saveModalDraft(returnDraftKey, {
+      returnDateInput,
+      returnConditionInput,
+      returnNotesInput,
+    });
+  }, [returningLoan, returnDraftKey, returnDateInput, returnConditionInput, returnNotesInput]);
+
+  useEffect(() => {
+    if (!bookModalOpen) return;
+    saveModalDraft(bookDraftKey, {
+      bookIsbnInput,
+      bookTitleInput,
+      bookAuthorInput,
+      bookSubjectInput,
+      bookTypeInput,
+      bookShelfInput,
+      bookCopiesInput,
+      bookNotesInput,
+    });
+  }, [
+    bookModalOpen,
+    bookDraftKey,
+    bookIsbnInput,
+    bookTitleInput,
+    bookAuthorInput,
+    bookSubjectInput,
+    bookTypeInput,
+    bookShelfInput,
+    bookCopiesInput,
+    bookNotesInput,
+  ]);
+
+  useEffect(() => {
+    if (!reserveModalOpen) return;
+    saveModalDraft(reserveDraftKey, {
+      reserveBookId: reserveBookTarget?.id || '',
+      reserveStudentId,
+      reserveNotes,
+    });
+  }, [reserveModalOpen, reserveDraftKey, reserveBookTarget?.id, reserveStudentId, reserveNotes]);
+
+  useEffect(() => {
+    if (!digitalModalOpen) return;
+    saveModalDraft(digitalDraftKey, {
+      digTitle,
+      digAuthor,
+      digSubject,
+      digFormLevel,
+      digCategory,
+      digExamYear,
+      digSummary,
+      digAllowOffline,
+    });
+  }, [
+    digitalModalOpen,
+    digitalDraftKey,
+    digTitle,
+    digAuthor,
+    digSubject,
+    digFormLevel,
+    digCategory,
+    digExamYear,
+    digSummary,
+    digAllowOffline,
+  ]);
+
+  const staffScopeKey = `staff:${school.id}`;
+  const {
+    progressMap,
+    counts: readingCounts,
+    toggleMarkAsRead,
+    recordPageProgress,
+  } = useLibraryReadingProgress(staffScopeKey, school.id, readingSessions);
+
   useEffect(() => {
     let active = true;
-    getOfflineDigitalResources(school.id).then((records) => {
-      if (!active) return;
-      setOfflineIds(new Set(records.map((r) => r.id)));
-    });
+    purgeOfflineRawTextResources(school.id)
+      .then(() => getOfflineDigitalResources(school.id))
+      .then((records) => {
+        if (!active) return;
+        setOfflineIds(new Set(records.map((r) => r.id)));
+      });
     return () => {
       active = false;
+    };
+  }, [school.id]);
+
+  useEffect(() => {
+    if (!canWriteLibrary) return;
+    void purgeLegacyRawTextDigitalResources(school.id);
+  }, [canWriteLibrary, school.id]);
+
+  useEffect(() => {
+    const unsub = subscribeLibraryReadingSessions(school.id, setReadingSessions);
+    void flushPendingOfflineReadingSyncs(school.id);
+    const onReconnect = () => {
+      void flushPendingOfflineReadingSyncs(school.id);
+    };
+    window.addEventListener('online', onReconnect);
+    return () => {
+      unsub();
+      window.removeEventListener('online', onReconnect);
     };
   }, [school.id]);
 
@@ -608,26 +811,62 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
     const defaultSubjects = getSubjectsForForm(schoolSubjects, defaultForm);
     const defaultSubj = prefillBook?.subject || fromReservation?.subject || defaultSubjects[0] || 'English';
 
+    const key = buildModalDraftKey(school.id, 'lib_loan', 'new');
+    const draft =
+      !prefillBook && !prefillStudent && !fromReservation
+        ? loadModalDraft<{
+            selectedStudentId: string;
+            bookTitle: string;
+            materialType: LibraryMaterialCategory;
+            subject: string;
+            bookCode: string;
+            quantity: number;
+            checkoutDate: string;
+            dueDate: string;
+            loanStatus: LibraryLoanStatus;
+            returnedDate: string;
+            conditionOnReturn: LibraryItemCondition;
+            notes: string;
+          }>(key)
+        : null;
+
     setEditingLoan(null);
     setFulfillingReservation(fromReservation || null);
-    setSelectedStudentId(defaultStu?.id || '');
-    setBookTitle(prefillBook?.title || fromReservation?.bookTitle || '');
-    setMaterialType(prefillBook?.materialType || fromReservation?.materialType || 'Textbook');
-    setSubject(defaultSubj);
-    setBookCode(suggestCopyCode(defaultSubj, libraryLoans, prefillBook?.shelfCode));
-    setQuantity(1);
-    setCheckoutDate(todayIso);
-    setDueDate(addDaysToIsoDate(todayIso, 14));
-    setLoanStatus('Checked Out');
-    setReturnedDate('');
-    setConditionOnReturn('Good');
-    setNotes(
-      prefillBook?.isbn
-        ? `ISBN ${prefillBook.isbn}`
-        : fromReservation?.isbn
-        ? `ISBN ${fromReservation.isbn}`
-        : ''
-    );
+    if (draft) {
+      setSelectedStudentId(draft.selectedStudentId || defaultStu?.id || '');
+      setBookTitle(draft.bookTitle || '');
+      setMaterialType(draft.materialType || 'Textbook');
+      setSubject(draft.subject || defaultSubj);
+      setBookCode(draft.bookCode || suggestCopyCode(defaultSubj, libraryLoans));
+      setQuantity(draft.quantity || 1);
+      setCheckoutDate(draft.checkoutDate || todayIso);
+      setDueDate(draft.dueDate || addDaysToIsoDate(todayIso, 14));
+      setLoanStatus(draft.loanStatus || 'Checked Out');
+      setReturnedDate(draft.returnedDate || '');
+      setConditionOnReturn(draft.conditionOnReturn || 'Good');
+      setNotes(draft.notes || '');
+      setLoanDraftRestored(true);
+    } else {
+      setSelectedStudentId(defaultStu?.id || '');
+      setBookTitle(prefillBook?.title || fromReservation?.bookTitle || '');
+      setMaterialType(prefillBook?.materialType || fromReservation?.materialType || 'Textbook');
+      setSubject(defaultSubj);
+      setBookCode(suggestCopyCode(defaultSubj, libraryLoans, prefillBook?.shelfCode));
+      setQuantity(1);
+      setCheckoutDate(todayIso);
+      setDueDate(addDaysToIsoDate(todayIso, 14));
+      setLoanStatus('Checked Out');
+      setReturnedDate('');
+      setConditionOnReturn('Good');
+      setNotes(
+        prefillBook?.isbn
+          ? `ISBN ${prefillBook.isbn}`
+          : fromReservation?.isbn
+          ? `ISBN ${fromReservation.isbn}`
+          : ''
+      );
+      setLoanDraftRestored(false);
+    }
     setFormError('');
     setModalOpen(true);
   };
@@ -639,11 +878,42 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
       libraryBooks[0] ||
       null;
     const defaultStu = activeStudents[0] || students[0] || null;
+    const key = buildModalDraftKey(school.id, 'lib_reserve', 'new');
+    const draft = !book
+      ? loadModalDraft<{
+          reserveBookId: string;
+          reserveStudentId: string;
+          reserveNotes: string;
+        }>(key)
+      : null;
+
+    if (draft) {
+      const foundBook = libraryBooks.find((b) => b.id === draft.reserveBookId) || defaultBook;
+      setReserveBookTarget(foundBook);
+      setReserveStudentId(draft.reserveStudentId || defaultStu?.id || '');
+      setReserveNotes(draft.reserveNotes || '');
+      setReserveDraftRestored(true);
+    } else {
+      setReserveBookTarget(defaultBook);
+      setReserveStudentId(defaultStu?.id || '');
+      setReserveNotes('');
+      setReserveDraftRestored(false);
+    }
+    setReserveFormError('');
+    setReserveModalOpen(true);
+  };
+
+  const handleDiscardReserveDraft = () => {
+    clearModalDraft(reserveDraftKey);
+    const defaultBook =
+      inventoryMetrics.items.find((item) => item.availableCopies === 0)?.book ||
+      libraryBooks[0] ||
+      null;
+    const defaultStu = activeStudents[0] || students[0] || null;
     setReserveBookTarget(defaultBook);
     setReserveStudentId(defaultStu?.id || '');
     setReserveNotes('');
-    setReserveFormError('');
-    setReserveModalOpen(true);
+    setReserveDraftRestored(false);
   };
 
   const handleSaveReservation = async (e: React.FormEvent) => {
@@ -689,6 +959,8 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
         requestedDate: todayIso,
         notes: reserveNotes.trim(),
       });
+      clearModalDraft(reserveDraftKey);
+      setReserveDraftRestored(false);
       setReserveModalOpen(false);
       setReservationFeedback(`Reserved "${reserveBookTarget.title}" for ${stu.fullName}.`);
     } catch (err) {
@@ -732,37 +1004,113 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
   };
 
   const openAddDigitalModal = () => {
+    const key = buildModalDraftKey(school.id, 'lib_digital', 'new');
+    const draft = loadModalDraft<{
+      digTitle: string;
+      digAuthor: string;
+      digSubject: string;
+      digFormLevel: DigitalResourceFormLevel;
+      digCategory: DigitalResourceCategory;
+      digExamYear: string;
+      digSummary: string;
+      digAllowOffline: boolean;
+    }>(key);
     setEditingDigital(null);
-    setDigTitle('');
-    setDigAuthor('');
-    setDigSubject(allSubjectChoices[0] || 'English');
-    setDigFormLevel('Form 4');
-    setDigCategory('Past Paper');
-    setDigExamYear('2025');
-    setDigSummary('');
+    if (draft) {
+      setDigTitle(draft.digTitle || '');
+      setDigAuthor(draft.digAuthor || '');
+      setDigSubject(draft.digSubject || allSubjectChoices[0] || 'English');
+      setDigFormLevel(draft.digFormLevel || 'Form 4');
+      setDigCategory(draft.digCategory || 'Past Paper');
+      setDigExamYear(draft.digExamYear ?? '2025');
+      setDigSummary(draft.digSummary || '');
+      setDigAllowOffline(Boolean(draft.digAllowOffline));
+      setDigitalDraftRestored(true);
+    } else {
+      setDigTitle('');
+      setDigAuthor('');
+      setDigSubject(allSubjectChoices[0] || 'English');
+      setDigFormLevel('Form 4');
+      setDigCategory(
+        digitalAudienceFilter === 'teaching' || isTeachingRole
+          ? 'Teaching Resource'
+          : 'Past Paper'
+      );
+      setDigExamYear('2025');
+      setDigSummary('');
+      setDigAllowOffline(true);
+      setDigitalDraftRestored(false);
+    }
     setDigUploadedFile(null);
     setDigParsingFile(false);
     setDigUploadProgress(null);
-    setDigAllowOffline(true);
     setDigitalFormError('');
     setDigitalModalOpen(true);
   };
 
   const openEditDigitalModal = (res: DigitalLibraryResource) => {
+    const key = buildModalDraftKey(school.id, 'lib_digital', res.id);
+    const draft = loadModalDraft<{
+      digTitle: string;
+      digAuthor: string;
+      digSubject: string;
+      digFormLevel: DigitalResourceFormLevel;
+      digCategory: DigitalResourceCategory;
+      digExamYear: string;
+      digSummary: string;
+      digAllowOffline: boolean;
+    }>(key);
     setEditingDigital(res);
-    setDigTitle(res.title);
-    setDigAuthor(res.author);
-    setDigSubject(res.subject || 'General');
-    setDigFormLevel(res.formLevel);
-    setDigCategory(res.category);
-    setDigExamYear(res.examYear || '');
-    setDigSummary(res.summary || '');
+    if (draft) {
+      setDigTitle(draft.digTitle || res.title);
+      setDigAuthor(draft.digAuthor || res.author);
+      setDigSubject(draft.digSubject || res.subject || 'General');
+      setDigFormLevel(draft.digFormLevel || res.formLevel);
+      setDigCategory(draft.digCategory || res.category);
+      setDigExamYear(draft.digExamYear ?? (res.examYear || ''));
+      setDigSummary(draft.digSummary ?? (res.summary || ''));
+      setDigAllowOffline(Boolean(draft.digAllowOffline));
+      setDigitalDraftRestored(true);
+    } else {
+      setDigTitle(res.title);
+      setDigAuthor(res.author);
+      setDigSubject(res.subject || 'General');
+      setDigFormLevel(res.formLevel);
+      setDigCategory(res.category);
+      setDigExamYear(res.examYear || '');
+      setDigSummary(res.summary || '');
+      setDigAllowOffline(Boolean(res.allowOffline));
+      setDigitalDraftRestored(false);
+    }
     setDigUploadedFile(null);
     setDigParsingFile(false);
     setDigUploadProgress(null);
-    setDigAllowOffline(Boolean(res.allowOffline));
     setDigitalFormError('');
     setDigitalModalOpen(true);
+  };
+
+  const handleDiscardDigitalDraft = () => {
+    clearModalDraft(digitalDraftKey);
+    if (editingDigital) {
+      setDigTitle(editingDigital.title);
+      setDigAuthor(editingDigital.author);
+      setDigSubject(editingDigital.subject || 'General');
+      setDigFormLevel(editingDigital.formLevel);
+      setDigCategory(editingDigital.category);
+      setDigExamYear(editingDigital.examYear || '');
+      setDigSummary(editingDigital.summary || '');
+      setDigAllowOffline(Boolean(editingDigital.allowOffline));
+    } else {
+      setDigTitle('');
+      setDigAuthor('');
+      setDigSubject(allSubjectChoices[0] || 'English');
+      setDigFormLevel('Form 4');
+      setDigCategory('Past Paper');
+      setDigExamYear('2025');
+      setDigSummary('');
+      setDigAllowOffline(true);
+    }
+    setDigitalDraftRestored(false);
   };
 
   const handleDigitalFileSelected = async (file: File | undefined | null) => {
@@ -800,7 +1148,11 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
       setDigSubject(allSubjectChoices[0] || 'English');
       setDigFormLevel('Form 4');
       setDigCategory(
-        parsed.suggestedTitle.toLowerCase().includes('paper') ? 'Past Paper' : 'Book'
+        digitalAudienceFilter === 'teaching' || isTeachingRole
+          ? 'Teaching Resource'
+          : parsed.suggestedTitle.toLowerCase().includes('paper')
+          ? 'Past Paper'
+          : 'Book'
       );
       setDigExamYear('2025');
       setDigSummary('');
@@ -876,6 +1228,8 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
         hasNewUpload ? digUploadedFile!.fileBytes : undefined,
         (done, total) => setDigUploadProgress({ done, total })
       );
+      clearModalDraft(digitalDraftKey);
+      setDigitalDraftRestored(false);
       setDigitalModalOpen(false);
     } catch (err) {
       setDigitalFormError(
@@ -906,16 +1260,6 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
       );
     } finally {
       setDeletingDigital(false);
-    }
-  };
-
-  const handleLoadSampleDigital = async () => {
-    if (!canWriteLibrary) return;
-    setSeedingDigital(true);
-    try {
-      await seedDefaultDigitalResources(school.id, ownerId, digitalResources);
-    } finally {
-      setSeedingDigital(false);
     }
   };
 
@@ -1023,31 +1367,109 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
         .replace(/[^A-Za-z]/g, '')
         .toUpperCase()
         .slice(0, 3) || 'GEN';
+    const key = buildModalDraftKey(school.id, 'lib_book', 'new');
+    const draft = loadModalDraft<{
+      bookIsbnInput: string;
+      bookTitleInput: string;
+      bookAuthorInput: string;
+      bookSubjectInput: string;
+      bookTypeInput: LibraryMaterialCategory;
+      bookShelfInput: string;
+      bookCopiesInput: number;
+      bookNotesInput: string;
+    }>(key);
     setEditingBook(null);
-    setBookIsbnInput('');
-    setBookTitleInput('');
-    setBookAuthorInput('');
-    setBookSubjectInput(defaultSubj);
-    setBookTypeInput('Textbook');
-    setBookShelfInput(`LIB-${token}`);
-    setBookCopiesInput(10);
-    setBookNotesInput('');
+    if (draft) {
+      setBookIsbnInput(draft.bookIsbnInput || '');
+      setBookTitleInput(draft.bookTitleInput || '');
+      setBookAuthorInput(draft.bookAuthorInput || '');
+      setBookSubjectInput(draft.bookSubjectInput || defaultSubj);
+      setBookTypeInput(draft.bookTypeInput || 'Textbook');
+      setBookShelfInput(draft.bookShelfInput || `LIB-${token}`);
+      setBookCopiesInput(draft.bookCopiesInput || 10);
+      setBookNotesInput(draft.bookNotesInput || '');
+      setBookDraftRestored(true);
+    } else {
+      setBookIsbnInput('');
+      setBookTitleInput('');
+      setBookAuthorInput('');
+      setBookSubjectInput(defaultSubj);
+      setBookTypeInput('Textbook');
+      setBookShelfInput(`LIB-${token}`);
+      setBookCopiesInput(10);
+      setBookNotesInput('');
+      setBookDraftRestored(false);
+    }
     setBookFormError('');
     setBookModalOpen(true);
   };
 
   const openEditBookModal = (book: LibraryBook) => {
+    const key = buildModalDraftKey(school.id, 'lib_book', book.id);
+    const draft = loadModalDraft<{
+      bookIsbnInput: string;
+      bookTitleInput: string;
+      bookAuthorInput: string;
+      bookSubjectInput: string;
+      bookTypeInput: LibraryMaterialCategory;
+      bookShelfInput: string;
+      bookCopiesInput: number;
+      bookNotesInput: string;
+    }>(key);
     setEditingBook(book);
-    setBookIsbnInput(book.isbn);
-    setBookTitleInput(book.title);
-    setBookAuthorInput(book.author);
-    setBookSubjectInput(book.subject || 'General');
-    setBookTypeInput(book.materialType);
-    setBookShelfInput(book.shelfCode || '');
-    setBookCopiesInput(book.totalCopies || 1);
-    setBookNotesInput(book.notes || '');
+    if (draft) {
+      setBookIsbnInput(draft.bookIsbnInput || book.isbn);
+      setBookTitleInput(draft.bookTitleInput || book.title);
+      setBookAuthorInput(draft.bookAuthorInput || book.author);
+      setBookSubjectInput(draft.bookSubjectInput || book.subject || 'General');
+      setBookTypeInput(draft.bookTypeInput || book.materialType);
+      setBookShelfInput(draft.bookShelfInput ?? (book.shelfCode || ''));
+      setBookCopiesInput(draft.bookCopiesInput || book.totalCopies || 1);
+      setBookNotesInput(draft.bookNotesInput ?? (book.notes || ''));
+      setBookDraftRestored(true);
+    } else {
+      setBookIsbnInput(book.isbn);
+      setBookTitleInput(book.title);
+      setBookAuthorInput(book.author);
+      setBookSubjectInput(book.subject || 'General');
+      setBookTypeInput(book.materialType);
+      setBookShelfInput(book.shelfCode || '');
+      setBookCopiesInput(book.totalCopies || 1);
+      setBookNotesInput(book.notes || '');
+      setBookDraftRestored(false);
+    }
     setBookFormError('');
     setBookModalOpen(true);
+  };
+
+  const handleDiscardBookDraft = () => {
+    clearModalDraft(bookDraftKey);
+    if (editingBook) {
+      setBookIsbnInput(editingBook.isbn);
+      setBookTitleInput(editingBook.title);
+      setBookAuthorInput(editingBook.author);
+      setBookSubjectInput(editingBook.subject || 'General');
+      setBookTypeInput(editingBook.materialType);
+      setBookShelfInput(editingBook.shelfCode || '');
+      setBookCopiesInput(editingBook.totalCopies || 1);
+      setBookNotesInput(editingBook.notes || '');
+    } else {
+      const defaultSubj = allSubjectChoices[0] || 'English';
+      const token =
+        defaultSubj
+          .replace(/[^A-Za-z]/g, '')
+          .toUpperCase()
+          .slice(0, 3) || 'GEN';
+      setBookIsbnInput('');
+      setBookTitleInput('');
+      setBookAuthorInput('');
+      setBookSubjectInput(defaultSubj);
+      setBookTypeInput('Textbook');
+      setBookShelfInput(`LIB-${token}`);
+      setBookCopiesInput(10);
+      setBookNotesInput('');
+    }
+    setBookDraftRestored(false);
   };
 
   const handleSaveBook = async (e: React.FormEvent) => {
@@ -1085,6 +1507,8 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
         },
         editingBook?.id
       );
+      clearModalDraft(bookDraftKey);
+      setBookDraftRestored(false);
       setBookModalOpen(false);
     } catch (err) {
       setBookFormError(err instanceof Error ? err.message : 'Unable to save book to inventory.');
@@ -1118,21 +1542,89 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
   };
 
   const openEditModal = (loan: LibraryLoan) => {
+    const key = buildModalDraftKey(school.id, 'lib_loan', loan.id);
+    const draft = loadModalDraft<{
+      selectedStudentId: string;
+      bookTitle: string;
+      materialType: LibraryMaterialCategory;
+      subject: string;
+      bookCode: string;
+      quantity: number;
+      checkoutDate: string;
+      dueDate: string;
+      loanStatus: LibraryLoanStatus;
+      returnedDate: string;
+      conditionOnReturn: LibraryItemCondition;
+      notes: string;
+    }>(key);
     setEditingLoan(loan);
-    setSelectedStudentId(loan.studentId);
-    setBookTitle(loan.bookTitle);
-    setMaterialType(loan.materialType);
-    setSubject(loan.subject || 'General');
-    setBookCode(loan.bookCode);
-    setQuantity(loan.quantity || 1);
-    setCheckoutDate(loan.checkoutDate);
-    setDueDate(loan.dueDate);
-    setLoanStatus(loan.status);
-    setReturnedDate(loan.returnedDate || '');
-    setConditionOnReturn(loan.conditionOnReturn || 'Good');
-    setNotes(loan.notes || '');
+    if (draft) {
+      setSelectedStudentId(draft.selectedStudentId || loan.studentId);
+      setBookTitle(draft.bookTitle || loan.bookTitle);
+      setMaterialType(draft.materialType || loan.materialType);
+      setSubject(draft.subject || loan.subject || 'General');
+      setBookCode(draft.bookCode || loan.bookCode);
+      setQuantity(draft.quantity || loan.quantity || 1);
+      setCheckoutDate(draft.checkoutDate || loan.checkoutDate);
+      setDueDate(draft.dueDate || loan.dueDate);
+      setLoanStatus(draft.loanStatus || loan.status);
+      setReturnedDate(draft.returnedDate ?? (loan.returnedDate || ''));
+      setConditionOnReturn(draft.conditionOnReturn || loan.conditionOnReturn || 'Good');
+      setNotes(draft.notes ?? (loan.notes || ''));
+      setLoanDraftRestored(true);
+    } else {
+      setSelectedStudentId(loan.studentId);
+      setBookTitle(loan.bookTitle);
+      setMaterialType(loan.materialType);
+      setSubject(loan.subject || 'General');
+      setBookCode(loan.bookCode);
+      setQuantity(loan.quantity || 1);
+      setCheckoutDate(loan.checkoutDate);
+      setDueDate(loan.dueDate);
+      setLoanStatus(loan.status);
+      setReturnedDate(loan.returnedDate || '');
+      setConditionOnReturn(loan.conditionOnReturn || 'Good');
+      setNotes(loan.notes || '');
+      setLoanDraftRestored(false);
+    }
     setFormError('');
     setModalOpen(true);
+  };
+
+  const handleDiscardLoanDraft = () => {
+    clearModalDraft(loanDraftKey);
+    if (editingLoan) {
+      setSelectedStudentId(editingLoan.studentId);
+      setBookTitle(editingLoan.bookTitle);
+      setMaterialType(editingLoan.materialType);
+      setSubject(editingLoan.subject || 'General');
+      setBookCode(editingLoan.bookCode);
+      setQuantity(editingLoan.quantity || 1);
+      setCheckoutDate(editingLoan.checkoutDate);
+      setDueDate(editingLoan.dueDate);
+      setLoanStatus(editingLoan.status);
+      setReturnedDate(editingLoan.returnedDate || '');
+      setConditionOnReturn(editingLoan.conditionOnReturn || 'Good');
+      setNotes(editingLoan.notes || '');
+    } else {
+      const defaultStu = activeStudents[0] || students[0] || null;
+      const defaultForm = (defaultStu?.formLevel || 1) as FormLevel;
+      const defaultSubjects = getSubjectsForForm(schoolSubjects, defaultForm);
+      const defaultSubj = defaultSubjects[0] || 'English';
+      setSelectedStudentId(defaultStu?.id || '');
+      setBookTitle('');
+      setMaterialType('Textbook');
+      setSubject(defaultSubj);
+      setBookCode(suggestCopyCode(defaultSubj, libraryLoans));
+      setQuantity(1);
+      setCheckoutDate(todayIso);
+      setDueDate(addDaysToIsoDate(todayIso, 14));
+      setLoanStatus('Checked Out');
+      setReturnedDate('');
+      setConditionOnReturn('Good');
+      setNotes('');
+    }
+    setLoanDraftRestored(false);
   };
 
   const handleSaveLoan = async (e: React.FormEvent) => {
@@ -1191,6 +1683,8 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
           fulfillingReservation.registrationCode
         );
       }
+      clearModalDraft(loanDraftKey);
+      setLoanDraftRestored(false);
       setFulfillingReservation(null);
       setModalOpen(false);
     } catch (err) {
@@ -1201,11 +1695,33 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
   };
 
   const openReturnModal = (loan: LibraryLoan) => {
+    const key = buildModalDraftKey(school.id, 'lib_return', loan.id);
+    const draft = loadModalDraft<{
+      returnDateInput: string;
+      returnConditionInput: LibraryItemCondition;
+      returnNotesInput: string;
+    }>(key);
     setReturningLoan(loan);
+    if (draft) {
+      setReturnDateInput(draft.returnDateInput || todayIso);
+      setReturnConditionInput(draft.returnConditionInput || 'Good');
+      setReturnNotesInput(draft.returnNotesInput ?? (loan.notes || ''));
+      setReturnDraftRestored(true);
+    } else {
+      setReturnDateInput(todayIso);
+      setReturnConditionInput('Good');
+      setReturnNotesInput(loan.notes || '');
+      setReturnDraftRestored(false);
+    }
+    setReturnError('');
+  };
+
+  const handleDiscardReturnDraft = () => {
+    clearModalDraft(returnDraftKey);
     setReturnDateInput(todayIso);
     setReturnConditionInput('Good');
-    setReturnNotesInput(loan.notes || '');
-    setReturnError('');
+    setReturnNotesInput(returningLoan?.notes || '');
+    setReturnDraftRestored(false);
   };
 
   const handleConfirmReturn = async (e: React.FormEvent) => {
@@ -1224,6 +1740,8 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
         conditionOnReturn: returnConditionInput,
         notes: returnNotesInput.trim(),
       });
+      clearModalDraft(returnDraftKey);
+      setReturnDraftRestored(false);
       setReturningLoan(null);
     } catch (err) {
       setReturnError(err instanceof Error ? err.message : 'Unable to mark material as returned.');
@@ -1423,6 +1941,12 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
   const filteredDigitalResources = useMemo(() => {
     const q = digitalSearch.trim().toLowerCase();
     return digitalResources.filter((r) => {
+      if (digitalAudienceFilter === 'teaching' && !isTeacherOnlyDigitalCategory(r.category)) {
+        return false;
+      }
+      if (digitalAudienceFilter === 'student' && isTeacherOnlyDigitalCategory(r.category)) {
+        return false;
+      }
       if (digitalCategoryFilter !== 'All' && r.category !== digitalCategoryFilter) return false;
       if (digitalFormFilter !== 'All' && r.formLevel !== digitalFormFilter && r.formLevel !== 'All') {
         return false;
@@ -1432,22 +1956,26 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
         r.title.toLowerCase().includes(q) ||
         r.author.toLowerCase().includes(q) ||
         r.subject.toLowerCase().includes(q) ||
+        r.category.toLowerCase().includes(q) ||
         r.summary.toLowerCase().includes(q)
       );
     });
-  }, [digitalCategoryFilter, digitalFormFilter, digitalResources, digitalSearch]);
+  }, [
+    digitalAudienceFilter,
+    digitalCategoryFilter,
+    digitalFormFilter,
+    digitalResources,
+    digitalSearch,
+  ]);
+
+  const visibleDigitalCategories = useMemo(() => {
+    if (digitalAudienceFilter === 'teaching') return TEACHER_DIGITAL_RESOURCE_CATEGORIES;
+    if (digitalAudienceFilter === 'student') return STUDENT_DIGITAL_RESOURCE_CATEGORIES;
+    return DIGITAL_RESOURCE_CATEGORIES;
+  }, [digitalAudienceFilter]);
 
   return (
     <div className="space-y-6">
-      {!canWriteLibrary && (
-        <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/60 px-4 py-3 flex items-center gap-2.5 text-xs text-slate-700 dark:text-slate-300">
-          <Lock className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0" aria-hidden="true" />
-          <span>
-            <strong>Read-Only View:</strong> Library catalog updates, book lending, returns, and reservations are managed by the designated School Librarian or Head Teacher (or via Admin role switcher).
-          </span>
-        </div>
-      )}
-
       {/* Library Module Navigation Tabs */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div
@@ -2889,12 +3417,9 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
           </div>
 
           {libraryReservations.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-slate-200 dark:border-slate-800 py-10 px-4 text-center space-y-2">
+            <div className="rounded-xl border border-dashed border-slate-200 dark:border-slate-800 py-10 px-4 text-center">
               <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
                 No book reservations requested yet.
-              </p>
-              <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
-                When all copies of a textbook or set book are checked out, learners and staff can request a reservation here.
               </p>
             </div>
           ) : filteredReservations.length === 0 ? (
@@ -3053,21 +3578,13 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
           className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 space-y-5"
         >
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex items-start gap-2.5">
+            <div className="flex items-center gap-2.5">
               <div className="h-9 w-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 flex items-center justify-center text-emerald-700 dark:text-emerald-400 shrink-0">
                 <Globe className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div>
-                <h2 className="text-base font-semibold text-slate-900 dark:text-white">
-                  Online &amp; Offline Digital Library
-                </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 flex flex-wrap items-center gap-1.5">
-                  <Lock className="w-3 h-3 text-slate-400 shrink-0" aria-hidden="true" />
-                  <span>
-                    Read-only books, set book notes &amp; past papers for learners (downloads disabled · cached for offline study).
-                  </span>
-                </p>
-              </div>
+              <h2 className="text-base font-semibold text-slate-900 dark:text-white">
+                Online &amp; Offline Digital Library
+              </h2>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -3084,19 +3601,6 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
                   </span>
                 </button>
               )}
-              {canWriteLibrary && digitalResources.length < 6 && (
-                <button
-                  type="button"
-                  onClick={handleLoadSampleDigital}
-                  disabled={seedingDigital}
-                  className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-40"
-                >
-                  <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>
-                    {seedingDigital ? 'Loading...' : 'Load Sample Books & Past Papers'}
-                  </span>
-                </button>
-              )}
               {canWriteLibrary && (
                 <button
                   type="button"
@@ -3107,6 +3611,37 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
                   <span>Upload Document</span>
                 </button>
               )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 border-y border-slate-200/80 dark:border-slate-800 py-3">
+            <div>
+              <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                Reading Online Now
+              </div>
+              <div className="text-lg font-bold tabular-nums text-emerald-700 dark:text-emerald-400">
+                {readingCounts.onlineActiveTotal}
+              </div>
+            </div>
+            <div>
+              <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                Offline Readers Now
+              </div>
+              <div className="text-lg font-bold tabular-nums text-amber-700 dark:text-amber-400">
+                {readingCounts.offlineActiveTotal}
+              </div>
+            </div>
+            <div>
+              <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                Marked Read
+              </div>
+              <div className="text-lg font-bold tabular-nums text-slate-900 dark:text-white">
+                {digitalResources.filter((r) => progressMap[r.id]?.isRead).length}
+                <span className="text-xs font-normal text-slate-400">
+                  {' '}
+                  / {digitalResources.length}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -3133,10 +3668,10 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
                 </div>
                 <div className="min-w-0">
                   <div className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white">
-                    Upload Document for Online &amp; Offline Reading
+                    Upload Digital Resource
                   </div>
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                    Drop PDF (.pdf), Word (.docx), Text (.txt, .md), or Scanned Image (max 10 MB) — learners can read online and save in-app for offline study.
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 font-mono">
+                    PDF, DOCX, TXT, MD, or Image · Max 10 MB
                   </div>
                   {inlineUploadError && (
                     <div className="mt-1.5 text-xs font-medium text-rose-600 dark:text-rose-400">
@@ -3159,8 +3694,34 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
 
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex rounded-xl bg-slate-100 dark:bg-slate-900 p-1">
+                {(
+                  [
+                    { id: 'all', label: 'All Resources' },
+                    { id: 'teaching', label: 'Teaching Resources' },
+                    { id: 'student', label: 'Student Study' },
+                  ] as const
+                ).map((scope) => (
+                  <button
+                    key={scope.id}
+                    type="button"
+                    onClick={() => {
+                      setDigitalAudienceFilter(scope.id);
+                      setDigitalCategoryFilter('All');
+                    }}
+                    className={`min-h-[34px] px-3 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${
+                      digitalAudienceFilter === scope.id
+                        ? 'bg-emerald-700 text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    {scope.label}
+                  </button>
+                ))}
+              </div>
+
               <div className="inline-flex flex-wrap rounded-xl bg-slate-100 dark:bg-slate-900 p-1">
-                {(['All', ...DIGITAL_RESOURCE_CATEGORIES] as DigitalCategoryFilter[]).map((cat) => (
+                {(['All', ...visibleDigitalCategories] as DigitalCategoryFilter[]).map((cat) => (
                   <button
                     key={cat}
                     type="button"
@@ -3200,7 +3761,7 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
               />
               <input
                 type="search"
-                aria-label="Search digital books and past papers"
+                aria-label="Search digital books and teaching resources"
                 value={digitalSearch}
                 onChange={(e) => setDigitalSearch(e.target.value)}
                 placeholder="Search title, subject, or author..."
@@ -3210,12 +3771,9 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
           </div>
 
           {digitalResources.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-slate-200 dark:border-slate-800 py-10 px-4 text-center space-y-2">
+            <div className="rounded-xl border border-dashed border-slate-200 dark:border-slate-800 py-10 px-4 text-center">
               <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                No online reading materials published yet.
-              </p>
-              <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
-                Publish digital set books, revision guides, or MANEB past papers so learners can study online and offline even when physical copies are out of stock.
+                No digital materials uploaded yet.
               </p>
             </div>
           ) : filteredDigitalResources.length === 0 ? (
@@ -3226,6 +3784,14 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {filteredDigitalResources.map((res) => {
                 const isCached = offlineIds.has(res.id);
+                const progress = progressMap[res.id];
+                const isRead = Boolean(progress?.isRead);
+                const lastReadPage = progress?.lastReadPage || 0;
+                const totalPages = progress?.totalPages || 0;
+                const lastReadLabel = formatLastReadLabel(progress?.lastReadAt);
+                const onlineCount = readingCounts.onlineByResource[res.id] || 0;
+                const offlineCount = readingCounts.offlineByResource[res.id] || 0;
+
                 return (
                   <article
                     key={res.id}
@@ -3253,6 +3819,15 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
                           {res.summary}
                         </p>
                       )}
+                      {(lastReadPage > 0 || lastReadLabel || onlineCount > 0 || offlineCount > 0 || isRead) && (
+                        <div className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400 pt-0.5">
+                          {isRead ? 'Read' : lastReadPage > 0 ? `Page ${lastReadPage}${totalPages > 1 ? `/${totalPages}` : ''}` : ''}
+                          {lastReadLabel ? `${isRead || lastReadPage > 0 ? ' · ' : ''}Last read ${lastReadLabel}` : ''}
+                          {(onlineCount > 0 || offlineCount > 0)
+                            ? `${isRead || lastReadPage > 0 || lastReadLabel ? ' · ' : ''}${onlineCount} online · ${offlineCount} offline`
+                            : ''}
+                        </div>
+                      )}
                     </div>
 
                     <div className="pt-3 border-t border-slate-200/70 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
@@ -3263,7 +3838,20 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
                           className="inline-flex items-center gap-1.5 min-h-[34px] px-3 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
                         >
                           <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span>Open Reader</span>
+                          <span>{lastReadPage > 1 ? `Continue p.${lastReadPage}` : 'Open Reader'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleMarkAsRead(res.id)}
+                          aria-pressed={isRead}
+                          className={`inline-flex items-center gap-1 min-h-[34px] px-2.5 rounded-lg border text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer ${
+                            isRead
+                              ? 'border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300'
+                              : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                          <span>{isRead ? 'Marked Read' : 'Mark as Read'}</span>
                         </button>
                         {res.allowOffline && (
                           <button
@@ -3325,25 +3913,21 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
 
       {/* Assign / Edit Material Modal */}
       {modalOpen && (
-        <div
+        <ModalBackdrop
+          open={modalOpen}
+          disabled={saving}
+          ariaLabelledBy="library-loan-modal-title"
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/65 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="library-loan-modal-title"
+          onClose={() => setModalOpen(false)}
         >
           <div className="w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl space-y-5">
             <div className="flex items-center justify-between gap-4">
-              <div>
-                <h2
-                  id="library-loan-modal-title"
-                  className="text-base font-semibold text-slate-900 dark:text-white"
-                >
-                  {editingLoan ? 'Edit Library Loan' : 'Assign Library Material'}
-                </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Issue textbooks or reading materials and set the return due date.
-                </p>
-              </div>
+              <h2
+                id="library-loan-modal-title"
+                className="text-base font-semibold text-slate-900 dark:text-white"
+              >
+                {editingLoan ? 'Edit Library Loan' : 'Assign Library Material'}
+              </h2>
               <button
                 type="button"
                 onClick={() => setModalOpen(false)}
@@ -3353,6 +3937,11 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            <DraftRestoredNotice
+              visible={loanDraftRestored}
+              onDiscard={handleDiscardLoanDraft}
+            />
 
             {formError && (
               <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
@@ -3675,16 +4264,17 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
               </div>
             </form>
           </div>
-        </div>
+        </ModalBackdrop>
       )}
 
       {/* Mark Material Returned Modal */}
       {returningLoan && (
-        <div
+        <ModalBackdrop
+          open={Boolean(returningLoan)}
+          disabled={processingReturn}
+          ariaLabelledBy="library-return-modal-title"
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/65 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="library-return-modal-title"
+          onClose={() => setReturningLoan(null)}
         >
           <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl space-y-4">
             <div className="flex items-start justify-between gap-3">
@@ -3709,6 +4299,11 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            <DraftRestoredNotice
+              visible={returnDraftRestored}
+              onDiscard={handleDiscardReturnDraft}
+            />
 
             {returnError && (
               <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
@@ -3796,30 +4391,26 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
               </div>
             </form>
           </div>
-        </div>
+        </ModalBackdrop>
       )}
 
       {/* Add / Edit Inventory Book Modal */}
       {bookModalOpen && (
-        <div
+        <ModalBackdrop
+          open={bookModalOpen}
+          disabled={savingBook}
+          ariaLabelledBy="library-book-modal-title"
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/65 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="library-book-modal-title"
+          onClose={() => setBookModalOpen(false)}
         >
           <div className="w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl space-y-5">
             <div className="flex items-center justify-between gap-4">
-              <div>
-                <h2
-                  id="library-book-modal-title"
-                  className="text-base font-semibold text-slate-900 dark:text-white"
-                >
-                  {editingBook ? 'Edit Library Inventory Book' : 'Add Book to Library Inventory'}
-                </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Catalog textbooks, set books, and reference guides with ISBN, author, and copy count.
-                </p>
-              </div>
+              <h2
+                id="library-book-modal-title"
+                className="text-base font-semibold text-slate-900 dark:text-white"
+              >
+                {editingBook ? 'Edit Library Inventory Book' : 'Add Book to Library Inventory'}
+              </h2>
               <button
                 type="button"
                 onClick={() => setBookModalOpen(false)}
@@ -3829,6 +4420,11 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            <DraftRestoredNotice
+              visible={bookDraftRestored}
+              onDiscard={handleDiscardBookDraft}
+            />
 
             {bookFormError && (
               <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
@@ -4029,7 +4625,7 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
               </div>
             </form>
           </div>
-        </div>
+        </ModalBackdrop>
       )}
 
       {/* Safe Delete Loan Confirmation Modal */}
@@ -4118,25 +4714,21 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
 
       {/* Reserve Book Modal */}
       {reserveModalOpen && (
-        <div
+        <ModalBackdrop
+          open={reserveModalOpen}
+          disabled={savingReservation}
+          ariaLabelledBy="reserve-book-modal-title"
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/65 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="reserve-book-modal-title"
+          onClose={() => setReserveModalOpen(false)}
         >
           <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl space-y-4">
             <div className="flex items-start justify-between gap-3">
-              <div>
-                <h2
-                  id="reserve-book-modal-title"
-                  className="text-base font-semibold text-slate-900 dark:text-white"
-                >
-                  Reserve Checked-Out Book
-                </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Queue a student request so the librarian holds the next returned copy.
-                </p>
-              </div>
+              <h2
+                id="reserve-book-modal-title"
+                className="text-base font-semibold text-slate-900 dark:text-white"
+              >
+                Reserve Checked-Out Book
+              </h2>
               <button
                 type="button"
                 onClick={() => setReserveModalOpen(false)}
@@ -4147,6 +4739,11 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            <DraftRestoredNotice
+              visible={reserveDraftRestored}
+              onDiscard={handleDiscardReserveDraft}
+            />
 
             {reserveFormError && (
               <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
@@ -4238,7 +4835,7 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
               </div>
             </form>
           </div>
-        </div>
+        </ModalBackdrop>
       )}
 
       {/* Safe Delete Reservation Modal */}
@@ -4265,27 +4862,23 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
 
       {/* Publish / Edit Digital Library Resource Modal */}
       {digitalModalOpen && (
-        <div
+        <ModalBackdrop
+          open={digitalModalOpen}
+          disabled={savingDigital || digParsingFile}
+          ariaLabelledBy="digital-resource-modal-title"
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/65 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="digital-resource-modal-title"
+          onClose={() => setDigitalModalOpen(false)}
         >
           <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl space-y-5">
             <div className="flex items-start justify-between gap-3">
-              <div>
-                <h2
-                  id="digital-resource-modal-title"
-                  className="text-base font-semibold text-slate-900 dark:text-white"
-                >
-                  {editingDigital
-                    ? 'Update Reading Material'
-                    : 'Upload Book or Past Paper'}
-                </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Upload PDF books, past papers, Word handouts, or scanned pages so learners can read online and offline with downloads disabled.
-                </p>
-              </div>
+              <h2
+                id="digital-resource-modal-title"
+                className="text-base font-semibold text-slate-900 dark:text-white"
+              >
+                {editingDigital
+                  ? 'Update Digital Resource'
+                  : 'Upload Digital Resource'}
+              </h2>
               <button
                 type="button"
                 onClick={() => setDigitalModalOpen(false)}
@@ -4296,6 +4889,11 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            <DraftRestoredNotice
+              visible={digitalDraftRestored}
+              onDiscard={handleDiscardDigitalDraft}
+            />
 
             {digitalFormError && (
               <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
@@ -4550,7 +5148,7 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
                   onChange={(e) => setDigAllowOffline(e.target.checked)}
                   className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-600"
                 />
-                <span>Allow learners to cache this material in-app for offline reading (still non-downloadable)</span>
+                <span>Allow offline reading</span>
               </label>
 
               {digUploadProgress && (
@@ -4584,7 +5182,7 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
               </div>
             </form>
           </div>
-        </div>
+        </ModalBackdrop>
       )}
 
       {/* Safe Delete Digital Resource Modal */}
@@ -4611,6 +5209,20 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
         isSavedOffline={readerTarget ? offlineIds.has(readerTarget.id) : false}
         savingOffline={readerTarget ? savingOfflineId === readerTarget.id : false}
         onToggleOffline={handleToggleOfflineDigital}
+        scopeKey={staffScopeKey}
+        ownerId={ownerId}
+        isRead={readerTarget ? Boolean(progressMap[readerTarget.id]?.isRead) : false}
+        lastReadPage={readerTarget ? progressMap[readerTarget.id]?.lastReadPage || 0 : 0}
+        onlineReadersCount={
+          readerTarget ? readingCounts.onlineByResource[readerTarget.id] || 0 : 0
+        }
+        offlineReadersCount={
+          readerTarget ? readingCounts.offlineByResource[readerTarget.id] || 0 : 0
+        }
+        onToggleRead={(res) => toggleMarkAsRead(res.id)}
+        onProgressChange={(resourceId, page, total, mode) =>
+          recordPageProgress(resourceId, page, total, mode)
+        }
         onClose={() => setReaderTarget(null)}
       />
     </div>

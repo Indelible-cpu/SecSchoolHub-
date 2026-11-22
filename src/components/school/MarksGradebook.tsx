@@ -1,11 +1,10 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
   Download,
   FileDown,
   FileText,
-  Lock,
   Pencil,
   Plus,
   Printer,
@@ -40,7 +39,9 @@ import {
   downloadStudentTermReportCardPdf,
 } from '../../school/pdfReports';
 import { removeAssessment, saveAssessment } from '../../school/firestoreService';
+import { buildModalDraftKey, clearModalDraft, loadModalDraft, saveModalDraft } from '../../school/modalDrafts';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
+import { DraftRestoredNotice, ModalBackdrop } from './ModalBackdrop';
 import {
   ManebGradeDistributionChart,
   SubjectComponentBarChart,
@@ -93,6 +94,46 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
 
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [markDraftRestored, setMarkDraftRestored] = useState(false);
+
+  const markDraftKey = useMemo(
+    () =>
+      buildModalDraftKey(
+        school.id,
+        'mark_entry',
+        lockedStudentSubject ? editingId : 'new'
+      ),
+    [editingId, lockedStudentSubject, school.id]
+  );
+
+  useEffect(() => {
+    if (!modalOpen) return;
+    saveModalDraft(markDraftKey, {
+      studentId,
+      subject,
+      term,
+      entryMode,
+      ca1RawStr,
+      ca1MaxStr,
+      ca2RawStr,
+      ca2MaxStr,
+      examRawStr,
+      examMaxStr,
+    });
+  }, [
+    ca1MaxStr,
+    ca1RawStr,
+    ca2MaxStr,
+    ca2RawStr,
+    entryMode,
+    examMaxStr,
+    examRawStr,
+    markDraftKey,
+    modalOpen,
+    studentId,
+    subject,
+    term,
+  ]);
 
   // Term Report Card Generator state
   const [reportCardOpen, setReportCardOpen] = useState(false);
@@ -261,10 +302,45 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
         ? subjectFilter
         : formSubjs[0] || '';
     setLockedStudentSubject(false);
-    setStudentId(defaultStudent.id);
-    setSubject(defaultSubj);
-    setTerm(termFilter);
-    syncContextForSelection(defaultStudent.id, defaultSubj, termFilter);
+    const key = buildModalDraftKey(school.id, 'mark_entry', 'new');
+    const saved = loadModalDraft<{
+      studentId?: string;
+      subject?: string;
+      term?: TermName;
+      entryMode?: AssessmentType;
+      ca1RawStr?: string;
+      ca1MaxStr?: string;
+      ca2RawStr?: string;
+      ca2MaxStr?: string;
+      examRawStr?: string;
+      examMaxStr?: string;
+    }>(key);
+
+    if (
+      saved &&
+      (saved.ca1RawStr || saved.ca2RawStr || saved.examRawStr) &&
+      saved.studentId &&
+      activeStudents.some((s) => s.id === saved.studentId)
+    ) {
+      setStudentId(saved.studentId);
+      setSubject(saved.subject || defaultSubj);
+      setTerm(saved.term || termFilter);
+      setEntryMode(saved.entryMode || 'ca1');
+      setCa1RawStr(saved.ca1RawStr || '');
+      setCa1MaxStr(saved.ca1MaxStr || '20');
+      setCa2RawStr(saved.ca2RawStr || '');
+      setCa2MaxStr(saved.ca2MaxStr || '20');
+      setExamRawStr(saved.examRawStr || '');
+      setExamMaxStr(saved.examMaxStr || '100');
+      setMarkDraftRestored(true);
+      setErrorMsg('');
+    } else {
+      setStudentId(defaultStudent.id);
+      setSubject(defaultSubj);
+      setTerm(termFilter);
+      syncContextForSelection(defaultStudent.id, defaultSubj, termFilter);
+      setMarkDraftRestored(false);
+    }
     setModalOpen(true);
   };
 
@@ -278,15 +354,66 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
     setSubject(row.subject);
     setTerm(row.term);
     setAutoDetectedStage(detected);
-    setEntryMode(!b.hasCa1 ? 'ca1' : !b.hasCa2 ? 'ca2' : !b.hasExam ? 'exam' : 'ca1');
-    setCa1RawStr(b.hasCa1 ? String(b.ca1Raw) : '');
-    setCa1MaxStr(b.hasCa1 ? String(b.ca1Max) : '20');
-    setCa2RawStr(b.hasCa2 ? String(b.ca2Raw) : '');
-    setCa2MaxStr(b.hasCa2 ? String(b.ca2Max) : '20');
-    setExamRawStr(b.hasExam ? String(b.examRaw) : '');
-    setExamMaxStr(b.hasExam ? String(b.examMax) : '100');
+    const key = buildModalDraftKey(school.id, 'mark_entry', row.id);
+    const saved = loadModalDraft<{
+      entryMode?: AssessmentType;
+      ca1RawStr?: string;
+      ca1MaxStr?: string;
+      ca2RawStr?: string;
+      ca2MaxStr?: string;
+      examRawStr?: string;
+      examMaxStr?: string;
+    }>(key);
+
+    const baseCa1 = b.hasCa1 ? String(b.ca1Raw) : '';
+    const baseCa2 = b.hasCa2 ? String(b.ca2Raw) : '';
+    const baseExam = b.hasExam ? String(b.examRaw) : '';
+    if (
+      saved &&
+      ((saved.ca1RawStr ?? '') !== baseCa1 ||
+        (saved.ca2RawStr ?? '') !== baseCa2 ||
+        (saved.examRawStr ?? '') !== baseExam)
+    ) {
+      setEntryMode(saved.entryMode || (!b.hasCa1 ? 'ca1' : !b.hasCa2 ? 'ca2' : !b.hasExam ? 'exam' : 'ca1'));
+      setCa1RawStr(saved.ca1RawStr ?? baseCa1);
+      setCa1MaxStr(saved.ca1MaxStr || (b.hasCa1 ? String(b.ca1Max) : '20'));
+      setCa2RawStr(saved.ca2RawStr ?? baseCa2);
+      setCa2MaxStr(saved.ca2MaxStr || (b.hasCa2 ? String(b.ca2Max) : '20'));
+      setExamRawStr(saved.examRawStr ?? baseExam);
+      setExamMaxStr(saved.examMaxStr || (b.hasExam ? String(b.examMax) : '100'));
+      setMarkDraftRestored(true);
+    } else {
+      setEntryMode(!b.hasCa1 ? 'ca1' : !b.hasCa2 ? 'ca2' : !b.hasExam ? 'exam' : 'ca1');
+      setCa1RawStr(baseCa1);
+      setCa1MaxStr(b.hasCa1 ? String(b.ca1Max) : '20');
+      setCa2RawStr(baseCa2);
+      setCa2MaxStr(b.hasCa2 ? String(b.ca2Max) : '20');
+      setExamRawStr(baseExam);
+      setExamMaxStr(b.hasExam ? String(b.examMax) : '100');
+      setMarkDraftRestored(false);
+    }
     setErrorMsg('');
     setModalOpen(true);
+  };
+
+  const discardMarkDraft = () => {
+    clearModalDraft(markDraftKey);
+    if (lockedStudentSubject && editingId) {
+      const existing = assessments.find((a) => a.id === editingId);
+      if (existing) {
+        const b = normalizeAssessmentComponents(existing);
+        setEntryMode(!b.hasCa1 ? 'ca1' : !b.hasCa2 ? 'ca2' : !b.hasExam ? 'exam' : 'ca1');
+        setCa1RawStr(b.hasCa1 ? String(b.ca1Raw) : '');
+        setCa1MaxStr(b.hasCa1 ? String(b.ca1Max) : '20');
+        setCa2RawStr(b.hasCa2 ? String(b.ca2Raw) : '');
+        setCa2MaxStr(b.hasCa2 ? String(b.ca2Max) : '20');
+        setExamRawStr(b.hasExam ? String(b.examRaw) : '');
+        setExamMaxStr(b.hasExam ? String(b.examMax) : '100');
+      }
+    } else {
+      syncContextForSelection(studentId, subject, term);
+    }
+    setMarkDraftRestored(false);
   };
 
   const liveCalc = useMemo(() => {
@@ -422,6 +549,8 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
     try {
       const targetDocId = editingId || matchedAssessment?.id || undefined;
       await saveAssessment(school.id, ownerId, validated.payload, targetDocId);
+      clearModalDraft(markDraftKey);
+      setMarkDraftRestored(false);
 
       if (advanceToNextStudent && !lockedStudentSubject) {
         const currentIdx = activeStudents.findIndex((s) => s.id === studentId);
@@ -649,15 +778,6 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
             )}
           </div>
         </div>
-
-        {!canWriteMarks && (
-          <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/70 px-3.5 py-2.5 flex items-center gap-2.5 text-xs text-slate-700 dark:text-slate-300">
-            <Lock className="w-3.5 h-3.5 text-slate-500 shrink-0" aria-hidden="true" />
-            <span>
-              <strong>Read-Only View:</strong> Score entry and edits are assigned to Subject Teachers, Form Teachers, HODs, Deputy Head, and Head Teacher. Use the Role Switcher in the sidebar if you need to act as an academic role.
-            </span>
-          </div>
-        )}
 
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-900">
@@ -934,10 +1054,11 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
 
       {/* Record / Edit Mark Modal */}
       {modalOpen && (
-        <div
+        <ModalBackdrop
+          open={modalOpen}
+          onClose={() => setModalOpen(false)}
+          disabled={saving}
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
         >
           <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-5 sm:p-6 shadow-xl max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
@@ -965,6 +1086,8 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
               }}
               className="mt-4 space-y-4"
             >
+              <DraftRestoredNotice visible={markDraftRestored} onDiscard={discardMarkDraft} />
+
               {errorMsg && (
                 <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
                   {errorMsg}
@@ -1309,15 +1432,15 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
               </div>
             </form>
           </div>
-        </div>
+        </ModalBackdrop>
       )}
 
       {/* Term Report Card Generator Modal */}
       {reportCardOpen && reportStudent && reportSummary && (
-        <div
+        <ModalBackdrop
+          open={reportCardOpen}
+          onClose={() => setReportCardOpen(false)}
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
         >
           <div className="w-full max-w-3xl rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-5 sm:p-6 shadow-xl max-h-[92vh] overflow-y-auto">
             {/* Top Letterhead & Actions */}
@@ -1592,7 +1715,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
               )}
             </div>
           </div>
-        </div>
+        </ModalBackdrop>
       )}
 
       {/* Safe Delete Assessment Modal */}

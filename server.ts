@@ -4,6 +4,8 @@ import fs from 'fs';
 import http from 'http';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
+import { requireFirebaseAuth, type AuthenticatedRequest } from './server/firebaseAuth';
+import { TimebookEngine } from './server/timebookEngine';
 
 interface SmsGatewayStatus {
   configured: boolean;
@@ -191,6 +193,230 @@ async function startServer() {
       });
     }
   });
+
+  const timebookEngine = new TimebookEngine();
+
+  const applyTimebookRateLimit = (
+    req: AuthenticatedRequest,
+    res: express.Response
+  ): boolean => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const uid = req.authUser?.uid || 'anon';
+    const limitRes = timebookEngine.enforceRateLimit(`${uid}:${ip}`);
+    if (!limitRes.allowed) {
+      res.setHeader('Retry-After', String(limitRes.retryAfterSec));
+      res.status(429).json({
+        ok: false,
+        code: 'RATE_LIMITED',
+        error: `Too many requests. Please wait ${limitRes.retryAfterSec}s before retrying.`,
+      });
+      return false;
+    }
+    return true;
+  };
+
+  app.get('/api/timebook/server-time', (req, res) => {
+    const tz = typeof req.query.tz === 'string' ? req.query.tz : undefined;
+    res.json({
+      ok: true,
+      ...timebookEngine.getAuthoritativeClock(tz),
+    });
+  });
+
+  app.get('/api/timebook/vapid-public-key', requireFirebaseAuth, (_req, res) => {
+    res.json({
+      ok: true,
+      publicKey: timebookEngine.getVapidPublicKey(),
+    });
+  });
+
+  app.post('/api/timebook/sync-policy', requireFirebaseAuth, (req: AuthenticatedRequest, res) => {
+    if (!applyTimebookRateLimit(req, res)) return;
+    const body = (req.body || {}) as {
+      schoolId?: string;
+      schoolName?: string;
+      ownerId?: string;
+      settings?: Record<string, unknown>;
+      staffRoster?: Array<{
+        teacherId: string;
+        staffCode: string;
+        fullName: string;
+        roleTitle: string;
+        staffEmail: string;
+        status: 'Active' | 'On Leave';
+      }>;
+    };
+
+    const result = timebookEngine.syncSchoolPolicyAndRoster({
+      caller: req.authUser!,
+      schoolId: body.schoolId || '',
+      schoolName: body.schoolName,
+      ownerId: body.ownerId,
+      settings: body.settings as never,
+      staffRoster: body.staffRoster as never,
+    });
+
+    if (!result.ok) {
+      res.status(result.error.status).json({ ok: false, ...result.error });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      policy: result.school.settings,
+      rosterCount: result.school.staffRoster.length,
+    });
+  });
+
+  app.get('/api/timebook/state', requireFirebaseAuth, (req: AuthenticatedRequest, res) => {
+    if (!applyTimebookRateLimit(req, res)) return;
+    const schoolId = typeof req.query.schoolId === 'string' ? req.query.schoolId.trim() : '';
+    if (!schoolId) {
+      res.status(400).json({ ok: false, code: 'SCHOOL_ID_REQUIRED', error: 'schoolId is required.' });
+      return;
+    }
+    res.json(
+      timebookEngine.getStaffTimebookState({
+        caller: req.authUser!,
+        schoolId,
+      })
+    );
+  });
+
+  app.post('/api/timebook/challenge', requireFirebaseAuth, (req: AuthenticatedRequest, res) => {
+    if (!applyTimebookRateLimit(req, res)) return;
+    const body = (req.body || {}) as { schoolId?: string };
+    const result = timebookEngine.issueChallenge({
+      caller: req.authUser!,
+      schoolId: body.schoolId || '',
+    });
+    if (!result.ok) {
+      res.status(result.error.status).json({ ok: false, ...result.error });
+      return;
+    }
+    res.json(result);
+  });
+
+  app.post('/api/timebook/verify-checkin', requireFirebaseAuth, (req: AuthenticatedRequest, res) => {
+    if (!applyTimebookRateLimit(req, res)) return;
+    const body = (req.body || {}) as {
+      schoolId?: string;
+      nonce?: string;
+      latitude?: number;
+      longitude?: number;
+      accuracyMeters?: number;
+      clientTimestampMs?: number;
+      requestedDate?: string;
+      targetTeacherId?: string;
+    };
+
+    const result = timebookEngine.verifyAndRecordCheckIn({
+      caller: req.authUser!,
+      schoolId: body.schoolId || '',
+      nonce: body.nonce || '',
+      latitude: Number(body.latitude),
+      longitude: Number(body.longitude),
+      accuracyMeters: Number(body.accuracyMeters),
+      clientTimestampMs:
+        typeof body.clientTimestampMs === 'number' ? body.clientTimestampMs : undefined,
+      requestedDate: typeof body.requestedDate === 'string' ? body.requestedDate : undefined,
+      targetTeacherId: typeof body.targetTeacherId === 'string' ? body.targetTeacherId : undefined,
+    });
+
+    if (!result.ok) {
+      res.status(result.error.status).json({ ok: false, ...result.error });
+      return;
+    }
+    res.json(result);
+  });
+
+  app.post('/api/timebook/admin-sync-entry', requireFirebaseAuth, (req: AuthenticatedRequest, res) => {
+    if (!applyTimebookRateLimit(req, res)) return;
+    const body = (req.body || {}) as {
+      schoolId?: string;
+      date?: string;
+      teacherId?: string;
+      status?: string;
+      timeInDisplay?: string;
+    };
+
+    const result = timebookEngine.adminSyncEntry({
+      caller: req.authUser!,
+      schoolId: body.schoolId || '',
+      date: body.date || '',
+      teacherId: body.teacherId || '',
+      status: body.status as never,
+      timeInDisplay: body.timeInDisplay,
+    });
+
+    if (!result.ok) {
+      res.status(result.error.status).json({ ok: false, ...result.error });
+      return;
+    }
+    res.json({ ok: true });
+  });
+
+  app.get('/api/timebook/notifications', requireFirebaseAuth, (req: AuthenticatedRequest, res) => {
+    const schoolId = typeof req.query.schoolId === 'string' ? req.query.schoolId.trim() : '';
+    if (!schoolId) {
+      res.status(400).json({ ok: false, code: 'SCHOOL_ID_REQUIRED', error: 'schoolId is required.' });
+      return;
+    }
+    const items = timebookEngine.getNotificationsForUser(req.authUser!, schoolId);
+    res.json({ ok: true, notifications: items });
+  });
+
+  app.post('/api/timebook/notifications/read', requireFirebaseAuth, (req: AuthenticatedRequest, res) => {
+    const body = (req.body || {}) as { schoolId?: string; notificationIds?: string[] };
+    const updated = timebookEngine.markNotificationsRead(
+      req.authUser!,
+      body.schoolId || '',
+      Array.isArray(body.notificationIds) ? body.notificationIds : undefined
+    );
+    res.json({ ok: true, updated });
+  });
+
+  app.get('/api/timebook/suspicious-logs', requireFirebaseAuth, (req: AuthenticatedRequest, res) => {
+    const schoolId = typeof req.query.schoolId === 'string' ? req.query.schoolId.trim() : '';
+    if (!schoolId) {
+      res.status(400).json({ ok: false, code: 'SCHOOL_ID_REQUIRED', error: 'schoolId is required.' });
+      return;
+    }
+    const events = timebookEngine.getSuspiciousEvents(req.authUser!, schoolId);
+    res.json({ ok: true, events });
+  });
+
+  app.post('/api/timebook/push/subscribe', requireFirebaseAuth, (req: AuthenticatedRequest, res) => {
+    const body = (req.body || {}) as {
+      schoolId?: string;
+      subscription?: { endpoint: string; keys: { p256dh: string; auth: string } };
+    };
+    const result = timebookEngine.savePushSubscription({
+      caller: req.authUser!,
+      schoolId: body.schoolId || '',
+      subscription: body.subscription!,
+      userAgent: req.headers['user-agent'] || '',
+    });
+    if (!result.ok) {
+      res.status(result.error.status).json({ ok: false, ...result.error });
+      return;
+    }
+    res.json(result);
+  });
+
+  app.post('/api/timebook/push/unsubscribe', requireFirebaseAuth, (req: AuthenticatedRequest, res) => {
+    const body = (req.body || {}) as { endpoint?: string };
+    timebookEngine.removePushSubscription(req.authUser!, body.endpoint);
+    res.json({ ok: true });
+  });
+
+  // Automated background Staff Timebook reminder job (runs independently of open browser tabs)
+  const reminderInterval = setInterval(() => {
+    timebookEngine.runReminderTick().catch(() => {
+      // Prevent unhandled interval error
+    });
+  }, 20_000);
+  reminderInterval.unref();
 
   if (process.env.NODE_ENV !== 'production') {
     if (!process.env.DISABLE_HMR) {

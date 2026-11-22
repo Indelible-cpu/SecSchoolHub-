@@ -8,6 +8,7 @@ import {
   FormLevel,
   InvoiceStatus,
   School,
+  StaffTimebookEntry,
   Student,
   TermName,
 } from './types';
@@ -499,3 +500,85 @@ export function downloadFeesPdfReport(params: {
   const termSlug = termFilter.toLowerCase().replace(/\s+/g, '-');
   doc.save(`${slug}-fees-${viewMode}-${termSlug}.pdf`);
 }
+
+export function downloadStaffTimebookPdfReport(params: {
+  school: School;
+  dateLabel: string;
+  entries: StaffTimebookEntry[];
+  totalStaffCount: number;
+  gpsAutoCount: number;
+  adminRecordedCount: number;
+  absentOrUnsignedCount: number;
+}): void {
+  const { school, dateLabel, entries } = params;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const filterSummary = `Period: ${dateLabel}  ·  Register Type: GPS Verified vs Admin Recorded`;
+  let y = drawReportHeader(doc, school, 'Staff Timebook & Attendance Register', filterSummary);
+
+  y = drawSummaryStrip(doc, y, [
+    { label: 'Total Staff', value: String(params.totalStaffCount) },
+    { label: 'GPS Auto Verified', value: String(params.gpsAutoCount) },
+    { label: 'Admin Recorded', value: String(params.adminRecordedCount) },
+    { label: 'Absent / Unsigned', value: String(params.absentOrUnsignedCount) },
+  ]);
+
+  autoTable(doc, {
+    startY: y,
+    margin: { left: 14, right: 14, bottom: 18 },
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 8.2,
+      cellPadding: 2.5,
+      textColor: [30, 41, 59],
+      lineColor: [226, 232, 240],
+      lineWidth: 0.25,
+    },
+    headStyles: {
+      fillColor: [13, 110, 82],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+    },
+    alternateRowStyles: {
+      fillColor: [248, 250, 252],
+    },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 9 },
+      1: { cellWidth: 22 },
+      3: { cellWidth: 24 },
+      5: { cellWidth: 28 },
+      6: { cellWidth: 26 },
+      7: { halign: 'right', cellWidth: 24 },
+    },
+    head: [
+      [
+        '#',
+        'Date',
+        'Staff Member',
+        'Code / Role',
+        'Status',
+        'Method',
+        'Time In',
+        'Distance (m)',
+        'Remarks / Audit',
+      ],
+    ],
+    body: entries.map((e, idx) => [
+      String(idx + 1),
+      e.date,
+      e.staffName,
+      `${e.staffCode} · ${e.roleTitle}`,
+      e.status,
+      e.recordingMethod,
+      e.timeInDisplay || '—',
+      e.recordingMethod === 'GPS Auto' ? `${Math.round(e.distanceMeters)} m` : 'Override',
+      e.correctionReason || (e.isSuspicious ? `Flagged: ${e.spoofingFlags.join(', ')}` : e.gpsVerificationStatus),
+    ]),
+  });
+
+  addPageFooters(doc, school.name);
+  const slug = slugifySchool(school.name);
+  const cleanDate = dateLabel.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
+  doc.save(`${slug}-staff-timebook-${cleanDate}.pdf`);
+}
+

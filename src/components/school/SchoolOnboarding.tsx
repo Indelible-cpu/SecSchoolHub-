@@ -100,7 +100,7 @@ export const SchoolOnboarding: React.FC<SchoolOnboardingProps> = ({
     (govTuitionOnly ? 0 : (Number(gpfStr) || 0) + (Number(examFeeStr) || 0));
 
   return (
-    <div className="max-w-4xl mx-auto py-6 sm:py-10 px-4">
+    <div className="w-full py-6 sm:py-8 px-4 sm:px-8">
       <div className="mb-6 flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">

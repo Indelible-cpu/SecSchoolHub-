@@ -10,6 +10,7 @@ import {
   BookmarkPlus,
   BookOpen,
   Building2,
+  Check,
   CheckCircle2,
   Clock,
   CloudOff,
@@ -36,7 +37,9 @@ import { useOnlineStatus } from '../../hooks/useOnlineStatus';
 import {
   createLibraryReservation,
   fetchDigitalResourceBytes,
+  flushPendingOfflineReadingSyncs,
   submitStudentFeePaymentReference,
+  subscribeLibraryReadingSessions,
 } from '../../school/firestoreService';
 import { formatFileSizeLabel } from '../../school/digitalMaterialParser';
 import {
@@ -45,21 +48,34 @@ import {
 } from '../../school/paymentProofParser';
 import {
   calculateTermReportSummary,
-  DIGITAL_RESOURCE_CATEGORIES,
+  canStudentSeeAnnouncement,
   formatMWK,
   getLibraryDaysOverdue,
   getLibraryDueReminderLabel,
   isLibraryLoanDueWithin48Hours,
   isLibraryLoanOverdue,
+  isTeacherOnlyDigitalCategory,
+  STUDENT_DIGITAL_RESOURCE_CATEGORIES,
   TERMS,
 } from '../../school/malawi';
 import {
   getOfflineDigitalResources,
   OfflineDigitalResourceRecord,
+  purgeOfflineRawTextResources,
   removeOfflineDigitalResource,
   saveDigitalResourceOffline,
   saveDigitalResourcesBatchOffline,
 } from '../../school/offlineLibraryDb';
+import {
+  formatLastReadLabel,
+  useLibraryReadingProgress,
+} from '../../school/readingProgressStore';
+import {
+  buildModalDraftKey,
+  clearModalDraft,
+  loadModalDraft,
+  saveModalDraft,
+} from '../../school/modalDrafts';
 import { downloadStudentTermReportCardPdf } from '../../school/pdfReports';
 import {
   Assessment,
@@ -68,6 +84,7 @@ import {
   DigitalResourceCategory,
   DigitalResourceFormLevel,
   LibraryLoan,
+  LibraryReadingSession,
   LibraryReservation,
   PaymentMethod,
   School,
@@ -81,6 +98,7 @@ import {
 import { OfflineIndicator } from '../OfflineIndicator';
 import { PWAInstallButton } from '../PWAInstallButton';
 import { SubjectComponentBarChart } from './AnalyticsCharts';
+import { DraftRestoredNotice, ModalBackdrop } from './ModalBackdrop';
 import { OnlineLibraryReaderModal, ReadableDigitalResource } from './OnlineLibraryReaderModal';
 import { PaymentProofPreviewModal } from './PaymentProofPreviewModal';
 import { StudentPerformanceTrends } from './StudentPerformanceTrends';
@@ -213,6 +231,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
   const [loadingReservations, setLoadingReservations] = useState(true);
   const [reserveModalBook, setReserveModalBook] = useState<CatalogBookMirror | null>(null);
   const [reserveNotes, setReserveNotes] = useState('');
+  const [reserveDraftRestored, setReserveDraftRestored] = useState(false);
   const [submittingReservation, setSubmittingReservation] = useState(false);
   const [reservationError, setReservationError] = useState('');
   const [reservationFeedback, setReservationFeedback] = useState('');
@@ -231,7 +250,20 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
   const [savingOfflineId, setSavingOfflineId] = useState<string | null>(null);
   const [savingAllOffline, setSavingAllOffline] = useState(false);
   const [offlineSyncFeedback, setOfflineSyncFeedback] = useState('');
+  const [readingSessions, setReadingSessions] = useState<LibraryReadingSession[]>([]);
   const [announcements, setAnnouncements] = useState<SchoolAnnouncement[]>([]);
+
+  const studentScopeKey = `student:${registrationCode}`;
+  const {
+    progressMap,
+    counts: readingCounts,
+    toggleMarkAsRead,
+    recordPageProgress,
+  } = useLibraryReadingProgress(
+    studentScopeKey,
+    activePortal?.schoolId || '',
+    readingSessions
+  );
 
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
@@ -498,20 +530,41 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
     return () => unsub();
   }, [activePortal, registrationCode]);
 
-  // Hydrate Offline IndexedDB Digital Library for student's school immediately
+  // Hydrate Offline IndexedDB Digital Library (purging any legacy raw-text entries first)
   useEffect(() => {
     let cancelled = false;
     if (!activePortal?.schoolId) {
       setOfflineDigitalRecords([]);
       return;
     }
-    getOfflineDigitalResources(activePortal.schoolId).then((records) => {
-      if (!cancelled) {
-        setOfflineDigitalRecords(records);
-      }
-    });
+    purgeOfflineRawTextResources(activePortal.schoolId)
+      .then(() => getOfflineDigitalResources(activePortal.schoolId))
+      .then((records) => {
+        if (!cancelled) {
+          setOfflineDigitalRecords(records);
+        }
+      });
     return () => {
       cancelled = true;
+    };
+  }, [activePortal?.schoolId]);
+
+  // Subscribe to real online/offline reading sessions for student's school
+  useEffect(() => {
+    const schoolId = activePortal?.schoolId;
+    if (!schoolId) {
+      setReadingSessions([]);
+      return;
+    }
+    const unsub = subscribeLibraryReadingSessions(schoolId, setReadingSessions);
+    void flushPendingOfflineReadingSyncs(schoolId);
+    const onReconnect = () => {
+      void flushPendingOfflineReadingSyncs(schoolId);
+    };
+    window.addEventListener('online', onReconnect);
+    return () => {
+      unsub();
+      window.removeEventListener('online', onReconnect);
     };
   }, [activePortal?.schoolId]);
 
@@ -616,6 +669,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
       (snap) => {
         const docs = snap.docs
           .map((d) => ({ id: d.id, ...(d.data() as Omit<DigitalLibraryResource, 'id'>) }))
+          .filter((item) => !isTeacherOnlyDigitalCategory(item.category))
           .sort((a, b) => a.title.localeCompare(b.title));
         setLiveDigitalResources(docs);
         setLoadingDigitalLibrary(false);
@@ -641,28 +695,33 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
       return;
     }
 
+    const filterStudentAnnouncements = (items: SchoolAnnouncement[]) =>
+      items
+        .filter((a) => canStudentSeeAnnouncement(a.targetAudiences))
+        .sort((a, b) => {
+          const dateCmp = (b.publishedDate || '').localeCompare(a.publishedDate || '');
+          if (dateCmp !== 0) return dateCmp;
+          const tA = a.createdAt?.toMillis?.() || 0;
+          const tB = b.createdAt?.toMillis?.() || 0;
+          return tB - tA;
+        });
+
     const cacheKey = `malawisec_student_announcements_${activePortal.schoolId}`;
-    const cached = readCachedJson<SchoolAnnouncement[]>(cacheKey) || [];
+    const cached = filterStudentAnnouncements(readCachedJson<SchoolAnnouncement[]>(cacheKey) || []);
     if (cached.length > 0) {
       setAnnouncements(cached);
     }
 
     const annQuery = query(
       collection(db, 'studentLibraries', activePortal.schoolId, 'announcements'),
-      where('schoolId', '==', activePortal.schoolId)
+      where('targetAudiences', 'array-contains', 'Students')
     );
     const unsub = onSnapshot(
       annQuery,
       (snap) => {
-        const docs = snap.docs
-          .map((d) => ({ id: d.id, ...(d.data() as Omit<SchoolAnnouncement, 'id'>) }))
-          .sort((a, b) => {
-            const dateCmp = (b.publishedDate || '').localeCompare(a.publishedDate || '');
-            if (dateCmp !== 0) return dateCmp;
-            const tA = a.createdAt?.toMillis?.() || 0;
-            const tB = b.createdAt?.toMillis?.() || 0;
-            return tB - tA;
-          });
+        const docs = filterStudentAnnouncements(
+          snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<SchoolAnnouncement, 'id'>) }))
+        );
         setAnnouncements(docs);
         writeCachedJson(cacheKey, docs);
       },
@@ -722,14 +781,16 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
 
   const mergedDigitalResources = useMemo<ReadableDigitalResource[]>(() => {
     if (liveDigitalResources.length === 0) {
-      return offlineDigitalRecords;
+      return offlineDigitalRecords.filter((item) => !isTeacherOnlyDigitalCategory(item.category));
     }
     const byId = new Map<string, ReadableDigitalResource>();
     for (const item of liveDigitalResources) {
-      byId.set(item.id, item);
+      if (!isTeacherOnlyDigitalCategory(item.category)) {
+        byId.set(item.id, item);
+      }
     }
     for (const cached of offlineDigitalRecords) {
-      if (!byId.has(cached.id)) {
+      if (!isTeacherOnlyDigitalCategory(cached.category) && !byId.has(cached.id)) {
         byId.set(cached.id, cached);
       }
     }
@@ -1093,10 +1154,34 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
     }
   };
 
+  const studentReserveDraftKey = buildModalDraftKey(
+    registrationCode,
+    'student_reserve',
+    reserveModalBook?.id || 'none'
+  );
+
+  useEffect(() => {
+    if (!reserveModalBook || !activePortal) return;
+    if (reserveNotes.trim()) {
+      saveModalDraft(studentReserveDraftKey, { notes: reserveNotes });
+    } else {
+      clearModalDraft(studentReserveDraftKey);
+    }
+  }, [reserveModalBook, activePortal, reserveNotes, studentReserveDraftKey]);
+
   const openReserveModal = (book: CatalogBookMirror) => {
+    const draftKey = buildModalDraftKey(registrationCode, 'student_reserve', book.id);
+    const savedDraft = loadModalDraft<{ notes?: string }>(draftKey);
     setReserveModalBook(book);
-    setReserveNotes('');
+    setReserveNotes(savedDraft?.notes ?? '');
+    setReserveDraftRestored(Boolean(savedDraft?.notes));
     setReservationError('');
+  };
+
+  const handleDiscardReserveDraft = () => {
+    clearModalDraft(studentReserveDraftKey);
+    setReserveNotes('');
+    setReserveDraftRestored(false);
   };
 
   const handleConfirmReserve = async (e: React.FormEvent) => {
@@ -1131,11 +1216,13 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
         requestedDate: todayIso,
         notes: reserveNotes.trim(),
       });
+      clearModalDraft(studentReserveDraftKey);
       setReservationFeedback(
         `Reservation requested for "${reserveModalBook.title}". The librarian will mark it Ready when a copy is returned.`
       );
       setReserveModalBook(null);
       setReserveNotes('');
+      setReserveDraftRestored(false);
     } catch (err) {
       setReservationError(
         err instanceof Error ? err.message : 'Unable to submit book reservation right now.'
@@ -1155,9 +1242,9 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100">
-      <header className="sticky top-0 z-30 h-14 bg-white/95 dark:bg-[#161B22]/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 print:hidden">
-        <div className="max-w-5xl mx-auto h-full px-4 sm:px-6 flex items-center justify-between gap-4">
+    <div className="min-h-[100dvh] w-full flex flex-col bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100">
+      <header className="sticky top-0 z-30 h-14 w-full bg-white/95 dark:bg-[#161B22]/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 print:hidden">
+        <div className="w-full h-full px-3 sm:px-6 flex items-center justify-between gap-4">
           <div className="flex items-center gap-2.5 min-w-0">
             {activePortal?.logoDataUrl ? (
               <div className="h-9 w-9 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-hidden flex items-center justify-center shrink-0">
@@ -1211,8 +1298,8 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
       </header>
 
       <main
-        className={`flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 pt-5 sm:pt-7 space-y-6 ${
-          !portalLoading && activePortal && summary ? 'pb-24 sm:pb-24' : 'pb-8'
+        className={`flex-1 w-full px-3 sm:px-6 pt-4 sm:pt-6 space-y-5 ${
+          !portalLoading && activePortal && summary ? 'pb-20 sm:pb-20' : 'pb-8'
         }`}
       >
         {portalLoading ? (
@@ -1377,6 +1464,52 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
             {/* SECTION 1: DASHBOARD */}
             {activeTab === 'dashboard' && (
               <div className="space-y-5">
+                {/* School Announcements */}
+                <section
+                  aria-label="School announcements"
+                  className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Megaphone className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" aria-hidden="true" />
+                      <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        School Announcements{' '}
+                        <span className="font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                          ({announcements.length})
+                        </span>
+                      </h2>
+                    </div>
+                  </div>
+                  {announcements.length === 0 ? (
+                    <div className="py-3 text-center text-xs text-slate-500 dark:text-slate-400">
+                      No school announcements at this time.
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                      {announcements.map((item) => (
+                        <article key={item.id} className="py-3 first:pt-1 last:pb-1 space-y-1">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                              {item.title}
+                            </h3>
+                            <span className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400 shrink-0">
+                              {item.publishedDate}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">
+                            {item.message}
+                          </p>
+                          {item.authorName && (
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                              Posted by {item.authorName}
+                            </div>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </section>
+
                 <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {/* Exam Results Card */}
                   <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex flex-col justify-between gap-4">
@@ -1473,46 +1606,6 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                       <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
                     </button>
                   </div>
-                </section>
-
-                {/* School Announcements */}
-                <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <Megaphone className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" aria-hidden="true" />
-                      <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                        School Announcements ({announcements.length})
-                      </h2>
-                    </div>
-                  </div>
-                  {announcements.length === 0 ? (
-                    <div className="py-4 text-center text-xs text-slate-500 dark:text-slate-400">
-                      No school announcements at this time.
-                    </div>
-                  ) : (
-                    <div className="divide-y divide-slate-100 dark:divide-slate-800/80">
-                      {announcements.map((item) => (
-                        <article key={item.id} className="py-3 first:pt-1 last:pb-1 space-y-1">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                              {item.title}
-                            </h3>
-                            <span className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400 shrink-0">
-                              {item.publishedDate}
-                            </span>
-                          </div>
-                          <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">
-                            {item.message}
-                          </p>
-                          {item.authorName && (
-                            <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                              {item.authorName}
-                            </div>
-                          )}
-                        </article>
-                      ))}
-                    </div>
-                  )}
                 </section>
 
                 {/* Recent Fee Submissions or Subject Summary */}
@@ -2043,6 +2136,37 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                 )}
               </div>
 
+              <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800/80 bg-white dark:bg-[#161B22] grid grid-cols-3 gap-3">
+                <div>
+                  <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                    Reading Online Now
+                  </div>
+                  <div className="text-base sm:text-lg font-bold tabular-nums text-emerald-700 dark:text-emerald-400">
+                    {readingCounts.onlineActiveTotal}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                    Offline Reading Now
+                  </div>
+                  <div className="text-base sm:text-lg font-bold tabular-nums text-amber-700 dark:text-amber-400">
+                    {readingCounts.offlineActiveTotal}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                    Marked Read
+                  </div>
+                  <div className="text-base sm:text-lg font-bold tabular-nums text-slate-900 dark:text-white">
+                    {mergedDigitalResources.filter((r) => progressMap[r.id]?.isRead).length}
+                    <span className="text-xs font-normal text-slate-400">
+                      {' '}
+                      / {mergedDigitalResources.length}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
               <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800/80 bg-slate-50/60 dark:bg-slate-900/40 space-y-3">
                 {/* Prominent Search Bar + Form Level & Count */}
                 <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
@@ -2096,7 +2220,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
 
                 {/* Category Filter Buttons */}
                 <div className="flex flex-wrap items-center gap-1.5">
-                  {(['All', ...DIGITAL_RESOURCE_CATEGORIES, 'Saved Offline'] as const).map((cat) => {
+                  {(['All', ...STUDENT_DIGITAL_RESOURCE_CATEGORIES, 'Saved Offline'] as const).map((cat) => {
                     const active = digitalCategoryFilter === cat;
                     return (
                       <button
@@ -2207,6 +2331,14 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                     {filteredDigitalResources.map((item) => {
                       const isSaved = offlineIds.has(item.id);
                       const isPastPaper = item.category === 'Past Paper';
+                      const progress = progressMap[item.id];
+                      const isRead = Boolean(progress?.isRead);
+                      const lastReadPage = progress?.lastReadPage || 0;
+                      const totalPages = progress?.totalPages || 0;
+                      const lastReadLabel = formatLastReadLabel(progress?.lastReadAt);
+                      const onlineCount = readingCounts.onlineByResource[item.id] || 0;
+                      const offlineCount = readingCounts.offlineByResource[item.id] || 0;
+
                       return (
                         <article
                           key={item.id}
@@ -2256,17 +2388,55 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                                 {item.summary}
                               </p>
                             )}
+
+                            {(lastReadPage > 0 || lastReadLabel || onlineCount > 0 || offlineCount > 0 || isRead) && (
+                              <div className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400 pt-0.5">
+                                {isRead
+                                  ? 'Read'
+                                  : lastReadPage > 0
+                                  ? `Page ${lastReadPage}${totalPages > 1 ? `/${totalPages}` : ''}`
+                                  : ''}
+                                {lastReadLabel
+                                  ? `${isRead || lastReadPage > 0 ? ' · ' : ''}Last read ${lastReadLabel}`
+                                  : ''}
+                                {onlineCount > 0 || offlineCount > 0
+                                  ? `${isRead || lastReadPage > 0 || lastReadLabel ? ' · ' : ''}${onlineCount} online · ${offlineCount} offline`
+                                  : ''}
+                              </div>
+                            )}
                           </div>
 
                           <div className="pt-2 border-t border-slate-200/70 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setActiveReaderResource(item)}
-                              className="inline-flex items-center gap-1.5 min-h-[36px] px-3.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
-                            >
-                              <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
-                              <span>{isOnline ? 'Read Online' : 'Read Offline'}</span>
-                            </button>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setActiveReaderResource(item)}
+                                className="inline-flex items-center gap-1.5 min-h-[36px] px-3.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+                              >
+                                <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
+                                <span>
+                                  {lastReadPage > 1
+                                    ? `Continue p.${lastReadPage}`
+                                    : isOnline
+                                    ? 'Read Online'
+                                    : 'Read Offline'}
+                                </span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => toggleMarkAsRead(item.id)}
+                                aria-pressed={isRead}
+                                className={`inline-flex items-center gap-1 min-h-[36px] px-3 rounded-lg border text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer ${
+                                  isRead
+                                    ? 'border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300'
+                                    : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-[#161B22] text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
+                                }`}
+                              >
+                                <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                                <span>{isRead ? 'Marked Read' : 'Mark as Read'}</span>
+                              </button>
+                            </div>
 
                             {item.allowOffline ? (
                               <button
@@ -3060,13 +3230,13 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
       </main>
 
       {/* Reserve Checked-Out Book Modal */}
-      {reserveModalBook && activePortal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="reserve-book-modal-title"
-        >
+      <ModalBackdrop
+        open={Boolean(reserveModalBook && activePortal)}
+        disabled={submittingReservation}
+        ariaLabelledBy="reserve-book-modal-title"
+        onClose={() => setReserveModalBook(null)}
+      >
+        {reserveModalBook && activePortal && (
           <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -3089,6 +3259,11 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
             </div>
 
             <form onSubmit={handleConfirmReserve} className="p-5 space-y-4">
+              <DraftRestoredNotice
+                visible={reserveDraftRestored}
+                onDiscard={handleDiscardReserveDraft}
+              />
+
               <div className="rounded-xl bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 p-3.5 space-y-1">
                 <div className="text-xs font-bold text-slate-900 dark:text-white">
                   {reserveModalBook.title}
@@ -3144,8 +3319,8 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
               </div>
             </form>
           </div>
-        </div>
-      )}
+        )}
+      </ModalBackdrop>
 
       {/* Protected Read-Only Online/Offline Reader */}
       <OnlineLibraryReaderModal
@@ -3155,6 +3330,23 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
           activeReaderResource ? savingOfflineId === activeReaderResource.id : false
         }
         onToggleOffline={handleToggleOfflineResource}
+        scopeKey={studentScopeKey}
+        ownerId={activePortal?.ownerId}
+        registrationCode={registrationCode}
+        isRead={activeReaderResource ? Boolean(progressMap[activeReaderResource.id]?.isRead) : false}
+        lastReadPage={
+          activeReaderResource ? progressMap[activeReaderResource.id]?.lastReadPage || 0 : 0
+        }
+        onlineReadersCount={
+          activeReaderResource ? readingCounts.onlineByResource[activeReaderResource.id] || 0 : 0
+        }
+        offlineReadersCount={
+          activeReaderResource ? readingCounts.offlineByResource[activeReaderResource.id] || 0 : 0
+        }
+        onToggleRead={(res) => toggleMarkAsRead(res.id)}
+        onProgressChange={(resourceId, page, total, mode) =>
+          recordPageProgress(resourceId, page, total, mode)
+        }
         onClose={() => setActiveReaderResource(null)}
       />
 
@@ -3164,13 +3356,13 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
         onClose={() => setPreviewSubmission(null)}
       />
 
-      {/* Compact Centered Bottom Navigation Bar: Exam Results, Library, Fees */}
+      {/* Docked Full-Width Bottom Navigation Bar: Exam Results, Library, Fees */}
       {!portalLoading && activePortal && summary && (
         <nav
           aria-label="Student portal sections"
-          className="fixed bottom-3 sm:bottom-4 left-0 right-0 z-30 px-4 pointer-events-none pb-[env(safe-area-inset-bottom)] print:hidden"
+          className="fixed bottom-0 left-0 right-0 z-30 w-full bg-white/95 dark:bg-[#161B22]/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 pb-[env(safe-area-inset-bottom)] print:hidden"
         >
-          <div className="pointer-events-auto mx-auto w-full max-w-[360px] sm:max-w-md bg-white/95 dark:bg-[#161B22]/95 backdrop-blur-md border border-slate-200/90 dark:border-slate-800 rounded-2xl shadow-lg shadow-slate-900/10 dark:shadow-black/45 p-1.5 grid grid-cols-3 items-center gap-1.5">
+          <div className="w-full grid grid-cols-3 items-stretch">
             {(
               [
                 { id: 'results', label: 'Exam Results', icon: Award },
@@ -3186,9 +3378,9 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                   type="button"
                   onClick={() => handleSelectTab(active ? 'dashboard' : item.id)}
                   aria-pressed={active}
-                  className={`flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2 min-h-[44px] px-1.5 sm:px-3 py-1 rounded-xl text-[10.5px] sm:text-xs font-semibold leading-none whitespace-nowrap cursor-pointer transition-colors ${
+                  className={`flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2 min-h-[52px] px-2 py-1.5 text-[11px] sm:text-xs font-semibold leading-none whitespace-nowrap cursor-pointer transition-colors ${
                     active
-                      ? 'bg-emerald-700 text-white shadow-xs'
+                      ? 'bg-emerald-700 text-white'
                       : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >

@@ -5,8 +5,8 @@ export type SchoolSection =
   | 'students'
   | 'marks'
   | 'fees'
-  | 'attendance'
   | 'library'
+  | 'timebook'
   | 'staff';
 
 export type SchoolType =
@@ -19,7 +19,7 @@ export type TermName = 'Term 1' | 'Term 2' | 'Term 3';
 export type FormLevel = 1 | 2 | 3 | 4;
 export type Gender = 'Male' | 'Female';
 export type BoardingStatus = 'Day Scholar' | 'Boarder';
-export type StudentStatus = 'Active' | 'Transferred' | 'Suspended' | 'Graduated';
+export type StudentStatus = 'Active' | 'Transferred' | 'Suspended' | 'Rusticated' | 'Graduated';
 export type TeacherRole =
   | 'Head Teacher'
   | 'Deputy Head'
@@ -206,6 +206,11 @@ export interface RolePermissions {
   canWriteFees: boolean;
   canReadAttendance: boolean;
   canWriteAttendance: boolean;
+  canReadStaffAttendance: boolean;
+  canWriteStaffAttendance: boolean;
+  canAccessTimebook: boolean;
+  canManageTimebook: boolean;
+  canManageStudentCases: boolean;
   canReadLibrary: boolean;
   canWriteLibrary: boolean;
   canReadTeachers: boolean;
@@ -511,7 +516,14 @@ export interface CatalogBookMirror {
   updatedAt?: Timestamp;
 }
 
-export type DigitalResourceCategory = 'Book' | 'Past Paper' | 'Revision Guide' | 'Set Book';
+export type DigitalResourceCategory =
+  | 'Book'
+  | 'Past Paper'
+  | 'Revision Guide'
+  | 'Set Book'
+  | 'Teaching Resource'
+  | 'Scheme of Work'
+  | 'Lesson Plan';
 export type DigitalResourceFormLevel = 'All' | 'Form 1' | 'Form 2' | 'Form 3' | 'Form 4';
 export type DigitalStorageFormat = 'text' | 'pdf' | 'image';
 
@@ -551,5 +563,253 @@ export interface SchoolAnnouncement {
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
+
+export type LibraryReadingMode = 'online' | 'offline';
+
+export interface LibraryReadingSession {
+  id: string;
+  ownerId: string;
+  schoolId: string;
+  resourceId: string;
+  readerKey: string;
+  registrationCode: string;
+  mode: LibraryReadingMode;
+  isReading: boolean;
+  isRead: boolean;
+  lastReadPage: number;
+  lastReadAtMs: number;
+  expiresAtMs: number;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export type StaffAttendanceStatus = 'Present' | 'Absent' | 'Late' | 'On Leave';
+
+export interface StaffAttendanceRecord {
+  id: string;
+  ownerId: string;
+  schoolId: string;
+  date: string;
+  teacherId: string;
+  staffCode: string;
+  staffName: string;
+  roleTitle: TeacherRole;
+  status: StaffAttendanceStatus;
+  note: string;
+  recordedBy: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export type StudentCaseType =
+  | 'Suspension'
+  | 'Rustication'
+  | 'Warning'
+  | 'Misconduct'
+  | 'Truancy'
+  | 'Other';
+
+export type StudentCaseSeverity = 'Minor' | 'Moderate' | 'Severe';
+
+export type StudentCaseStatus =
+  | 'Open'
+  | 'Under Review'
+  | 'Serving Suspension'
+  | 'Rusticated'
+  | 'Resolved'
+  | 'Appealed';
+
+export interface StudentCase {
+  id: string;
+  ownerId: string;
+  schoolId: string;
+  studentId: string;
+  studentName: string;
+  admissionNo: string;
+  formLevel: FormLevel;
+  stream: string;
+  caseType: StudentCaseType;
+  severity: StudentCaseSeverity;
+  status: StudentCaseStatus;
+  title: string;
+  description: string;
+  actionTaken: string;
+  incidentDate: string;
+  suspensionEndDate: string;
+  guardianNotified: boolean;
+  recordedBy: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export type TimebookEntryStatus =
+  | 'Present'
+  | 'Late'
+  | 'Absent'
+  | 'Pending Correction'
+  | 'Administratively Recorded'
+  | 'On Leave';
+
+export type TimebookRecordingMethod = 'GPS Auto' | 'Admin Recorded';
+
+export type TimebookGpsVerificationStatus =
+  | 'Verified'
+  | 'Outside Geofence'
+  | 'Accuracy Insufficient'
+  | 'Unavailable'
+  | 'Admin Override';
+
+export type TimebookCorrectionStatus = 'None' | 'Pending' | 'Approved' | 'Rejected';
+
+export type TimebookUiStateCode =
+  | 'A_LOCATION_NOT_VERIFIED'
+  | 'B_OUTSIDE_PREMISES'
+  | 'C_GPS_PERMISSION_DENIED'
+  | 'D_GPS_ACCURACY_INSUFFICIENT'
+  | 'E_LOCATION_VERIFIED'
+  | 'F_ATTENDANCE_RECORDED'
+  | 'G_WINDOW_CLOSED'
+  | 'H_ALREADY_RECORDED';
+
+export interface TimebookHoliday {
+  date: string;
+  name: string;
+}
+
+export interface TimebookSettings {
+  id: string;
+  ownerId: string;
+  schoolId: string;
+  enabled: boolean;
+  locationConfigured: boolean;
+  locationLabel: string;
+  schoolLatitude: number;
+  schoolLongitude: number;
+  radiusMeters: number;
+  maxAccuracyMeters: number;
+  timezone: string;
+  windowStartHHMM: string;
+  defaultDeadlineHHMM: string;
+  categoryDeadlines: Record<string, string>;
+  workdays: number[];
+  holidays: TimebookHoliday[];
+  reminderSlots: string[];
+  remindersEnabled: boolean;
+  updatedBy: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export interface StaffTimebookEntry {
+  id: string;
+  ownerId: string;
+  schoolId: string;
+  date: string;
+  teacherId: string;
+  staffUid: string;
+  staffCode: string;
+  staffName: string;
+  roleTitle: TeacherRole;
+  status: TimebookEntryStatus;
+  recordingMethod: TimebookRecordingMethod;
+  timeInServer?: Timestamp | null;
+  timeInDisplay: string;
+  gpsVerificationStatus: TimebookGpsVerificationStatus;
+  latitude: number;
+  longitude: number;
+  distanceMeters: number;
+  accuracyMeters: number;
+  deadlineHHMM: string;
+  isSuspicious: boolean;
+  spoofingFlags: string[];
+  correctionStatus: TimebookCorrectionStatus;
+  correctionReason: string;
+  authorizedByUid: string;
+  authorizedByName: string;
+  serverReceiptSignature: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export type TimebookCorrectionRequestStatus = 'Pending' | 'Approved' | 'Rejected';
+
+export interface TimebookCorrectionRequest {
+  id: string;
+  ownerId: string;
+  schoolId: string;
+  date: string;
+  teacherId: string;
+  staffUid: string;
+  staffCode: string;
+  staffName: string;
+  roleTitle: TeacherRole;
+  currentStatus: string;
+  requestedStatus: 'Present' | 'Late' | 'On Leave';
+  explanation: string;
+  status: TimebookCorrectionRequestStatus;
+  adminNote: string;
+  reviewedByUid: string;
+  reviewedByName: string;
+  reviewedAtIso: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export interface TimebookAuditLog {
+  id: string;
+  ownerId: string;
+  schoolId: string;
+  entryId: string;
+  teacherId: string;
+  staffCode: string;
+  staffName: string;
+  attendanceDate: string;
+  originalStatus: string;
+  correctedStatus: string;
+  previousValues: string;
+  updatedValues: string;
+  explanation: string;
+  authorizedByUid: string;
+  authorizedByName: string;
+  createdAt?: Timestamp;
+}
+
+export interface TimebookSuspiciousLog {
+  id: string;
+  ownerId: string;
+  schoolId: string;
+  date: string;
+  teacherId: string;
+  staffUid: string;
+  staffName: string;
+  roleTitle: TeacherRole;
+  reasonCode: string;
+  detail: string;
+  latitude: number;
+  longitude: number;
+  distanceMeters: number;
+  accuracyMeters: number;
+  clientTimestampIso: string;
+  serverTimeIso: string;
+  createdAt?: Timestamp;
+}
+
+export interface TimebookNotification {
+  id: string;
+  ownerId: string;
+  schoolId: string;
+  date: string;
+  teacherId: string;
+  staffUid: string;
+  staffEmail: string;
+  slot: string;
+  title: string;
+  message: string;
+  urgency: 'info' | 'warning' | 'urgent' | 'closed';
+  readAtMs: number;
+  createdAtMs: number;
+  createdAt?: Timestamp;
+}
+
 
 

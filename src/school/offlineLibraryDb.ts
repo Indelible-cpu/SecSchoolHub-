@@ -165,3 +165,42 @@ export async function removeOfflineDigitalResource(id: string): Promise<boolean>
     }
   });
 }
+
+export async function purgeOfflineRawTextResources(schoolId?: string): Promise<number> {
+  const database = await openOfflineDb();
+  if (!database) return 0;
+
+  return new Promise((resolve) => {
+    try {
+      const tx = database.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      const req = schoolId ? store.index('schoolId').getAll(schoolId) : store.getAll();
+      let removed = 0;
+
+      req.onsuccess = () => {
+        const list = (Array.isArray(req.result) ? req.result : []) as OfflineDigitalResourceRecord[];
+        for (const item of list) {
+          const hasUploadedFile = Boolean(item.fileName && item.fileName.trim().length > 0);
+          const hasBinaryChunks = Number(item.chunkCount ?? 0) > 0 || Boolean(item.fileBytes);
+          if (!hasUploadedFile && !hasBinaryChunks) {
+            store.delete(item.id);
+            removed += 1;
+          }
+        }
+      };
+
+      tx.oncomplete = () => {
+        database.close();
+        resolve(removed);
+      };
+      tx.onerror = () => {
+        database.close();
+        resolve(0);
+      };
+    } catch {
+      database.close();
+      resolve(0);
+    }
+  });
+}
+

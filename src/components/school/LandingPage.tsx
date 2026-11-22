@@ -32,10 +32,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onToggleTheme,
 }) => {
   return (
-    <div className="min-h-screen flex flex-col bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100">
+    <div className="min-h-[100dvh] w-full flex flex-col bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100">
       {/* Minimal Single-Row Header */}
-      <header className="h-16 border-b border-slate-200/80 dark:border-slate-800/80 bg-white/90 dark:bg-[#161B22]/90">
-        <div className="max-w-5xl mx-auto h-full px-6 flex items-center justify-between gap-8">
+      <header className="h-16 w-full border-b border-slate-200/80 dark:border-slate-800/80 bg-white/90 dark:bg-[#161B22]/90">
+        <div className="w-full h-full px-4 sm:px-8 flex items-center justify-between gap-8">
           <span className="text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0">
             SecSchoolHub
           </span>
@@ -59,8 +59,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       </header>
 
       {/* Single-Screen Centered Split */}
-      <main className="flex-1 flex items-center justify-center px-6 py-10">
-        <div className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14 items-center">
+      <main className="flex-1 w-full flex items-center justify-center px-4 sm:px-8 py-10">
+        <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14 items-center">
           <div className="lg:col-span-6 space-y-5 text-center">
             <h1 className="text-3xl sm:text-4xl lg:text-[2.65rem] font-bold tracking-tight leading-[1.12] text-slate-900 dark:text-white text-balance">
               Manage your school in one place.

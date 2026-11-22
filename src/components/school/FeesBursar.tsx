@@ -9,7 +9,6 @@ import {
   FileText,
   Image as ImageIcon,
   Layers,
-  Lock,
   MessageSquare,
   Plus,
   Send,
@@ -60,7 +59,14 @@ import {
   SmsGatewayStatusResponse,
   wasLowBalanceAlertSentRecently,
 } from '../../school/smsService';
+import {
+  buildModalDraftKey,
+  clearModalDraft,
+  loadModalDraft,
+  saveModalDraft,
+} from '../../school/modalDrafts';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
+import { DraftRestoredNotice, ModalBackdrop } from './ModalBackdrop';
 import { PaymentProofPreviewModal } from './PaymentProofPreviewModal';
 
 interface FeesBursarProps {
@@ -175,6 +181,76 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
   const [rejectNote, setRejectNote] = useState('');
   const [rejectBusy, setRejectBusy] = useState(false);
   const [rejectError, setRejectError] = useState('');
+
+  const [billDraftRestored, setBillDraftRestored] = useState(false);
+  const [payDraftRestored, setPayDraftRestored] = useState(false);
+  const [policyDraftRestored, setPolicyDraftRestored] = useState(false);
+  const [approveDraftRestored, setApproveDraftRestored] = useState(false);
+  const [rejectDraftRestored, setRejectDraftRestored] = useState(false);
+
+  const billDraftKey = useMemo(
+    () => buildModalDraftKey(school.id, 'fee_bill', billScope),
+    [school.id, billScope]
+  );
+  const payDraftKey = useMemo(
+    () => buildModalDraftKey(school.id, 'fee_payment', payInvoice?.id || 'none'),
+    [school.id, payInvoice?.id]
+  );
+  const policyDraftKey = useMemo(
+    () => buildModalDraftKey(school.id, 'fee_sms_policy', 'default'),
+    [school.id]
+  );
+  const approveDraftKey = useMemo(
+    () => buildModalDraftKey(school.id, 'fee_approve', approveTarget?.id || 'none'),
+    [school.id, approveTarget?.id]
+  );
+  const rejectDraftKey = useMemo(
+    () => buildModalDraftKey(school.id, 'fee_reject', rejectTarget?.id || 'none'),
+    [school.id, rejectTarget?.id]
+  );
+
+  useEffect(() => {
+    if (!billModalOpen) return;
+    saveModalDraft(billDraftKey, {
+      billStudentId,
+      billFormLevel,
+      tuitionStr,
+      gpfStr,
+      examStr,
+      otherStr,
+    });
+  }, [billModalOpen, billDraftKey, billStudentId, billFormLevel, tuitionStr, gpfStr, examStr, otherStr]);
+
+  useEffect(() => {
+    if (!payInvoice) return;
+    saveModalDraft(payDraftKey, { payAmountStr, payMethod, payRef });
+  }, [payInvoice, payDraftKey, payAmountStr, payMethod, payRef]);
+
+  useEffect(() => {
+    if (!policyModalOpen) return;
+    saveModalDraft(policyDraftKey, {
+      policyAutoPay,
+      policyAutoLow,
+      policyThresholdStr,
+      policySenderLabel,
+    });
+  }, [policyModalOpen, policyDraftKey, policyAutoPay, policyAutoLow, policyThresholdStr, policySenderLabel]);
+
+  useEffect(() => {
+    if (!approveTarget) return;
+    saveModalDraft(approveDraftKey, {
+      approveInvoiceId,
+      approveAmountStr,
+      approveMethod,
+      approveRef,
+      approveNote,
+    });
+  }, [approveTarget, approveDraftKey, approveInvoiceId, approveAmountStr, approveMethod, approveRef, approveNote]);
+
+  useEffect(() => {
+    if (!rejectTarget) return;
+    saveModalDraft(rejectDraftKey, { rejectNote });
+  }, [rejectTarget, rejectDraftKey, rejectNote]);
 
   useEffect(() => {
     let active = true;
@@ -309,14 +385,45 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
 
   const openBillModal = (scope: 'single' | 'form') => {
     if (!canWriteFees) return;
+    const key = buildModalDraftKey(school.id, 'fee_bill', scope);
+    const draft = loadModalDraft<{
+      billStudentId: string;
+      billFormLevel: FormLevel;
+      tuitionStr: string;
+      gpfStr: string;
+      examStr: string;
+      otherStr: string;
+    }>(key);
     setBillScope(scope);
+    if (draft) {
+      setBillStudentId(draft.billStudentId || activeStudents[0]?.id || '');
+      setBillFormLevel(draft.billFormLevel || 1);
+      setTuitionStr(draft.tuitionStr ?? String(school.defaultTuitionMWK));
+      setGpfStr(draft.gpfStr ?? (govTuitionOnly ? '0' : String(school.defaultGpfMWK)));
+      setExamStr(draft.examStr ?? (govTuitionOnly ? '0' : String(school.defaultExamFeeMWK)));
+      setOtherStr(draft.otherStr ?? '0');
+      setBillDraftRestored(true);
+    } else {
+      setBillStudentId(activeStudents[0]?.id || '');
+      setTuitionStr(String(school.defaultTuitionMWK));
+      setGpfStr(govTuitionOnly ? '0' : String(school.defaultGpfMWK));
+      setExamStr(govTuitionOnly ? '0' : String(school.defaultExamFeeMWK));
+      setOtherStr('0');
+      setBillDraftRestored(false);
+    }
+    setBillError('');
+    setBillModalOpen(true);
+  };
+
+  const handleDiscardBillDraft = () => {
+    clearModalDraft(billDraftKey);
     setBillStudentId(activeStudents[0]?.id || '');
+    setBillFormLevel(1);
     setTuitionStr(String(school.defaultTuitionMWK));
     setGpfStr(govTuitionOnly ? '0' : String(school.defaultGpfMWK));
     setExamStr(govTuitionOnly ? '0' : String(school.defaultExamFeeMWK));
     setOtherStr('0');
-    setBillError('');
-    setBillModalOpen(true);
+    setBillDraftRestored(false);
   };
 
   const handleCreateBills = async (e: React.FormEvent) => {
@@ -373,6 +480,8 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
           schoolType: school.schoolType,
         });
       }
+      clearModalDraft(billDraftKey);
+      setBillDraftRestored(false);
       setBillModalOpen(false);
     } catch (err) {
       setBillError(err instanceof Error ? err.message : 'Unable to generate invoice.');
@@ -384,11 +493,36 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
   const openPaymentModal = (inv: FeeInvoice) => {
     if (!canWriteFees) return;
     const balance = Math.max(0, inv.totalBilled - inv.totalPaid);
+    const key = buildModalDraftKey(school.id, 'fee_payment', inv.id);
+    const draft = loadModalDraft<{
+      payAmountStr: string;
+      payMethod: PaymentMethod;
+      payRef: string;
+    }>(key);
     setPayInvoice(inv);
-    setPayAmountStr(String(balance > 0 ? balance : 0));
+    if (draft) {
+      setPayAmountStr(draft.payAmountStr ?? String(balance > 0 ? balance : 0));
+      setPayMethod(draft.payMethod || 'Airtel Money');
+      setPayRef(draft.payRef ?? '');
+      setPayDraftRestored(true);
+    } else {
+      setPayAmountStr(String(balance > 0 ? balance : 0));
+      setPayMethod('Airtel Money');
+      setPayRef('');
+      setPayDraftRestored(false);
+    }
+    setPayError('');
+  };
+
+  const handleDiscardPayDraft = () => {
+    clearModalDraft(payDraftKey);
+    if (payInvoice) {
+      const balance = Math.max(0, payInvoice.totalBilled - payInvoice.totalPaid);
+      setPayAmountStr(String(balance > 0 ? balance : 0));
+    }
     setPayMethod('Airtel Money');
     setPayRef('');
-    setPayError('');
+    setPayDraftRestored(false);
   };
 
   const handleRecordPayment = async (e: React.FormEvent) => {
@@ -421,6 +555,8 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
       const targetInvoice = payInvoice;
       const student = studentById.get(targetInvoice.studentId);
       const nextBalance = Math.max(0, targetInvoice.totalBilled - (targetInvoice.totalPaid + amount));
+      clearModalDraft(payDraftKey);
+      setPayDraftRestored(false);
       setPayInvoice(null);
 
       // Automated Parent SMS Notifications (Confirmation + Low Balance Alert if partial balance remains)
@@ -502,13 +638,49 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
       studentInvoices.find((inv) => inv.term === sub.term) ||
       studentInvoices[0] ||
       null;
+    const key = buildModalDraftKey(school.id, 'fee_approve', sub.id);
+    const draft = loadModalDraft<{
+      approveInvoiceId: string;
+      approveAmountStr: string;
+      approveMethod: PaymentMethod;
+      approveRef: string;
+      approveNote: string;
+    }>(key);
     setApproveTarget(sub);
-    setApproveInvoiceId(matched?.id || '');
-    setApproveAmountStr(String(sub.amount));
-    setApproveMethod(sub.method);
-    setApproveRef(sub.reference || 'Student Proof Upload');
-    setApproveNote('Verified against uploaded payment reference.');
+    if (draft) {
+      setApproveInvoiceId(draft.approveInvoiceId || matched?.id || '');
+      setApproveAmountStr(draft.approveAmountStr ?? String(sub.amount));
+      setApproveMethod(draft.approveMethod || sub.method);
+      setApproveRef(draft.approveRef ?? (sub.reference || 'Student Proof Upload'));
+      setApproveNote(draft.approveNote ?? 'Verified against uploaded payment reference.');
+      setApproveDraftRestored(true);
+    } else {
+      setApproveInvoiceId(matched?.id || '');
+      setApproveAmountStr(String(sub.amount));
+      setApproveMethod(sub.method);
+      setApproveRef(sub.reference || 'Student Proof Upload');
+      setApproveNote('Verified against uploaded payment reference.');
+      setApproveDraftRestored(false);
+    }
     setApproveError('');
+  };
+
+  const handleDiscardApproveDraft = () => {
+    clearModalDraft(approveDraftKey);
+    if (approveTarget) {
+      const studentInvoices = invoices.filter((inv) => inv.studentId === approveTarget.studentId);
+      const matched =
+        studentInvoices.find((inv) => inv.id === approveTarget.invoiceId) ||
+        studentInvoices.find((inv) => inv.term === approveTarget.term) ||
+        studentInvoices[0] ||
+        null;
+      setApproveInvoiceId(matched?.id || '');
+      setApproveAmountStr(String(approveTarget.amount));
+      setApproveMethod(approveTarget.method);
+      setApproveRef(approveTarget.reference || 'Student Proof Upload');
+      setApproveNote('Verified against uploaded payment reference.');
+    }
+    setApproveDraftRestored(false);
   };
 
   const handleConfirmApprove = async (e: React.FormEvent) => {
@@ -544,6 +716,8 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
       const student = studentById.get(targetInvoice.studentId);
       const nextBalance = Math.max(0, targetInvoice.totalBilled - (targetInvoice.totalPaid + amount));
       const approvedName = approveTarget.studentName;
+      clearModalDraft(approveDraftKey);
+      setApproveDraftRestored(false);
       setApproveTarget(null);
 
       const notes: string[] = [];
@@ -619,9 +793,23 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
 
   const openRejectModal = (sub: StudentFeeSubmission) => {
     if (!canWriteFees) return;
+    const key = buildModalDraftKey(school.id, 'fee_reject', sub.id);
+    const draft = loadModalDraft<{ rejectNote: string }>(key);
     setRejectTarget(sub);
-    setRejectNote('');
+    if (draft?.rejectNote) {
+      setRejectNote(draft.rejectNote);
+      setRejectDraftRestored(true);
+    } else {
+      setRejectNote('');
+      setRejectDraftRestored(false);
+    }
     setRejectError('');
+  };
+
+  const handleDiscardRejectDraft = () => {
+    clearModalDraft(rejectDraftKey);
+    setRejectNote('');
+    setRejectDraftRestored(false);
   };
 
   const handleConfirmReject = async (e: React.FormEvent) => {
@@ -636,6 +824,8 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
         reviewNote: rejectNote.trim() || 'Payment reference could not be verified.',
       });
       const rejectedName = rejectTarget.studentName;
+      clearModalDraft(rejectDraftKey);
+      setRejectDraftRestored(false);
       setRejectTarget(null);
       setSmsBanner({
         tone: 'warn',
@@ -736,12 +926,37 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
 
   const openPolicyModal = () => {
     if (!canWriteFees) return;
+    const key = buildModalDraftKey(school.id, 'fee_sms_policy', 'default');
+    const draft = loadModalDraft<{
+      policyAutoPay: boolean;
+      policyAutoLow: boolean;
+      policyThresholdStr: string;
+      policySenderLabel: string;
+    }>(key);
+    if (draft) {
+      setPolicyAutoPay(draft.policyAutoPay);
+      setPolicyAutoLow(draft.policyAutoLow);
+      setPolicyThresholdStr(draft.policyThresholdStr);
+      setPolicySenderLabel(draft.policySenderLabel);
+      setPolicyDraftRestored(true);
+    } else {
+      setPolicyAutoPay(effectiveSmsConfig.autoPaymentSms);
+      setPolicyAutoLow(effectiveSmsConfig.autoLowBalanceSms);
+      setPolicyThresholdStr(String(effectiveSmsConfig.lowBalanceThresholdMWK));
+      setPolicySenderLabel(effectiveSmsConfig.senderLabel);
+      setPolicyDraftRestored(false);
+    }
+    setPolicyError('');
+    setPolicyModalOpen(true);
+  };
+
+  const handleDiscardPolicyDraft = () => {
+    clearModalDraft(policyDraftKey);
     setPolicyAutoPay(effectiveSmsConfig.autoPaymentSms);
     setPolicyAutoLow(effectiveSmsConfig.autoLowBalanceSms);
     setPolicyThresholdStr(String(effectiveSmsConfig.lowBalanceThresholdMWK));
     setPolicySenderLabel(effectiveSmsConfig.senderLabel);
-    setPolicyError('');
-    setPolicyModalOpen(true);
+    setPolicyDraftRestored(false);
   };
 
   const handleSavePolicy = async (e: React.FormEvent) => {
@@ -761,6 +976,8 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
         },
         !!smsConfig
       );
+      clearModalDraft(policyDraftKey);
+      setPolicyDraftRestored(false);
       setPolicyModalOpen(false);
       setSmsBanner({
         tone: 'success',
@@ -1021,15 +1238,6 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
             )}
           </div>
         </div>
-
-        {!canWriteFees && (
-          <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/70 px-3.5 py-2.5 flex items-center gap-2.5 text-xs text-slate-700 dark:text-slate-300">
-            <Lock className="w-3.5 h-3.5 text-slate-500 shrink-0" aria-hidden="true" />
-            <span>
-              <strong>Read-Only View:</strong> Invoicing, fee collection, and SMS billing alerts are assigned to the School Bursar and Head Teacher. Use the Role Switcher in the sidebar if you need to act as School Bursar.
-            </span>
-          </div>
-        )}
 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -1548,11 +1756,7 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
 
       {/* Create Invoice Modal */}
       {billModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-        >
+        <ModalBackdrop open={billModalOpen} disabled={billingBusy} onClose={() => setBillModalOpen(false)}>
           <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
@@ -1568,6 +1772,11 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
             </div>
 
             <form onSubmit={handleCreateBills} className="mt-4 space-y-4">
+              <DraftRestoredNotice
+                visible={billDraftRestored}
+                onDiscard={handleDiscardBillDraft}
+              />
+
               {billError && (
                 <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
                   {billError}
@@ -1690,16 +1899,12 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
               </div>
             </form>
           </div>
-        </div>
+        </ModalBackdrop>
       )}
 
       {/* Record Payment Modal */}
       {payInvoice && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-        >
+        <ModalBackdrop open={Boolean(payInvoice)} disabled={payBusy} onClose={() => setPayInvoice(null)}>
           <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <div>
@@ -1720,6 +1925,11 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
             </div>
 
             <form onSubmit={handleRecordPayment} className="mt-4 space-y-4">
+              <DraftRestoredNotice
+                visible={payDraftRestored}
+                onDiscard={handleDiscardPayDraft}
+              />
+
               {payError && (
                 <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
                   {payError}
@@ -1813,16 +2023,12 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
               </div>
             </form>
           </div>
-        </div>
+        </ModalBackdrop>
       )}
 
       {/* Batch Low Balance Alerts Confirmation Modal */}
       {batchSmsOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-        >
+        <ModalBackdrop open={batchSmsOpen} disabled={batchSending} onClose={() => setBatchSmsOpen(false)}>
           <div className="w-full max-w-xl rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <div>
@@ -1927,16 +2133,12 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
               </div>
             </div>
           </div>
-        </div>
+        </ModalBackdrop>
       )}
 
       {/* SMS Policy Settings Modal */}
       {policyModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-        >
+        <ModalBackdrop open={policyModalOpen} disabled={policySaving} onClose={() => setPolicyModalOpen(false)}>
           <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
@@ -1952,6 +2154,11 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
             </div>
 
             <form onSubmit={handleSavePolicy} className="mt-4 space-y-4">
+              <DraftRestoredNotice
+                visible={policyDraftRestored}
+                onDiscard={handleDiscardPolicyDraft}
+              />
+
               {policyError && (
                 <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
                   {policyError}
@@ -2045,7 +2252,7 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
               </div>
             </form>
           </div>
-        </div>
+        </ModalBackdrop>
       )}
 
       {/* Safe Delete Confirmation Modal */}
@@ -2090,11 +2297,7 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
 
       {/* Approve Student Payment Proof Modal */}
       {approveTarget && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-        >
+        <ModalBackdrop open={Boolean(approveTarget)} disabled={approveBusy} onClose={() => setApproveTarget(null)}>
           <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <div>
@@ -2115,6 +2318,11 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
             </div>
 
             <form onSubmit={handleConfirmApprove} className="mt-4 space-y-4">
+              <DraftRestoredNotice
+                visible={approveDraftRestored}
+                onDiscard={handleDiscardApproveDraft}
+              />
+
               {approveError && (
                 <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
                   {approveError}
@@ -2227,16 +2435,12 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
               </div>
             </form>
           </div>
-        </div>
+        </ModalBackdrop>
       )}
 
       {/* Reject Student Payment Proof Modal */}
       {rejectTarget && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-        >
+        <ModalBackdrop open={Boolean(rejectTarget)} disabled={rejectBusy} onClose={() => setRejectTarget(null)}>
           <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <div>
@@ -2257,6 +2461,11 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
             </div>
 
             <form onSubmit={handleConfirmReject} className="mt-4 space-y-4">
+              <DraftRestoredNotice
+                visible={rejectDraftRestored}
+                onDiscard={handleDiscardRejectDraft}
+              />
+
               {rejectError && (
                 <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
                   {rejectError}
@@ -2296,7 +2505,7 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
               </div>
             </form>
           </div>
-        </div>
+        </ModalBackdrop>
       )}
 
       <PaymentProofPreviewModal

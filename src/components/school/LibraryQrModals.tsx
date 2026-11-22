@@ -20,6 +20,7 @@ import {
   School,
   Student,
 } from '../../school/types';
+import { ModalBackdrop } from './ModalBackdrop';
 import {
   addDaysToIsoDate,
   getLibraryDaysOverdue,
@@ -234,11 +235,11 @@ export const LibraryBookQrModal: React.FC<LibraryBookQrModalProps> = ({
   };
 
   return (
-    <div
+    <ModalBackdrop
+      open={Boolean(book)}
+      onClose={onClose}
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/65 backdrop-blur-xs p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="book-qr-modal-title"
+      ariaLabelledBy="book-qr-modal-title"
     >
       <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl space-y-5">
         <div className="flex items-start justify-between gap-3">
@@ -249,10 +250,6 @@ export const LibraryBookQrModal: React.FC<LibraryBookQrModalProps> = ({
             >
               Library Book QR Code
             </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Print or attach this QR code to the book cover for instant camera check-in and
-              checkout.
-            </p>
           </div>
           <button
             type="button"
@@ -332,7 +329,7 @@ export const LibraryBookQrModal: React.FC<LibraryBookQrModalProps> = ({
           )}
         </div>
       </div>
-    </div>
+    </ModalBackdrop>
   );
 };
 
@@ -749,11 +746,14 @@ export const LibraryQrScannerModal: React.FC<LibraryQrScannerModalProps> = ({
   };
 
   return (
-    <div
+    <ModalBackdrop
+      open={open}
+      onClose={() => {
+        stopCamera();
+        onClose();
+      }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/65 backdrop-blur-xs p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="qr-scanner-modal-title"
+      ariaLabelledBy="qr-scanner-modal-title"
     >
       <div className="w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl space-y-5">
         <div className="flex items-start justify-between gap-4">
@@ -764,11 +764,6 @@ export const LibraryQrScannerModal: React.FC<LibraryQrScannerModalProps> = ({
             >
               {matchedBook ? 'Scanned Book Status & Actions' : 'Scan Library Book QR Code'}
             </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              {matchedBook
-                ? 'Check copies back in, issue a copy to a student, or adjust inventory stock.'
-                : 'Point your device camera at a book QR label, upload a QR image, or enter an ISBN.'}
-            </p>
           </div>
           <button
             type="button"
@@ -1154,6 +1149,6 @@ export const LibraryQrScannerModal: React.FC<LibraryQrScannerModalProps> = ({
           </div>
         )}
       </div>
-    </div>
+    </ModalBackdrop>
   );
 };

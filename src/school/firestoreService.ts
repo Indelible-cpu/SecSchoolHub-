@@ -4,6 +4,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  onSnapshot,
   query,
   serverTimestamp,
   setDoc,
@@ -16,13 +17,13 @@ import {
   addDaysToIsoDate,
   calculateManebGrade,
   calculateWeightedComponent,
-  DEFAULT_DIGITAL_LIBRARY_PRESETS,
   DEFAULT_LIBRARY_BOOKS_PRESETS,
   DEFAULT_MALAWI_SUBJECT_PRESETS,
   generateStudentRegistrationCode,
   getDefaultEntryYear,
   inferStudentEntryYear,
   isGovernmentSchool,
+  isTeacherOnlyDigitalCategory,
   normalizeAssessmentComponents,
   normalizeRegistrationCode,
 } from './malawi';
@@ -45,19 +46,50 @@ import {
   LibraryLoan,
   LibraryLoanStatus,
   LibraryMaterialCategory,
+  LibraryReadingMode,
+  LibraryReadingSession,
   LibraryReservationStatus,
   LibraryTransactionAction,
   PaymentMethod,
   School,
   SchoolSubject,
   SchoolType,
+  StaffAttendanceStatus,
+  StaffTimebookEntry,
   Student,
+  StudentCaseSeverity,
+  StudentCaseStatus,
+  StudentCaseType,
   StudentFeeSubmission,
   StudentStatus,
+  Teacher,
   TeacherRole,
   TermName,
+  TimebookEntryStatus,
+  TimebookGpsVerificationStatus,
+  TimebookSettings,
 } from './types';
+import {
+  DEFAULT_TIMEBOOK_DEADLINE,
+  DEFAULT_TIMEBOOK_MAX_ACCURACY_METERS,
+  DEFAULT_TIMEBOOK_RADIUS_METERS,
+  DEFAULT_TIMEBOOK_REMINDER_SLOTS,
+  DEFAULT_TIMEBOOK_TIMEZONE,
+  DEFAULT_TIMEBOOK_WINDOW_START,
+  DEFAULT_TIMEBOOK_WORKDAYS,
+  isValidHHMM,
+  isValidLatitude,
+  isValidLongitude,
+  isValidTimeZone,
+} from './timebookUtils';
+import { syncAdminEntryToServer, type VerifyCheckInResponse } from './timebookApi';
 import { base64ToUint8Array, uint8ArrayToBase64 } from './digitalMaterialParser';
+import {
+  buildReadingSessionId,
+  getPendingOfflineReadingSyncs,
+  READING_SESSION_TTL_MS,
+  removeQueuedOfflineReadingSync,
+} from './readingProgressStore';
 
 function clampStr(val: string, max: number): string {
   return String(val ?? '').trim().slice(0, max);
@@ -1954,6 +1986,169 @@ export async function saveAttendanceEntry(
   }
 }
 
+export async function saveStaffAttendanceEntry(
+  schoolId: string,
+  ownerId: string,
+  params: {
+    date: string;
+    teacherId: string;
+    staffCode: string;
+    staffName: string;
+    roleTitle: TeacherRole;
+    status: StaffAttendanceStatus;
+    note: string;
+    recordedBy: string;
+    existingId?: string;
+  }
+): Promise<string> {
+  const recordId = params.existingId || `${params.date}_${params.teacherId}`;
+  const path = `schools/${schoolId}/staffAttendance/${recordId}`;
+  try {
+    if (params.existingId) {
+      await updateDoc(doc(db, 'schools', schoolId, 'staffAttendance', recordId), {
+        status: params.status,
+        note: clampStr(params.note, 200),
+        recordedBy: clampStr(params.recordedBy || 'School Admin', 120) || 'School Admin',
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(doc(db, 'schools', schoolId, 'staffAttendance', recordId), {
+        ownerId,
+        schoolId,
+        date: params.date,
+        teacherId: params.teacherId,
+        staffCode: clampStr(params.staffCode || 'STF', 40) || 'STF',
+        staffName: clampStr(params.staffName, 120),
+        roleTitle: params.roleTitle,
+        status: params.status,
+        note: clampStr(params.note, 200),
+        recordedBy: clampStr(params.recordedBy || 'School Admin', 120) || 'School Admin',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    return recordId;
+  } catch (error) {
+    handleFirestoreError(error, params.existingId ? OperationType.UPDATE : OperationType.CREATE, path);
+  }
+}
+
+export interface StudentCasePayload {
+  studentId: string;
+  studentName: string;
+  admissionNo: string;
+  formLevel: FormLevel;
+  stream: string;
+  caseType: StudentCaseType;
+  severity: StudentCaseSeverity;
+  status: StudentCaseStatus;
+  title: string;
+  description: string;
+  actionTaken: string;
+  incidentDate: string;
+  suspensionEndDate: string;
+  guardianNotified: boolean;
+  recordedBy: string;
+  syncStudentStatus?: StudentStatus | '';
+}
+
+export async function saveStudentCase(
+  schoolId: string,
+  ownerId: string,
+  data: StudentCasePayload,
+  existingId?: string
+): Promise<string> {
+  const caseId = existingId || makeId('case');
+  const path = `schools/${schoolId}/studentCases/${caseId}`;
+  const cleanTitle = clampStr(data.title, 140);
+  const cleanDescription = clampStr(data.description, 1200);
+  if (cleanTitle.length < 2) {
+    throw new Error('Case title must be at least 2 characters.');
+  }
+  if (cleanDescription.length < 2) {
+    throw new Error('Please enter details describing the incident or case.');
+  }
+
+  const cleanIncidentDate = /^\d{4}-\d{2}-\d{2}$/.test(data.incidentDate)
+    ? data.incidentDate
+    : new Date().toISOString().slice(0, 10);
+  const cleanSuspensionEndDate = /^\d{4}-\d{2}-\d{2}$/.test(data.suspensionEndDate)
+    ? data.suspensionEndDate
+    : '';
+
+  try {
+    const batch = writeBatch(db);
+    const caseRef = doc(db, 'schools', schoolId, 'studentCases', caseId);
+    const fields = {
+      studentName: clampStr(data.studentName, 120),
+      admissionNo: clampStr(data.admissionNo || 'N/A', 40) || 'N/A',
+      formLevel: Math.min(4, Math.max(1, Math.round(Number(data.formLevel) || 1))),
+      stream: clampStr(data.stream || 'A', 20) || 'A',
+      caseType: data.caseType,
+      severity: data.severity,
+      status: data.status,
+      title: cleanTitle,
+      description: cleanDescription,
+      actionTaken: clampStr(data.actionTaken || '', 400),
+      incidentDate: cleanIncidentDate,
+      suspensionEndDate: cleanSuspensionEndDate,
+      guardianNotified: Boolean(data.guardianNotified),
+      recordedBy: clampStr(data.recordedBy || 'School Admin', 120) || 'School Admin',
+      updatedAt: serverTimestamp(),
+    };
+
+    if (existingId) {
+      batch.update(caseRef, fields);
+    } else {
+      batch.set(caseRef, {
+        ownerId,
+        schoolId,
+        studentId: data.studentId,
+        ...fields,
+        createdAt: serverTimestamp(),
+      });
+    }
+
+    if (data.syncStudentStatus) {
+      const studentRef = doc(db, 'schools', schoolId, 'students', data.studentId);
+      const studentSnap = await getDoc(studentRef);
+      if (studentSnap.exists()) {
+        batch.update(studentRef, {
+          status: data.syncStudentStatus,
+          updatedAt: serverTimestamp(),
+        });
+        const regCode = normalizeRegistrationCode(
+          (studentSnap.data() as { registrationCode?: string }).registrationCode
+        );
+        if (regCode.length >= 6) {
+          const portalRef = doc(db, 'studentPortals', regCode);
+          const portalSnap = await getDoc(portalRef);
+          if (portalSnap.exists()) {
+            batch.update(portalRef, {
+              status: data.syncStudentStatus,
+              updatedAt: serverTimestamp(),
+            });
+          }
+        }
+      }
+    }
+
+    await batch.commit();
+    return caseId;
+  } catch (error) {
+    handleFirestoreError(error, existingId ? OperationType.UPDATE : OperationType.CREATE, path);
+  }
+}
+
+export async function removeStudentCase(schoolId: string, caseId: string): Promise<void> {
+  const path = `schools/${schoolId}/studentCases/${caseId}`;
+  try {
+    await deleteDoc(doc(db, 'schools', schoolId, 'studentCases', caseId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
 export interface LibraryLoanPayload {
   studentId: string;
   studentName: string;
@@ -2931,11 +3126,16 @@ export async function saveDigitalResource(
       updatedAt: serverTimestamp(),
     };
 
+    const teacherOnly = isTeacherOnlyDigitalCategory(data.category);
     const batch = writeBatch(db);
     if (existingId) {
       const mirrorSnap = await getDoc(mirrorRef);
       batch.update(schoolRef, sharedUpdate);
-      if (mirrorSnap.exists()) {
+      if (teacherOnly) {
+        if (mirrorSnap.exists()) {
+          batch.delete(mirrorRef);
+        }
+      } else if (mirrorSnap.exists()) {
         batch.update(mirrorRef, sharedUpdate);
       } else {
         batch.set(mirrorRef, {
@@ -2953,7 +3153,9 @@ export async function saveDigitalResource(
         createdAt: serverTimestamp(),
       };
       batch.set(schoolRef, fullCreate);
-      batch.set(mirrorRef, fullCreate);
+      if (!teacherOnly) {
+        batch.set(mirrorRef, fullCreate);
+      }
     }
 
     await batch.commit();
@@ -2980,44 +3182,52 @@ export async function removeDigitalResource(schoolId: string, resourceId: string
   }
 }
 
-export async function seedDefaultDigitalResources(
-  schoolId: string,
-  ownerId: string,
-  existingResources: DigitalLibraryResource[]
-): Promise<number> {
-  const existingTitles = new Set(existingResources.map((r) => r.title.trim().toLowerCase()));
-  const missing = DEFAULT_DIGITAL_LIBRARY_PRESETS.filter(
-    (preset) => !existingTitles.has(preset.title.trim().toLowerCase())
-  );
-  if (missing.length === 0) return 0;
-
-  const path = `schools/${schoolId}/digitalLibrary`;
+export async function purgeLegacyRawTextDigitalResources(schoolId: string): Promise<number> {
+  if (!schoolId) return 0;
   try {
+    const [staffSnap, studentSnap] = await Promise.all([
+      getDocs(collection(db, 'schools', schoolId, 'digitalLibrary')),
+      getDocs(
+        query(
+          collection(db, 'studentLibraries', schoolId, 'digitalResources'),
+          where('schoolId', '==', schoolId)
+        )
+      ),
+    ]);
+
+    const legacyIds = new Set<string>();
+    const isLegacyRawText = (data: Record<string, unknown>) => {
+      const hasFileName = typeof data.fileName === 'string' && data.fileName.trim().length > 0;
+      const chunkCount = typeof data.chunkCount === 'number' ? data.chunkCount : 0;
+      return !hasFileName && chunkCount === 0;
+    };
+
+    staffSnap.docs.forEach((d) => {
+      if (isLegacyRawText(d.data())) legacyIds.add(d.id);
+    });
+    studentSnap.docs.forEach((d) => {
+      if (isLegacyRawText(d.data())) legacyIds.add(d.id);
+    });
+
+    if (legacyIds.size === 0) return 0;
+
     const batch = writeBatch(db);
-    for (const preset of missing) {
-      const resourceId = makeId('dig');
-      const payload = {
-        ownerId,
-        schoolId,
-        title: clampStr(preset.title, 140),
-        author: clampStr(preset.author, 120),
-        subject: clampStr(preset.subject, 60),
-        formLevel: preset.formLevel,
-        category: preset.category,
-        examYear: clampStr(preset.examYear, 16),
-        summary: clampStr(preset.summary, 280),
-        content: preset.content.slice(0, 30000),
-        allowOffline: preset.allowOffline,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      };
-      batch.set(doc(db, 'schools', schoolId, 'digitalLibrary', resourceId), payload);
-      batch.set(doc(db, 'studentLibraries', schoolId, 'digitalResources', resourceId), payload);
-    }
+    const staffIdSet = new Set(staffSnap.docs.map((d) => d.id));
+    const studentIdSet = new Set(studentSnap.docs.map((d) => d.id));
+
+    legacyIds.forEach((resourceId) => {
+      if (staffIdSet.has(resourceId)) {
+        batch.delete(doc(db, 'schools', schoolId, 'digitalLibrary', resourceId));
+      }
+      if (studentIdSet.has(resourceId)) {
+        batch.delete(doc(db, 'studentLibraries', schoolId, 'digitalResources', resourceId));
+      }
+    });
+
     await batch.commit();
-    return missing.length;
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, path);
+    return legacyIds.size;
+  } catch {
+    return 0;
   }
 }
 
@@ -3564,26 +3774,6 @@ export async function seedDemoMalawiSchool(ownerId: string): Promise<string> {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-    });
-    DEFAULT_DIGITAL_LIBRARY_PRESETS.forEach((preset, idx) => {
-      const digId = `dig_${String(idx + 1).padStart(2, '0')}`;
-      const payload = {
-        ownerId,
-        schoolId,
-        title: clampStr(preset.title, 140),
-        author: clampStr(preset.author, 120),
-        subject: clampStr(preset.subject, 60),
-        formLevel: preset.formLevel,
-        category: preset.category,
-        examYear: clampStr(preset.examYear, 16),
-        summary: clampStr(preset.summary, 280),
-        content: preset.content.slice(0, 30000),
-        allowOffline: preset.allowOffline,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      };
-      batch1.set(doc(db, 'schools', schoolId, 'digitalLibrary', digId), payload);
-      batch1.set(doc(db, 'studentLibraries', schoolId, 'digitalResources', digId), payload);
     });
     await batch1.commit();
   } catch (error) {
@@ -4251,4 +4441,561 @@ export async function removeSchoolAnnouncement(
     handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
+
+export interface UpsertLibraryReadingSessionParams {
+  schoolId: string;
+  ownerId: string;
+  resourceId: string;
+  readerKey: string;
+  registrationCode?: string;
+  mode: LibraryReadingMode;
+  isReading: boolean;
+  isRead: boolean;
+  lastReadPage: number;
+  lastReadAtMs: number;
+  ttlMs?: number;
+}
+
+export async function upsertLibraryReadingSession(
+  params: UpsertLibraryReadingSessionParams
+): Promise<void> {
+  if (!params.schoolId || !params.ownerId || !params.resourceId || !params.readerKey) return;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+
+  const sessionId = buildReadingSessionId(params.resourceId, params.readerKey);
+  const ref = doc(db, 'studentLibraries', params.schoolId, 'readingSessions', sessionId);
+  const nowMs = Date.now();
+  const cleanPage = Math.max(0, Math.min(5000, Math.round(params.lastReadPage || 0)));
+  const cleanLastReadMs = Math.max(0, Math.round(params.lastReadAtMs || nowMs));
+  const ttl = params.ttlMs ?? READING_SESSION_TTL_MS;
+  const expiresAtMs = params.isReading ? nowMs + ttl : nowMs;
+  const regCode = params.registrationCode ? normalizeRegistrationCode(params.registrationCode) : '';
+
+  try {
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      await updateDoc(ref, {
+        mode: params.mode,
+        isReading: params.isReading,
+        isRead: params.isRead,
+        lastReadPage: cleanPage,
+        lastReadAtMs: cleanLastReadMs,
+        expiresAtMs,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(ref, {
+        ownerId: params.ownerId,
+        schoolId: params.schoolId,
+        resourceId: params.resourceId,
+        readerKey: params.readerKey,
+        registrationCode: regCode,
+        mode: params.mode,
+        isReading: params.isReading,
+        isRead: params.isRead,
+        lastReadPage: cleanPage,
+        lastReadAtMs: cleanLastReadMs,
+        expiresAtMs,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch {
+    // Reading session telemetry fails silently so reading never breaks if offline/restricted
+  }
+}
+
+export async function closeLibraryReadingSession(params: {
+  schoolId: string;
+  ownerId: string;
+  resourceId: string;
+  readerKey: string;
+  registrationCode?: string;
+  mode: LibraryReadingMode;
+  isRead: boolean;
+  lastReadPage: number;
+  lastReadAtMs: number;
+}): Promise<void> {
+  if (!params.schoolId || !params.resourceId || !params.readerKey) return;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+
+  const sessionId = buildReadingSessionId(params.resourceId, params.readerKey);
+  const ref = doc(db, 'studentLibraries', params.schoolId, 'readingSessions', sessionId);
+  try {
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return;
+    const nowMs = Date.now();
+    await updateDoc(ref, {
+      mode: params.mode,
+      isReading: false,
+      isRead: params.isRead,
+      lastReadPage: Math.max(0, Math.min(5000, Math.round(params.lastReadPage || 0))),
+      lastReadAtMs: Math.max(0, Math.round(params.lastReadAtMs || nowMs)),
+      expiresAtMs: nowMs,
+      updatedAt: serverTimestamp(),
+    });
+  } catch {
+    // Ignore close errors
+  }
+}
+
+export async function flushPendingOfflineReadingSyncs(schoolId?: string): Promise<void> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+  const pending = getPendingOfflineReadingSyncs(schoolId);
+  if (pending.length === 0) return;
+
+  for (const item of pending) {
+    try {
+      await upsertLibraryReadingSession({
+        schoolId: item.schoolId,
+        ownerId: item.ownerId,
+        resourceId: item.resourceId,
+        readerKey: item.readerKey,
+        registrationCode: item.registrationCode,
+        mode: 'offline',
+        isReading: false,
+        isRead: item.isRead,
+        lastReadPage: item.lastReadPage,
+        lastReadAtMs: item.lastReadAtMs,
+        ttlMs: 0,
+      });
+      removeQueuedOfflineReadingSync(item.sessionId);
+    } catch {
+      // Leave queued until next reconnect
+    }
+  }
+}
+
+export function subscribeLibraryReadingSessions(
+  schoolId: string,
+  onData: (sessions: LibraryReadingSession[]) => void,
+  onError?: (err: unknown) => void
+): () => void {
+  if (!schoolId) {
+    onData([]);
+    return () => {};
+  }
+  const q = query(
+    collection(db, 'studentLibraries', schoolId, 'readingSessions'),
+    where('schoolId', '==', schoolId)
+  );
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const items: LibraryReadingSession[] = snapshot.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<LibraryReadingSession, 'id'>),
+      }));
+      onData(items);
+    },
+    (error) => {
+      onError?.(error);
+    }
+  );
+}
+
+// ============================================================================
+// SMART GPS-BASED STAFF TIMEBOOK & ATTENDANCE MODULE
+// ============================================================================
+
+export async function saveTimebookSettings(params: {
+  schoolId: string;
+  ownerId: string;
+  settings: Omit<TimebookSettings, 'id' | 'ownerId' | 'schoolId' | 'createdAt' | 'updatedAt'>;
+}): Promise<void> {
+  const ref = doc(db, 'schools', params.schoolId, 'timebookSettings', 'default');
+  const path = `schools/${params.schoolId}/timebookSettings/default`;
+
+  const safeLat = isValidLatitude(params.settings.schoolLatitude)
+    ? Number(params.settings.schoolLatitude.toFixed(6))
+    : -15.7861;
+  const safeLng = isValidLongitude(params.settings.schoolLongitude)
+    ? Number(params.settings.schoolLongitude.toFixed(6))
+    : 35.0058;
+  const safeRadius = Math.min(5000, Math.max(20, Math.round(params.settings.radiusMeters || DEFAULT_TIMEBOOK_RADIUS_METERS)));
+  const safeAccuracy = Math.min(1000, Math.max(10, Math.round(params.settings.maxAccuracyMeters || DEFAULT_TIMEBOOK_MAX_ACCURACY_METERS)));
+  const safeTz = isValidTimeZone(params.settings.timezone)
+    ? params.settings.timezone
+    : DEFAULT_TIMEBOOK_TIMEZONE;
+  const safeWindowStart = isValidHHMM(params.settings.windowStartHHMM)
+    ? params.settings.windowStartHHMM.trim()
+    : DEFAULT_TIMEBOOK_WINDOW_START;
+  const safeDeadline = isValidHHMM(params.settings.defaultDeadlineHHMM)
+    ? params.settings.defaultDeadlineHHMM.trim()
+    : DEFAULT_TIMEBOOK_DEADLINE;
+
+  const cleanCategoryDeadlines: Record<string, string> = {};
+  for (const [k, v] of Object.entries(params.settings.categoryDeadlines || {})) {
+    const cleanKey = clampStr(k, 40);
+    if (cleanKey && isValidHHMM(v)) {
+      cleanCategoryDeadlines[cleanKey] = v.trim();
+    }
+  }
+
+  const cleanWorkdays = Array.isArray(params.settings.workdays) && params.settings.workdays.length > 0
+    ? Array.from(new Set(params.settings.workdays.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))).sort((a, b) => a - b)
+    : [...DEFAULT_TIMEBOOK_WORKDAYS];
+
+  const cleanHolidays = (Array.isArray(params.settings.holidays) ? params.settings.holidays : [])
+    .filter((h) => /^\d{4}-\d{2}-\d{2}$/.test(h?.date || '') && clampStr(h?.name || '', 80))
+    .slice(0, 60)
+    .map((h) => ({ date: h.date.trim(), name: clampStr(h.name, 80) }));
+
+  const cleanReminders = Array.isArray(params.settings.reminderSlots)
+    ? Array.from(new Set(params.settings.reminderSlots.map((s) => s.trim()).filter((s) => isValidHHMM(s)))).sort().slice(0, 8)
+    : [...DEFAULT_TIMEBOOK_REMINDER_SLOTS];
+
+  const payload = {
+    ownerId: params.ownerId,
+    schoolId: params.schoolId,
+    enabled: Boolean(params.settings.enabled),
+    locationConfigured: Boolean(params.settings.locationConfigured),
+    locationLabel: clampStr(params.settings.locationLabel || 'School Main Campus', 120) || 'School Main Campus',
+    schoolLatitude: safeLat,
+    schoolLongitude: safeLng,
+    radiusMeters: safeRadius,
+    maxAccuracyMeters: safeAccuracy,
+    timezone: safeTz,
+    windowStartHHMM: safeWindowStart,
+    defaultDeadlineHHMM: safeDeadline,
+    categoryDeadlines: cleanCategoryDeadlines,
+    workdays: cleanWorkdays,
+    holidays: cleanHolidays,
+    reminderSlots: cleanReminders,
+    remindersEnabled: Boolean(params.settings.remindersEnabled),
+    updatedBy: clampStr(params.settings.updatedBy || 'School Admin', 120) || 'School Admin',
+    updatedAt: serverTimestamp(),
+  };
+
+  try {
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      await updateDoc(ref, payload);
+    } else {
+      await setDoc(ref, {
+        ...payload,
+        createdAt: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function saveVerifiedTimebookEntry(params: {
+  ownerId: string;
+  verifiedEntry: VerifyCheckInResponse['entry'];
+}): Promise<void> {
+  const e = params.verifiedEntry;
+  const entryId = `${e.date}_${e.teacherId}`;
+  const ref = doc(db, 'schools', e.schoolId, 'timebookEntries', entryId);
+
+  try {
+    await setDoc(ref, {
+      ownerId: params.ownerId,
+      schoolId: e.schoolId,
+      date: e.date,
+      teacherId: e.teacherId,
+      staffUid: e.staffUid,
+      staffCode: clampStr(e.staffCode, 30),
+      staffName: clampStr(e.staffName, 120),
+      roleTitle: e.roleTitle,
+      status: 'Present',
+      recordingMethod: 'GPS Auto',
+      timeInServer: serverTimestamp(),
+      timeInDisplay: clampStr(e.timeInDisplay, 20),
+      gpsVerificationStatus: 'Verified',
+      latitude: Number(e.latitude),
+      longitude: Number(e.longitude),
+      distanceMeters: Number(e.distanceMeters),
+      accuracyMeters: Number(e.accuracyMeters),
+      deadlineHHMM: e.deadlineHHMM,
+      isSuspicious: Boolean(e.isSuspicious),
+      spoofingFlags: Array.isArray(e.spoofingFlags) ? e.spoofingFlags.slice(0, 10) : [],
+      correctionStatus: 'None',
+      correctionReason: '',
+      authorizedByUid: '',
+      authorizedByName: '',
+      serverReceiptSignature: clampStr(e.serverReceiptSignature, 128),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `schools/${e.schoolId}/timebookEntries/${entryId}`);
+    throw err;
+  }
+}
+
+export async function logTimebookSuspiciousAttempt(params: {
+  schoolId: string;
+  ownerId: string;
+  date: string;
+  teacherId: string;
+  staffUid: string;
+  staffName: string;
+  roleTitle: TeacherRole;
+  reasonCode: string;
+  detail: string;
+  latitude: number;
+  longitude: number;
+  distanceMeters: number;
+  accuracyMeters: number;
+  clientTimestampIso: string;
+  serverTimeIso: string;
+}): Promise<void> {
+  if (!params.schoolId || !params.teacherId || !params.staffUid) return;
+  const logId = makeId('susp');
+  const ref = doc(db, 'schools', params.schoolId, 'timebookSuspiciousLogs', logId);
+  try {
+    await setDoc(ref, {
+      ownerId: params.ownerId,
+      schoolId: params.schoolId,
+      date: params.date,
+      teacherId: params.teacherId,
+      staffUid: params.staffUid,
+      staffName: clampStr(params.staffName, 120),
+      roleTitle: params.roleTitle,
+      reasonCode: clampStr(params.reasonCode, 80),
+      detail: clampStr(params.detail, 600),
+      latitude: isValidLatitude(params.latitude) ? params.latitude : 0,
+      longitude: isValidLongitude(params.longitude) ? params.longitude : 0,
+      distanceMeters: Math.max(0, Math.min(25_000_000, Number(params.distanceMeters) || 0)),
+      accuracyMeters: Math.max(0, Math.min(100_000, Number(params.accuracyMeters) || 0)),
+      clientTimestampIso: clampStr(params.clientTimestampIso, 40),
+      serverTimeIso: clampStr(params.serverTimeIso, 40),
+      createdAt: serverTimestamp(),
+    });
+  } catch {
+    // Do not break user error reporting if suspicious telemetry write is rejected
+  }
+}
+
+export async function submitTimebookCorrectionRequest(params: {
+  schoolId: string;
+  ownerId: string;
+  date: string;
+  teacherId: string;
+  staffUid: string;
+  staffCode: string;
+  staffName: string;
+  roleTitle: TeacherRole;
+  currentStatus: string;
+  requestedStatus: 'Present' | 'Late' | 'On Leave';
+  explanation: string;
+}): Promise<string> {
+  const cleanExplanation = clampStr(params.explanation, 600);
+  if (cleanExplanation.length < 5) {
+    throw new Error('Please provide a clear explanation (at least 5 characters) for your administrator.');
+  }
+
+  const requestId = makeId('treq');
+  const ref = doc(db, 'schools', params.schoolId, 'timebookCorrectionRequests', requestId);
+  await setDoc(ref, {
+    ownerId: params.ownerId,
+    schoolId: params.schoolId,
+    date: params.date,
+    teacherId: params.teacherId,
+    staffUid: params.staffUid,
+    staffCode: clampStr(params.staffCode, 30),
+    staffName: clampStr(params.staffName, 120),
+    roleTitle: params.roleTitle,
+    currentStatus: clampStr(params.currentStatus || 'Not Signed In', 40),
+    requestedStatus: params.requestedStatus,
+    explanation: cleanExplanation,
+    status: 'Pending',
+    adminNote: '',
+    reviewedByUid: '',
+    reviewedByName: '',
+    reviewedAtIso: '',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  return requestId;
+}
+
+export async function adminSaveTimebookCorrection(params: {
+  schoolId: string;
+  ownerId: string;
+  teacher: Teacher;
+  date: string;
+  existingEntry?: StaffTimebookEntry | null;
+  newStatus: TimebookEntryStatus;
+  timeInDisplay: string;
+  explanation: string;
+  authorizedByName: string;
+  deadlineHHMM: string;
+  correctionRequestId?: string;
+}): Promise<void> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error('Administrator authentication is required.');
+
+  const cleanExplanation = clampStr(params.explanation, 600);
+  if (cleanExplanation.length < 5) {
+    throw new Error('Enter a justification (minimum 5 characters) before saving an attendance correction.');
+  }
+
+  const entryId = `${params.date}_${params.teacher.id}`;
+  const entryRef = doc(db, 'schools', params.schoolId, 'timebookEntries', entryId);
+  const auditId = makeId('taudit');
+  const auditRef = doc(db, 'schools', params.schoolId, 'timebookAuditLogs', auditId);
+
+  const originalStatus = params.existingEntry?.status || 'Not Signed In';
+  const cleanTimeIn = clampStr(params.timeInDisplay || '', 20);
+  const previousValuesSummary = params.existingEntry
+    ? `Status: ${params.existingEntry.status}; Method: ${params.existingEntry.recordingMethod}; TimeIn: ${params.existingEntry.timeInDisplay || '—'}`
+    : 'Status: Not Signed In; Method: None; TimeIn: —';
+  const updatedValuesSummary = `Status: ${params.newStatus}; Method: Admin Recorded; TimeIn: ${cleanTimeIn || '—'}`;
+
+  const batch = writeBatch(db);
+
+  if (params.existingEntry) {
+    batch.update(entryRef, {
+      status: params.newStatus,
+      recordingMethod: 'Admin Recorded',
+      timeInServer: params.newStatus === 'Absent' || params.newStatus === 'On Leave' ? null : serverTimestamp(),
+      timeInDisplay: cleanTimeIn,
+      gpsVerificationStatus: 'Admin Override' as TimebookGpsVerificationStatus,
+      correctionStatus: 'Approved',
+      correctionReason: clampStr(cleanExplanation, 400),
+      authorizedByUid: uid,
+      authorizedByName: clampStr(params.authorizedByName, 120),
+      updatedAt: serverTimestamp(),
+    });
+  } else {
+    batch.set(entryRef, {
+      ownerId: params.ownerId,
+      schoolId: params.schoolId,
+      date: params.date,
+      teacherId: params.teacher.id,
+      staffUid: '',
+      staffCode: clampStr(params.teacher.staffCode, 30),
+      staffName: clampStr(params.teacher.fullName, 120),
+      roleTitle: params.teacher.roleTitle,
+      status: params.newStatus,
+      recordingMethod: 'Admin Recorded',
+      timeInServer: params.newStatus === 'Absent' || params.newStatus === 'On Leave' ? null : serverTimestamp(),
+      timeInDisplay: cleanTimeIn,
+      gpsVerificationStatus: 'Admin Override' as TimebookGpsVerificationStatus,
+      latitude: 0,
+      longitude: 0,
+      distanceMeters: 0,
+      accuracyMeters: 0,
+      deadlineHHMM: isValidHHMM(params.deadlineHHMM) ? params.deadlineHHMM : DEFAULT_TIMEBOOK_DEADLINE,
+      isSuspicious: false,
+      spoofingFlags: [],
+      correctionStatus: 'Approved',
+      correctionReason: clampStr(cleanExplanation, 400),
+      authorizedByUid: uid,
+      authorizedByName: clampStr(params.authorizedByName, 120),
+      serverReceiptSignature: `ADMIN_OVERRIDE_${Date.now().toString(36)}`,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  if (params.correctionRequestId) {
+    const reqRef = doc(
+      db,
+      'schools',
+      params.schoolId,
+      'timebookCorrectionRequests',
+      params.correctionRequestId
+    );
+    batch.update(reqRef, {
+      status: 'Approved',
+      adminNote: clampStr(cleanExplanation, 400),
+      reviewedByUid: uid,
+      reviewedByName: clampStr(params.authorizedByName, 120),
+      reviewedAtIso: new Date().toISOString().slice(0, 40),
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  batch.set(auditRef, {
+    ownerId: params.ownerId,
+    schoolId: params.schoolId,
+    entryId,
+    teacherId: params.teacher.id,
+    staffCode: clampStr(params.teacher.staffCode, 30),
+    staffName: clampStr(params.teacher.fullName, 120),
+    attendanceDate: params.date,
+    originalStatus: clampStr(originalStatus, 40),
+    correctedStatus: clampStr(params.newStatus, 40),
+    previousValues: clampStr(previousValuesSummary, 600),
+    updatedValues: clampStr(updatedValuesSummary, 600),
+    explanation: cleanExplanation,
+    authorizedByUid: uid,
+    authorizedByName: clampStr(params.authorizedByName, 120),
+    createdAt: serverTimestamp(),
+  });
+
+  await batch.commit();
+
+  // Notify backend reminder scheduler immediately so reminders stop for this staff member today
+  try {
+    await syncAdminEntryToServer({
+      schoolId: params.schoolId,
+      date: params.date,
+      teacherId: params.teacher.id,
+      status: params.newStatus,
+      timeInDisplay: cleanTimeIn,
+    });
+  } catch {
+    // Non-blocking: Firestore correction & immutable audit record already committed
+  }
+}
+
+export async function adminRejectTimebookCorrectionRequest(params: {
+  schoolId: string;
+  ownerId: string;
+  requestId: string;
+  teacherId: string;
+  staffCode: string;
+  staffName: string;
+  attendanceDate: string;
+  originalStatus: string;
+  adminNote: string;
+  authorizedByName: string;
+}): Promise<void> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error('Administrator authentication is required.');
+  const cleanNote = clampStr(params.adminNote, 400);
+  if (cleanNote.length < 5) {
+    throw new Error('Provide a clear reason (at least 5 characters) when rejecting a correction request.');
+  }
+
+  const reqRef = doc(db, 'schools', params.schoolId, 'timebookCorrectionRequests', params.requestId);
+  const auditRef = doc(db, 'schools', params.schoolId, 'timebookAuditLogs', makeId('taudit'));
+  const entryId = `${params.attendanceDate}_${params.teacherId}`;
+
+  const batch = writeBatch(db);
+  batch.update(reqRef, {
+    status: 'Rejected',
+    adminNote: cleanNote,
+    reviewedByUid: uid,
+    reviewedByName: clampStr(params.authorizedByName, 120),
+    reviewedAtIso: new Date().toISOString().slice(0, 40),
+    updatedAt: serverTimestamp(),
+  });
+  batch.set(auditRef, {
+    ownerId: params.ownerId,
+    schoolId: params.schoolId,
+    entryId,
+    teacherId: params.teacherId,
+    staffCode: clampStr(params.staffCode, 30),
+    staffName: clampStr(params.staffName, 120),
+    attendanceDate: params.attendanceDate,
+    originalStatus: clampStr(params.originalStatus || 'Not Signed In', 40),
+    correctedStatus: 'Correction Rejected',
+    previousValues: `Pending correction request for ${params.attendanceDate}`,
+    updatedValues: `Rejected: ${cleanNote}`,
+    explanation: cleanNote,
+    authorizedByUid: uid,
+    authorizedByName: clampStr(params.authorizedByName, 120),
+    createdAt: serverTimestamp(),
+  });
+  await batch.commit();
+}
+
+
 

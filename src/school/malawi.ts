@@ -10,6 +10,11 @@ import {
   RolePermissions,
   SchoolSubject,
   SchoolType,
+  StaffAttendanceStatus,
+  StudentCaseSeverity,
+  StudentCaseStatus,
+  StudentCaseType,
+  StudentStatus,
   TermName,
   WorkspaceRole,
 } from './types';
@@ -214,7 +219,7 @@ export function getRolePermissions(role: WorkspaceRole): RolePermissions {
       role,
       roleLabel: 'School Owner / Admin',
       homeTitle: 'School Admin Dashboard',
-      allowedSections: ['overview', 'students', 'marks', 'fees', 'attendance', 'library', 'staff'],
+      allowedSections: ['overview', 'students', 'marks', 'fees', 'library', 'staff'],
       canManageSchool: true,
       canManageStaff: true,
       canManageStudents: true,
@@ -224,6 +229,11 @@ export function getRolePermissions(role: WorkspaceRole): RolePermissions {
       canWriteFees: false,
       canReadAttendance: true,
       canWriteAttendance: false,
+      canReadStaffAttendance: true,
+      canWriteStaffAttendance: true,
+      canAccessTimebook: true,
+      canManageTimebook: true,
+      canManageStudentCases: true,
       canReadLibrary: true,
       canWriteLibrary: false,
       canReadTeachers: true,
@@ -235,7 +245,7 @@ export function getRolePermissions(role: WorkspaceRole): RolePermissions {
       role,
       roleLabel: 'Head Teacher',
       homeTitle: 'Head Teacher Dashboard',
-      allowedSections: ['overview', 'students', 'marks', 'fees', 'attendance', 'library', 'staff'],
+      allowedSections: ['overview', 'students', 'marks', 'fees', 'library', 'timebook', 'staff'],
       canManageSchool: false,
       canManageStaff: false,
       canManageStudents: true,
@@ -244,7 +254,12 @@ export function getRolePermissions(role: WorkspaceRole): RolePermissions {
       canReadFees: true,
       canWriteFees: true,
       canReadAttendance: true,
-      canWriteAttendance: true,
+      canWriteAttendance: false,
+      canReadStaffAttendance: true,
+      canWriteStaffAttendance: false,
+      canAccessTimebook: true,
+      canManageTimebook: false,
+      canManageStudentCases: false,
       canReadLibrary: true,
       canWriteLibrary: true,
       canReadTeachers: true,
@@ -256,7 +271,7 @@ export function getRolePermissions(role: WorkspaceRole): RolePermissions {
       role,
       roleLabel: 'Deputy Head Teacher',
       homeTitle: 'Deputy Head Dashboard',
-      allowedSections: ['overview', 'students', 'marks', 'attendance', 'library', 'staff'],
+      allowedSections: ['overview', 'students', 'marks', 'library', 'timebook', 'staff'],
       canManageSchool: false,
       canManageStaff: false,
       canManageStudents: true,
@@ -265,7 +280,12 @@ export function getRolePermissions(role: WorkspaceRole): RolePermissions {
       canReadFees: false,
       canWriteFees: false,
       canReadAttendance: true,
-      canWriteAttendance: true,
+      canWriteAttendance: false,
+      canReadStaffAttendance: true,
+      canWriteStaffAttendance: false,
+      canAccessTimebook: true,
+      canManageTimebook: false,
+      canManageStudentCases: false,
       canReadLibrary: true,
       canWriteLibrary: true,
       canReadTeachers: true,
@@ -277,7 +297,7 @@ export function getRolePermissions(role: WorkspaceRole): RolePermissions {
       role,
       roleLabel: 'School Bursar',
       homeTitle: 'Bursar Financial Dashboard',
-      allowedSections: ['overview', 'fees', 'students'],
+      allowedSections: ['overview', 'fees', 'students', 'timebook'],
       canManageSchool: false,
       canManageStaff: false,
       canManageStudents: false,
@@ -287,6 +307,11 @@ export function getRolePermissions(role: WorkspaceRole): RolePermissions {
       canWriteFees: true,
       canReadAttendance: false,
       canWriteAttendance: false,
+      canReadStaffAttendance: false,
+      canWriteStaffAttendance: false,
+      canAccessTimebook: true,
+      canManageTimebook: false,
+      canManageStudentCases: false,
       canReadLibrary: false,
       canWriteLibrary: false,
       canReadTeachers: false,
@@ -298,7 +323,7 @@ export function getRolePermissions(role: WorkspaceRole): RolePermissions {
       role,
       roleLabel: 'School Librarian',
       homeTitle: 'School Library Dashboard',
-      allowedSections: ['overview', 'library', 'students'],
+      allowedSections: ['overview', 'library', 'students', 'timebook'],
       canManageSchool: false,
       canManageStaff: false,
       canManageStudents: false,
@@ -308,23 +333,29 @@ export function getRolePermissions(role: WorkspaceRole): RolePermissions {
       canWriteFees: false,
       canReadAttendance: false,
       canWriteAttendance: false,
+      canReadStaffAttendance: false,
+      canWriteStaffAttendance: false,
+      canAccessTimebook: true,
+      canManageTimebook: false,
+      canManageStudentCases: false,
       canReadLibrary: true,
       canWriteLibrary: true,
       canReadTeachers: false,
     };
   }
 
-  // Head of Department, Form Teacher, Subject Teacher
+  // Head of Department, Form Teacher, Form Master, Subject Teacher
+  const isFormTeacher = role === 'Form Teacher' || role === 'Form Master';
   const roleLabel =
     role === 'Head of Department'
       ? 'Head of Department (HOD)'
-      : role === 'Form Teacher' || role === 'Form Master'
+      : isFormTeacher
       ? 'Form Teacher'
       : role;
   const homeTitle =
     role === 'Head of Department'
       ? 'HOD Department Dashboard'
-      : role === 'Form Teacher' || role === 'Form Master'
+      : isFormTeacher
       ? 'Form Teacher Dashboard'
       : 'Teacher Home Dashboard';
 
@@ -332,7 +363,7 @@ export function getRolePermissions(role: WorkspaceRole): RolePermissions {
     role,
     roleLabel,
     homeTitle,
-    allowedSections: ['overview', 'marks', 'attendance', 'library', 'students'],
+    allowedSections: ['overview', 'marks', 'library', 'students', 'timebook'],
     canManageSchool: false,
     canManageStaff: false,
     canManageStudents: false,
@@ -341,12 +372,52 @@ export function getRolePermissions(role: WorkspaceRole): RolePermissions {
     canReadFees: false,
     canWriteFees: false,
     canReadAttendance: true,
-    canWriteAttendance: true,
+    canWriteAttendance: isFormTeacher,
+    canReadStaffAttendance: false,
+    canWriteStaffAttendance: false,
+    canAccessTimebook: true,
+    canManageTimebook: false,
+    canManageStudentCases: false,
     canReadLibrary: true,
     canWriteLibrary: true,
     canReadTeachers: false,
   };
 }
+
+export const STUDENT_STATUSES: StudentStatus[] = [
+  'Active',
+  'Suspended',
+  'Rusticated',
+  'Transferred',
+  'Graduated',
+];
+
+export const STAFF_ATTENDANCE_STATUSES: StaffAttendanceStatus[] = [
+  'Present',
+  'Late',
+  'Absent',
+  'On Leave',
+];
+
+export const STUDENT_CASE_TYPES: StudentCaseType[] = [
+  'Suspension',
+  'Rustication',
+  'Warning',
+  'Misconduct',
+  'Truancy',
+  'Other',
+];
+
+export const STUDENT_CASE_SEVERITIES: StudentCaseSeverity[] = ['Minor', 'Moderate', 'Severe'];
+
+export const STUDENT_CASE_STATUSES: StudentCaseStatus[] = [
+  'Open',
+  'Under Review',
+  'Serving Suspension',
+  'Rusticated',
+  'Resolved',
+  'Appealed',
+];
 
 export const LIBRARY_MATERIAL_CATEGORIES: LibraryMaterialCategory[] = [
   'Textbook',
@@ -583,12 +654,31 @@ export const DEFAULT_LIBRARY_BOOKS_PRESETS: DefaultLibraryBookPreset[] = [
   },
 ];
 
-export const DIGITAL_RESOURCE_CATEGORIES: DigitalResourceCategory[] = [
+export const STUDENT_DIGITAL_RESOURCE_CATEGORIES: DigitalResourceCategory[] = [
   'Book',
   'Past Paper',
   'Revision Guide',
   'Set Book',
 ];
+
+export const TEACHER_DIGITAL_RESOURCE_CATEGORIES: DigitalResourceCategory[] = [
+  'Teaching Resource',
+  'Scheme of Work',
+  'Lesson Plan',
+];
+
+export const DIGITAL_RESOURCE_CATEGORIES: DigitalResourceCategory[] = [
+  ...STUDENT_DIGITAL_RESOURCE_CATEGORIES,
+  ...TEACHER_DIGITAL_RESOURCE_CATEGORIES,
+];
+
+export function isTeacherOnlyDigitalCategory(category: DigitalResourceCategory): boolean {
+  return (
+    category === 'Teaching Resource' ||
+    category === 'Scheme of Work' ||
+    category === 'Lesson Plan'
+  );
+}
 
 export const DIGITAL_RESOURCE_FORM_LEVELS: DigitalResourceFormLevel[] = [
   'All',
@@ -596,187 +686,6 @@ export const DIGITAL_RESOURCE_FORM_LEVELS: DigitalResourceFormLevel[] = [
   'Form 2',
   'Form 3',
   'Form 4',
-];
-
-export interface DefaultDigitalLibraryPreset {
-  title: string;
-  author: string;
-  subject: string;
-  formLevel: DigitalResourceFormLevel;
-  category: DigitalResourceCategory;
-  examYear: string;
-  summary: string;
-  content: string;
-  allowOffline: boolean;
-}
-
-export const DEFAULT_DIGITAL_LIBRARY_PRESETS: DefaultDigitalLibraryPreset[] = [
-  {
-    title: 'The Pearl — Complete Literature Study Guide',
-    author: 'English Department Panel',
-    subject: 'English',
-    formLevel: 'Form 4',
-    category: 'Set Book',
-    examYear: 'MSCE',
-    summary: 'Chapter-by-chapter plot breakdown, character profiles, themes, and MSCE Paper II essay questions for John Steinbeck’s The Pearl.',
-    allowOffline: true,
-    content: `## Overview & Setting
-Set in the coastal Mexican town of La Paz, The Pearl follows Kino, a young pearl diver, his wife Juana, and their infant son Coyotito. Steinbeck uses the parable form to examine how sudden wealth exposes colonial exploitation, greed, and the fragility of family harmony.
-
-## Chapter-by-Chapter Summary
-Chapters 1–2: Coyotito is stung by a scorpion. When the arrogant town doctor refuses to treat the child because Kino lacks money, Juana and Kino paddle to the oyster beds where Kino discovers "the Pearl of the World."
-Chapters 3–4: Word spreads across La Paz. The doctor returns with a staged cure, the priest reminds Kino of his obligations, and the pearl buyers conspire to offer a fraction of the pearl's worth. Kino refuses and resolves to walk to the capital.
-Chapters 5–6: Desperation escalates. Juana tries to throw the pearl back into the sea; Kino strikes her, then kills an attacker on the path. Pursued into the mountains by trackers, Kino loses Coyotito to a stray rifle shot. Returning silently to La Paz, Kino and Juana hurl the cursed pearl back into the gulf.
-
-## Key Themes for MSCE Paper II
-1. Greed and Materialism: The pearl initially symbolizes education for Coyotito and dignity for the family, yet transforms into an object of paranoia and violence.
-2. Colonial & Class Injustice: Indigenous fishermen are systematically cheated by doctors, pearl dealers, and town authorities who speak a different social language of power.
-3. Family Love & Courage: Juana’s quiet wisdom ("This pearl is evil") balances Kino’s pride until tragedy reunites them in grief.
-
-## Sample MSCE Essay Prompts
-Question A: Discuss four ways in which the town doctor demonstrates hypocrisy and greed after Coyotito is stung.
-Question B: Show how Kino’s character changes from Chapter 1 to Chapter 6, supporting each point with clear textual evidence.`,
-  },
-  {
-    title: 'MSCE Biology Past Paper Compilation (Paper I & II)',
-    author: 'MANEB Revision Panel',
-    subject: 'Biology',
-    formLevel: 'Form 4',
-    category: 'Past Paper',
-    examYear: '2024',
-    summary: 'Structured questions and worked marking guides covering cell transport, genetics, ecology, coordination, and enzyme experiments.',
-    allowOffline: true,
-    content: `## Section A: Multiple Choice & Short Answer Review
-1. State two differences between xylem vessels and phloem sieve tubes.
-Answer Guide: Xylem vessels have lignified dead cells with no end walls and transport water and mineral ions upward, whereas phloem sieve tubes are living cells with sieve plates and companion cells that translocate sucrose and amino acids bidirectionally.
-
-2. Explain why amylase fails to digest starch when mixed with concentrated hydrochloric acid.
-Answer Guide: Concentrated acid lowers pH far below the optimum pH (~7.0) for salivary amylase, breaking ionic and hydrogen bonds that maintain the enzyme’s tertiary structure. The active site changes shape (denaturation), so starch molecules can no longer bind.
-
-## Section B: Genetics & Inheritance Problem
-In a maize breeding trial in Lilongwe, tall stem (T) is dominant over dwarf stem (t). A heterozygous tall maize plant (Tt) is crossed with a dwarf maize plant (tt).
-- Parental genotypes: Tt x tt
-- Gametes from Tt: T, t | Gametes from tt: t, t
-- Offspring genotypes: 50% Tt (tall), 50% tt (dwarf) -> Phenotypic ratio 1 tall : 1 dwarf.
-
-## Section C: Practical Investigation Guide (Osmosis)
-When identical potato cylinders are placed in 0%, 5%, and 20% sucrose solutions for 45 minutes:
-- In 0% sucrose (distilled water), water enters cells by osmosis down a water potential gradient -> cylinder gains mass and becomes turgid.
-- In 20% sucrose, water leaves vacuole by osmosis -> cells plasmolyze and cylinder loses mass and becomes flaccid.
-
-## Examiner Tip
-Always name the specific membrane (partially permeable membrane) and specify direction from higher water potential to lower water potential.`,
-  },
-  {
-    title: 'MSCE Mathematics Worked Past Paper & Formulas',
-    author: 'Mathematics Department',
-    subject: 'Mathematics',
-    formLevel: 'Form 4',
-    category: 'Past Paper',
-    examYear: '2025',
-    summary: 'Step-by-step worked solutions for quadratic equations, vectors, circle theorems, trigonometry, and variation.',
-    allowOffline: true,
-    content: `## Question 1: Quadratic Equations & Factorization
-Solve the equation: 2x^2 - 7x - 15 = 0.
-Worked Solution:
-- Product = 2 * (-15) = -30; Sum = -7. Factors are -10 and +3.
-- Rewrite: 2x^2 - 10x + 3x - 15 = 0
-- Factor by grouping: 2x(x - 5) + 3(x - 5) = 0 -> (2x + 3)(x - 5) = 0
-- Solutions: x = -1.5 or x = 5.
-
-## Question 2: Joint Variation
-y varies directly as x and inversely as the square of z. Given that y = 6 when x = 12 and z = 2, find y when x = 18 and z = 3.
-Worked Solution:
-- Formula: y = (k * x) / z^2
-- Substitute initial values: 6 = (k * 12) / 4 -> 6 = 3k -> k = 2.
-- Find y when x = 18, z = 3: y = (2 * 18) / 3^2 = 36 / 9 = 4.
-
-## Question 3: Sine & Cosine Rule (Bearings)
-A surveyor walks 8 km on a bearing of 060° from A to B, then 6 km due south to C. Calculate distance AC.
-- Angle ABC = 60° (alternate interior angles with North lines).
-- Cosine rule: AC^2 = 8^2 + 6^2 - 2(8)(6)cos(60°) = 64 + 36 - 96(0.5) = 52.
-- AC = sqrt(52) = 7.21 km (to 3 s.f.).
-
-## Essential MSCE Formula Checklist
-- Quadratic formula: x = [-b +/- sqrt(b^2 - 4ac)] / (2a)
-- Area of triangle: 0.5 * a * b * sin(C)
-- Simple Interest: I = (P * R * T) / 100
-- Gradient between (x1, y1) and (x2, y2): m = (y2 - y1) / (x2 - x1)`,
-  },
-  {
-    title: 'JCE Physical Science Core Revision Guide',
-    author: 'Physical Science Panel',
-    subject: 'Physical Science',
-    formLevel: 'Form 2',
-    category: 'Revision Guide',
-    examYear: 'JCE',
-    summary: 'Concise Form 1–2 Physics & Chemistry notes covering atomic structure, circuits, pressure, acids/bases, and separation techniques.',
-    allowOffline: true,
-    content: `## Unit 1: Atomic Structure & Bonding
-- Protons (+1 charge, mass 1 u) and neutrons (0 charge, mass 1 u) sit inside the nucleus. Electrons (-1 charge, negligible mass) orbit in shells (2, 8, 8 rule for first 20 elements).
-- Ionic bonding occurs between metals and non-metals via electron transfer (e.g. NaCl), whereas covalent bonding occurs between non-metals via electron sharing (e.g. H2O, CO2).
-
-## Unit 2: Acids, Bases & Indicators
-- Acids produce hydrogen ions (H+) in water and turn blue litmus paper red (pH < 7).
-- Alkalis are soluble bases producing hydroxide ions (OH-) and turn red litmus blue (pH > 7).
-- Neutralization reaction: Acid + Base -> Salt + Water (e.g. HCl + NaOH -> NaCl + H2O).
-
-## Unit 3: Pressure & Density
-- Density = Mass / Volume (SI unit: kg/m^3 or g/cm^3).
-- Pressure = Force / Area (SI unit: N/m^2 or Pascal, Pa). Sharp knives cut easily because reducing contact area increases pressure for the same applied force.
-
-## Unit 4: Simple Electrical Circuits
-- Ohm’s Law: V = I * R (Voltage in Volts = Current in Amperes * Resistance in Ohms).
-- In series circuits, current is identical at every point while voltage splits across resistors. In parallel branches, voltage is equal across every branch and total current equals the sum of branch currents.`,
-  },
-  {
-    title: 'MSCE Geography Mapwork & Malawi Landforms',
-    author: 'Geography Department',
-    subject: 'Geography',
-    formLevel: 'Form 3',
-    category: 'Book',
-    examYear: '2025',
-    summary: 'Digital textbook chapter on 6-figure grid references, cross-sections, rift valley formation, and Lake Malawi drainage systems.',
-    allowOffline: true,
-    content: `## Chapter 1: Topographic Map Reading
-To give an accurate 6-figure grid reference on a 1:50,000 Malawi survey sheet:
-1. Always read the Eastings (vertical grid lines increasing left to right) first, estimating tenths inside the square.
-2. Then read the Northings (horizontal grid lines increasing bottom to top), estimating tenths upward.
-3. Relief representation: Close contour lines denote steep escarpments (such as the Kirk Range or Zomba Plateau slopes); widely spaced contours represent gentle floodplains.
-
-## Chapter 2: The Great Rift Valley in Malawi
-Malawi lies at the southern end of the East African Rift System. Normal faulting caused a central block (graben) to subside, creating the trough occupied by Lake Malawi and the Shire Valley, flanked by uplifted horst blocks including the Nyika and Viphya Plateaus.
-
-## Chapter 3: Drainage Patterns & Economic Importance
-- Shire River: Sole outlet of Lake Malawi at Mangochi, flowing through Liwonde and dropping over Kapichira and Nkula Falls to generate most of Malawi’s hydro-electric power before joining the Zambezi.
-- Challenges: Siltation from upland deforestation reduces reservoir efficiency and damages turbines during peak rainy seasons.`,
-  },
-  {
-    title: 'Chichewa JCE Composition & Proverbial Companion',
-    author: 'Chichewa Department',
-    subject: 'Chichewa',
-    formLevel: 'Form 2',
-    category: 'Book',
-    examYear: 'JCE',
-    summary: 'Essential JCE Chichewa essay frameworks, formal letter salutations, and commonly tested Miyambo (proverbs) with meanings.',
-    allowOffline: true,
-    content: `## Gawo 1: Kalata ya Ulemu (Formal Letter Structure)
-1. Adilesi ya wolemba kumwamba kumanja, ndi tsiku pansipa.
-2. Adilesi ya wolandira kumanzere.
-3. Moni waulemu: "Bambo Wolemekezeka," kapena "Mkulupampando Wokondedwa,".
-4. Mutu wa kalata wolembedwa mwachidule komanso mosonyeza cholinga.
-5. Thupi la kalata: Ndime yoyamba ifotokoze cholinga, ndime zotsatira zifotokoze zifukwa mokwanira, ndipo ndime yomaliza ipemphe chithandizo kapena yankho.
-6. Mawu omaliza: "Ndine wokhulupirika wanu," ndi dzina lanu lonse.
-
-## Gawo 2: Miyambo Yofunika pa Mayeso (Key Proverbs)
-- "Mutu umodzi susenza denga": Ntchito yaikulu imafuna thandizo la anzako (Unity brings strength).
-- "Kali kokha n'kanyama, tili tiwiri n'tiwanthu": Kuyenda kapena kugwira ntchito pamodzi kumateteza mavuto.
-- "Mwana wosamva anadya nkhuku yaulimi": Kusamvera malangizo kumabweretsa mavuto pambuyo pake.
-- "Chikomekome cha nkhuyu, mkati muli nyerere": Musanyengedwe ndi maonekedwe akunja chifukwa mkati mukhoza kukhala vuto.
-
-## Gawo 3: Malangizo a Chimake cha Nkhani (Essay Tips)
-Gwiritsani ntchito zilembo zolondola, zizindikiro za m'mawu (mpumulo, dontho, funso), komanso magulu olondola a mayina (mwa chitsanzo: munthu/anthu, mtengo/mitengo).`,
-  },
 ];
 
 export function normalizeIsbn(raw?: string): string {
@@ -1296,24 +1205,41 @@ export const ANNOUNCEMENT_AUDIENCE_OPTIONS: {
   {
     value: 'Teachers',
     label: 'Teachers',
-    description: 'Teachers, Form Teachers, HODs, Deputy Head & Head Teacher',
+    description: 'Subject Teachers, Form Teachers, HODs, Deputy Head & Head Teacher',
   },
   {
     value: 'Librarian',
-    label: 'Librarian',
-    description: 'School Librarian',
+    label: 'Librarians',
+    description: 'School Librarians',
+  },
+  {
+    value: 'Students',
+    label: 'Students',
+    description: 'Students & Staff',
   },
   {
     value: 'Bursar',
     label: 'Bursar',
     description: 'School Bursar',
   },
-  {
-    value: 'Students',
-    label: 'Students',
-    description: 'Visible to Students & all staff (including Teachers) except Librarian',
-  },
 ];
+
+export function isLibrarianOnlyAnnouncement(
+  targetAudiences: AnnouncementAudience[]
+): boolean {
+  const list = Array.isArray(targetAudiences) ? targetAudiences : [];
+  return list.includes('Librarian') && !list.includes('Students');
+}
+
+export function canStudentSeeAnnouncement(
+  targetAudiences: AnnouncementAudience[]
+): boolean {
+  const list = Array.isArray(targetAudiences) ? targetAudiences : [];
+  if (list.length === 0) return false;
+  // Students see general/student announcements, while librarian-specific
+  // or staff-only posts without Students are filtered out of their view.
+  return list.includes('Students') && !isLibrarianOnlyAnnouncement(list);
+}
 
 export function canRoleSeeAnnouncement(
   targetAudiences: AnnouncementAudience[],

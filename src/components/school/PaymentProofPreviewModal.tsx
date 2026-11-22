@@ -7,6 +7,7 @@ import { fetchFeeSubmissionBytes } from '../../school/firestoreService';
 import { formatFileSizeLabel } from '../../school/digitalMaterialParser';
 import { formatMWK } from '../../school/malawi';
 import type { StudentFeeSubmission } from '../../school/types';
+import { ModalBackdrop } from './ModalBackdrop';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -179,14 +180,11 @@ export const PaymentProofPreviewModal: React.FC<PaymentProofPreviewModalProps> =
   if (!submission) return null;
 
   return (
-    <div
+    <ModalBackdrop
+      open={Boolean(submission)}
+      onClose={onClose}
       className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/75 backdrop-blur-xs p-2 sm:p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="proof-preview-title"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+      ariaLabelledBy="proof-preview-title"
     >
       <div className="w-full max-w-4xl h-[90vh] flex flex-col rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
         <header className="px-4 sm:px-6 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50/90 dark:bg-slate-900/80 flex items-center justify-between gap-3 shrink-0">
@@ -279,6 +277,6 @@ export const PaymentProofPreviewModal: React.FC<PaymentProofPreviewModalProps> =
           ) : null}
         </div>
       </div>
-    </div>
+    </ModalBackdrop>
   );
 };
