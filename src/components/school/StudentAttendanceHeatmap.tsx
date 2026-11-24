@@ -7,6 +7,7 @@ import {
   type AttendanceHeatmapDayCell,
 } from '../../school/attendanceHeatmapUtils';
 import { FORM_LEVELS } from '../../school/malawi';
+import { usePrefersReducedMotion } from '../../school/useChartAnimation';
 import type { AttendanceRecord, FormLevel, TermName } from '../../school/types';
 
 interface StudentAttendanceHeatmapProps {
@@ -64,6 +65,7 @@ export const StudentAttendanceHeatmap: React.FC<StudentAttendanceHeatmapProps> =
     typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
   );
   const [containerWidth, setContainerWidth] = useState<number>(760);
+  const prefersReducedMotion = usePrefersReducedMotion();
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -129,14 +131,12 @@ export const StudentAttendanceHeatmap: React.FC<StudentAttendanceHeatmapProps> =
   const futureCellFill = isDark ? '#0f172a' : '#f8fafc';
   const labelColor = isDark ? '#94a3b8' : '#64748b';
 
-  // Render D3 SVG heatmap
+  // Render D3 SVG heatmap with smooth enter/update transitions
   useEffect(() => {
     const svgEl = svgRef.current;
     if (!svgEl) return;
 
     const svg = d3.select(svgEl);
-    svg.selectAll('*').remove();
-
     const margin = { top: 28, right: 10, bottom: 22, left: 38 };
     const width = Math.max(520, containerWidth);
     const innerWidth = width - margin.left - margin.right;
@@ -148,10 +148,26 @@ export const StudentAttendanceHeatmap: React.FC<StudentAttendanceHeatmapProps> =
     const innerHeight =
       model.dayRows.length * rowHeight + Math.max(0, model.dayRows.length - 1) * cellGap;
     const height = margin.top + innerHeight + margin.bottom;
+    const dur = prefersReducedMotion ? 0 : 340;
 
     svg.attr('viewBox', `0 0 ${width} ${height}`).attr('width', width).attr('height', height);
 
-    const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+    let g = svg.select<SVGGElement>('g.heatmap-root');
+    if (g.empty()) {
+      g = svg.append('g').attr('class', 'heatmap-root');
+    }
+    g.attr('transform', `translate(${margin.left},${margin.top})`);
+
+    const ensureLayer = (cls: string) => {
+      let layer = g.select<SVGGElement>(`g.${cls}`);
+      if (layer.empty()) layer = g.append('g').attr('class', cls);
+      return layer;
+    };
+
+    const monthLayer = ensureLayer('heatmap-month-labels');
+    const weekLayer = ensureLayer('heatmap-week-labels');
+    const dayLayer = ensureLayer('heatmap-day-labels');
+    const cellsLayer = ensureLayer('heatmap-cells');
 
     const xScale = d3
       .scaleBand<number>()
@@ -168,10 +184,12 @@ export const StudentAttendanceHeatmap: React.FC<StudentAttendanceHeatmapProps> =
       .paddingOuter(0);
 
     // Month labels above week columns
-    g.append('g')
-      .attr('class', 'heatmap-month-labels')
-      .selectAll('text')
-      .data(model.weeks.filter((w) => w.monthHeader !== ''))
+    monthLayer
+      .selectAll<SVGTextElement, (typeof model.weeks)[number]>('text')
+      .data(
+        model.weeks.filter((w) => w.monthHeader !== ''),
+        (w) => `${w.weekIndex}-${w.monthHeader}`
+      )
       .join('text')
       .attr('x', (w) => xScale(w.weekIndex) ?? 0)
       .attr('y', -10)
@@ -181,10 +199,9 @@ export const StudentAttendanceHeatmap: React.FC<StudentAttendanceHeatmapProps> =
       .text((w) => w.monthHeader);
 
     // Week numbers along bottom axis (W1 .. W13)
-    g.append('g')
-      .attr('class', 'heatmap-week-labels')
-      .selectAll('text')
-      .data(model.weeks)
+    weekLayer
+      .selectAll<SVGTextElement, (typeof model.weeks)[number]>('text')
+      .data(model.weeks, (w) => w.weekIndex)
       .join('text')
       .attr('x', (w) => (xScale(w.weekIndex) ?? 0) + xScale.bandwidth() / 2)
       .attr('y', innerHeight + 16)
@@ -195,10 +212,9 @@ export const StudentAttendanceHeatmap: React.FC<StudentAttendanceHeatmapProps> =
       .text((w) => w.weekLabel);
 
     // Day-of-week labels along left axis (Mon..Fri / Mon..Sun)
-    g.append('g')
-      .attr('class', 'heatmap-day-labels')
-      .selectAll('text')
-      .data(model.dayRows)
+    dayLayer
+      .selectAll<SVGTextElement, (typeof model.dayRows)[number]>('text')
+      .data(model.dayRows, (d) => d.dayOfWeek)
       .join('text')
       .attr('x', -8)
       .attr('y', (d) => (yScale(d.dayOfWeek) ?? 0) + yScale.bandwidth() / 2)
@@ -212,44 +228,141 @@ export const StudentAttendanceHeatmap: React.FC<StudentAttendanceHeatmapProps> =
     const cellW = xScale.bandwidth();
     const cellH = yScale.bandwidth();
     const cornerRadius = Math.min(6, Math.max(3, Math.round(Math.min(cellW, cellH) * 0.18)));
+    const showRateLabel = cellW >= 34 && cellH >= 24;
 
-    const cellGroups = g
-      .append('g')
-      .attr('class', 'heatmap-cells')
+    const resolveFill = (d: AttendanceHeatmapDayCell) => {
+      if (d.attendanceRate !== null) return colorScale(d.attendanceRate);
+      return d.isFuture ? futureCellFill : emptyCellFill;
+    };
+    const resolveStroke = (d: AttendanceHeatmapDayCell) => {
+      if (selectedCell && d.date === selectedCell.date) {
+        return isDark ? '#f8fafc' : '#0f172a';
+      }
+      if (d.isToday) {
+        return isDark ? '#34d399' : '#047857';
+      }
+      return d.attendanceRate !== null ? 'transparent' : emptyCellStroke;
+    };
+    const resolveStrokeWidth = (d: AttendanceHeatmapDayCell) => {
+      if (selectedCell && d.date === selectedCell.date) return 2;
+      if (d.isToday) return 1.5;
+      return d.attendanceRate !== null ? 0 : 1;
+    };
+    const resolveOpacity = (d: AttendanceHeatmapDayCell) =>
+      d.isFuture && d.total === 0 ? 0.55 : 1;
+    const resolveTextColor = (d: AttendanceHeatmapDayCell) => {
+      const r = d.attendanceRate ?? 0;
+      if (!isDark && r >= 75 && r < 85) return '#064e3b';
+      if (isDark && r >= 95) return '#022c22';
+      return '#ffffff';
+    };
+
+    const cellGroups = cellsLayer
       .selectAll<SVGGElement, AttendanceHeatmapDayCell>('g.heatmap-cell-group')
       .data(model.cells, (d) => d.date)
-      .join('g')
-      .attr('class', 'heatmap-cell-group')
-      .attr(
-        'transform',
-        (d) => `translate(${xScale(d.weekIndex) ?? 0},${yScale(d.dayOfWeek) ?? 0})`
+      .join(
+        (enter) => {
+          const grp = enter
+            .append('g')
+            .attr('class', 'heatmap-cell-group')
+            .attr(
+              'transform',
+              (d) => `translate(${xScale(d.weekIndex) ?? 0},${yScale(d.dayOfWeek) ?? 0})`
+            );
+
+          const rect = grp
+            .append('rect')
+            .attr('class', 'heatmap-cell-rect')
+            .attr('width', cellW)
+            .attr('height', cellH)
+            .attr('rx', cornerRadius)
+            .attr('ry', cornerRadius)
+            .attr('fill', resolveFill)
+            .attr('stroke', resolveStroke)
+            .attr('stroke-width', resolveStrokeWidth)
+            .attr('opacity', prefersReducedMotion ? resolveOpacity : 0);
+
+          if (!prefersReducedMotion) {
+            rect
+              .transition()
+              .duration(dur)
+              .delay((d) => Math.min(220, d.weekIndex * 16))
+              .ease(d3.easeCubicOut)
+              .attr('opacity', resolveOpacity);
+          }
+
+          grp
+            .append('text')
+            .attr('class', 'heatmap-cell-text')
+            .attr('x', cellW / 2)
+            .attr('y', cellH / 2)
+            .attr('dy', '0.35em')
+            .attr('text-anchor', 'middle')
+            .attr('pointer-events', 'none')
+            .attr('font-size', '10px')
+            .attr('font-weight', 600)
+            .style('font-family', 'var(--font-mono)')
+            .attr('fill', resolveTextColor)
+            .attr('opacity', (d) => (showRateLabel && d.attendanceRate !== null ? 1 : 0))
+            .text((d) =>
+              showRateLabel && d.attendanceRate !== null
+                ? `${Math.round(d.attendanceRate)}%`
+                : ''
+            );
+
+          return grp;
+        },
+        (update) => {
+          update
+            .transition()
+            .duration(dur)
+            .ease(d3.easeCubicOut)
+            .attr(
+              'transform',
+              (d) => `translate(${xScale(d.weekIndex) ?? 0},${yScale(d.dayOfWeek) ?? 0})`
+            );
+
+          update
+            .select<SVGRectElement>('rect.heatmap-cell-rect')
+            .transition()
+            .duration(dur)
+            .ease(d3.easeCubicOut)
+            .attr('width', cellW)
+            .attr('height', cellH)
+            .attr('rx', cornerRadius)
+            .attr('ry', cornerRadius)
+            .attr('fill', resolveFill)
+            .attr('stroke', resolveStroke)
+            .attr('stroke-width', resolveStrokeWidth)
+            .attr('opacity', resolveOpacity);
+
+          update
+            .select<SVGTextElement>('text.heatmap-cell-text')
+            .attr('x', cellW / 2)
+            .attr('y', cellH / 2)
+            .text((d) =>
+              showRateLabel && d.attendanceRate !== null
+                ? `${Math.round(d.attendanceRate)}%`
+                : ''
+            )
+            .transition()
+            .duration(dur)
+            .ease(d3.easeCubicOut)
+            .attr('fill', resolveTextColor)
+            .attr('opacity', (d) => (showRateLabel && d.attendanceRate !== null ? 1 : 0));
+
+          return update;
+        },
+        (exit) =>
+          exit
+            .transition()
+            .duration(prefersReducedMotion ? 0 : 180)
+            .attr('opacity', 0)
+            .remove()
       );
 
     cellGroups
-      .append('rect')
-      .attr('width', cellW)
-      .attr('height', cellH)
-      .attr('rx', cornerRadius)
-      .attr('ry', cornerRadius)
-      .attr('fill', (d) => {
-        if (d.attendanceRate !== null) return colorScale(d.attendanceRate);
-        return d.isFuture ? futureCellFill : emptyCellFill;
-      })
-      .attr('stroke', (d) => {
-        if (selectedCell && d.date === selectedCell.date) {
-          return isDark ? '#f8fafc' : '#0f172a';
-        }
-        if (d.isToday) {
-          return isDark ? '#34d399' : '#047857';
-        }
-        return d.attendanceRate !== null ? 'transparent' : emptyCellStroke;
-      })
-      .attr('stroke-width', (d) => {
-        if (selectedCell && d.date === selectedCell.date) return 2;
-        if (d.isToday) return 1.5;
-        return d.attendanceRate !== null ? 0 : 1;
-      })
-      .attr('opacity', (d) => (d.isFuture && d.total === 0 ? 0.55 : 1))
+      .select<SVGRectElement>('rect.heatmap-cell-rect')
       .style('cursor', (d) => (d.total > 0 || !d.isFuture ? 'pointer' : 'default'))
       .on('mouseenter', function (_event, d) {
         d3.select(this).attr('opacity', 0.86);
@@ -258,7 +371,7 @@ export const StudentAttendanceHeatmap: React.FC<StudentAttendanceHeatmapProps> =
         setTooltip({ cell: d, x: xPos, y: yPos });
       })
       .on('mouseleave', function (_event, d) {
-        d3.select(this).attr('opacity', d.isFuture && d.total === 0 ? 0.55 : 1);
+        d3.select(this).attr('opacity', resolveOpacity(d));
         setTooltip(null);
       })
       .on('click', (_event, d) => {
@@ -266,28 +379,6 @@ export const StudentAttendanceHeatmap: React.FC<StudentAttendanceHeatmapProps> =
           setSelectedDate(d.date);
         }
       });
-
-    // Subtle tabular rate inside wide enough marked cells
-    if (cellW >= 34 && cellH >= 24) {
-      cellGroups
-        .filter((d) => d.attendanceRate !== null)
-        .append('text')
-        .attr('x', cellW / 2)
-        .attr('y', cellH / 2)
-        .attr('dy', '0.35em')
-        .attr('text-anchor', 'middle')
-        .attr('pointer-events', 'none')
-        .attr('font-size', '10px')
-        .attr('font-weight', 600)
-        .style('font-family', 'var(--font-mono)')
-        .attr('fill', (d) => {
-          const r = d.attendanceRate ?? 0;
-          if (!isDark && r >= 75 && r < 85) return '#064e3b';
-          if (isDark && r >= 95) return '#022c22';
-          return '#ffffff';
-        })
-        .text((d) => `${Math.round(d.attendanceRate ?? 0)}%`);
-    }
   }, [
     colorScale,
     containerWidth,
@@ -297,6 +388,7 @@ export const StudentAttendanceHeatmap: React.FC<StudentAttendanceHeatmapProps> =
     isDark,
     labelColor,
     model,
+    prefersReducedMotion,
     selectedCell,
   ]);
 
@@ -305,6 +397,8 @@ export const StudentAttendanceHeatmap: React.FC<StudentAttendanceHeatmapProps> =
   return (
     <section
       aria-label="Student Attendance Frequency Heatmap"
+      data-board-chart="attendance-heatmap"
+      data-chart-filter-summary={`Term: ${term} · Scope: ${formFilter === 'ALL' ? 'All Forms (1–4)' : `Form ${formFilter}`} · Window: ${model.termStartIso} to ${model.termEndIso} · Mean: ${model.summary.overallRate !== null ? `${model.summary.overallRate}%` : 'N/A'}`}
       className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 space-y-4"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">

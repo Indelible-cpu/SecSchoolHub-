@@ -3,7 +3,7 @@ import type {
   TimebookHoliday,
   TimebookSettings,
   TimebookUiStateCode,
-} from './types';
+} from './types.ts';
 
 export const DEFAULT_TIMEBOOK_TIMEZONE = 'Africa/Blantyre';
 export const DEFAULT_TIMEBOOK_WINDOW_START = '05:30';

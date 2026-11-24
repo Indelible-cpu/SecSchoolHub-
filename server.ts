@@ -3,15 +3,14 @@ import express from 'express';
 import fs from 'fs';
 import http from 'http';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
-import { requireFirebaseAuth, type AuthenticatedRequest } from './server/firebaseAuth';
+import { requireFirebaseAuth, type AuthenticatedRequest } from './server/firebaseAuth.ts';
 import {
   extractBookFromCoverImage,
   isValidIsbn,
   lookupBookByIsbn,
   normalizeIsbn,
-} from './server/libraryScanner';
-import { TimebookEngine } from './server/timebookEngine';
+} from './server/libraryScanner.ts';
+import { TimebookEngine } from './server/timebookEngine.ts';
 
 interface SmsGatewayStatus {
   configured: boolean;
@@ -492,6 +491,7 @@ async function startServer() {
     if (!process.env.DISABLE_HMR) {
       process.env.DISABLE_HMR = 'true';
     }
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: {
         middlewareMode: true,

@@ -1,7 +1,7 @@
 import React from 'react';
-import { formatMWK } from '../../school/malawi';
+import { formatMWK, normalizeAssessmentComponents } from '../../school/malawi';
+import { useMountedAnimation } from '../../school/useChartAnimation';
 import { Assessment } from '../../school/types';
-import { normalizeAssessmentComponents } from '../../school/malawi';
 
 interface FeeCollectionDonutProps {
   billed: number;
@@ -20,10 +20,11 @@ export const FeeCollectionDonut: React.FC<FeeCollectionDonutProps> = ({
   partialCount,
   unpaidCount,
 }) => {
+  const mounted = useMountedAnimation();
   const rate = billed > 0 ? Math.min(100, Math.round((paid / billed) * 100)) : 0;
   const radius = 44;
   const circumference = 2 * Math.PI * radius;
-  const dashOffset = circumference - (rate / 100) * circumference;
+  const dashOffset = mounted ? circumference - (rate / 100) * circumference : circumference;
 
   const totalInvoices = paidCount + partialCount + unpaidCount;
   const paidPct = totalInvoices > 0 ? (paidCount / totalInvoices) * 100 : 0;
@@ -52,7 +53,7 @@ export const FeeCollectionDonut: React.FC<FeeCollectionDonutProps> = ({
               strokeLinecap="round"
               strokeDasharray={circumference}
               strokeDashoffset={dashOffset}
-              className="stroke-emerald-600 dark:stroke-emerald-500 transition-all duration-500"
+              className="stroke-emerald-600 dark:stroke-emerald-500 transition-all duration-500 ease-out motion-reduce:transition-none"
             />
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
@@ -97,13 +98,22 @@ export const FeeCollectionDonut: React.FC<FeeCollectionDonutProps> = ({
         <div className="space-y-1.5">
           <div className="h-2.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden flex">
             {paidPct > 0 && (
-              <div style={{ width: `${paidPct}%` }} className="bg-emerald-600 dark:bg-emerald-500" />
+              <div
+                style={{ width: mounted ? `${paidPct}%` : '0%' }}
+                className="bg-emerald-600 dark:bg-emerald-500 transition-all duration-500 ease-out motion-reduce:transition-none"
+              />
             )}
             {partialPct > 0 && (
-              <div style={{ width: `${partialPct}%` }} className="bg-amber-500" />
+              <div
+                style={{ width: mounted ? `${partialPct}%` : '0%' }}
+                className="bg-amber-500 transition-all duration-500 ease-out motion-reduce:transition-none"
+              />
             )}
             {unpaidPct > 0 && (
-              <div style={{ width: `${unpaidPct}%` }} className="bg-rose-500" />
+              <div
+                style={{ width: mounted ? `${unpaidPct}%` : '0%' }}
+                className="bg-rose-500 transition-all duration-500 ease-out motion-reduce:transition-none"
+              />
             )}
           </div>
           <div className="flex items-center justify-between text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400">
@@ -128,6 +138,7 @@ interface FormBarRow {
 }
 
 export const EnrollmentGenderChart: React.FC<{ rows: FormBarRow[] }> = ({ rows }) => {
+  const mounted = useMountedAnimation();
   const maxTotal = Math.max(1, ...rows.map((r) => r.total));
 
   return (
@@ -174,15 +185,15 @@ export const EnrollmentGenderChart: React.FC<{ rows: FormBarRow[] }> = ({ rows }
               <div className="h-3 w-full rounded-md bg-slate-100 dark:bg-slate-800/80 overflow-hidden flex gap-0.5">
                 {boysPct > 0 && (
                   <div
-                    style={{ width: `${boysPct}%` }}
-                    className="h-full bg-emerald-600 dark:bg-emerald-500 transition-all duration-300"
+                    style={{ width: mounted ? `${boysPct}%` : '0%' }}
+                    className="h-full bg-emerald-600 dark:bg-emerald-500 transition-all duration-500 ease-out motion-reduce:transition-none"
                     title={`Form ${r.form} Boys: ${r.male}`}
                   />
                 )}
                 {girlsPct > 0 && (
                   <div
-                    style={{ width: `${girlsPct}%` }}
-                    className="h-full bg-sky-500 dark:bg-sky-400 transition-all duration-300"
+                    style={{ width: mounted ? `${girlsPct}%` : '0%' }}
+                    className="h-full bg-sky-500 dark:bg-sky-400 transition-all duration-500 ease-out motion-reduce:transition-none"
                     title={`Form ${r.form} Girls: ${r.female}`}
                   />
                 )}
@@ -198,6 +209,7 @@ export const EnrollmentGenderChart: React.FC<{ rows: FormBarRow[] }> = ({ rows }
 export const ManebGradeDistributionChart: React.FC<{ assessments: Assessment[] }> = ({
   assessments,
 }) => {
+  const mounted = useMountedAnimation();
   if (assessments.length === 0) {
     return (
       <div className="py-6 text-center text-xs text-slate-500 dark:text-slate-400">
@@ -274,8 +286,8 @@ export const ManebGradeDistributionChart: React.FC<{ assessments: Assessment[] }
           return (
             <div
               key={b.label}
-              style={{ width: `${pct}%` }}
-              className={`${b.color} transition-all duration-300`}
+              style={{ width: mounted ? `${pct}%` : '0%' }}
+              className={`${b.color} transition-all duration-500 ease-out motion-reduce:transition-none`}
               title={`${b.label}: ${b.count}`}
             />
           );
@@ -312,6 +324,7 @@ export const SubjectComponentBarChart: React.FC<{
   items: SubjectChartItem[];
   maxItems?: number;
 }> = ({ items, maxItems = 10 }) => {
+  const mounted = useMountedAnimation();
   const visible = items.slice(0, maxItems);
   if (visible.length === 0) return null;
 
@@ -354,22 +367,22 @@ export const SubjectComponentBarChart: React.FC<{
             <div className="h-2.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden flex">
               {item.ca1 > 0 && (
                 <div
-                  style={{ width: `${Math.min(20, item.ca1)}%` }}
-                  className="bg-emerald-600 dark:bg-emerald-500"
+                  style={{ width: mounted ? `${Math.min(20, item.ca1)}%` : '0%' }}
+                  className="bg-emerald-600 dark:bg-emerald-500 transition-all duration-500 ease-out motion-reduce:transition-none"
                   title={`CA 1: ${item.ca1.toFixed(1)}/20`}
                 />
               )}
               {item.ca2 > 0 && (
                 <div
-                  style={{ width: `${Math.min(20, item.ca2)}%` }}
-                  className="bg-teal-500 dark:bg-teal-400"
+                  style={{ width: mounted ? `${Math.min(20, item.ca2)}%` : '0%' }}
+                  className="bg-teal-500 dark:bg-teal-400 transition-all duration-500 ease-out motion-reduce:transition-none"
                   title={`CA 2: ${item.ca2.toFixed(1)}/20`}
                 />
               )}
               {item.exam > 0 && (
                 <div
-                  style={{ width: `${Math.min(60, item.exam)}%` }}
-                  className="bg-sky-600 dark:bg-sky-500"
+                  style={{ width: mounted ? `${Math.min(60, item.exam)}%` : '0%' }}
+                  className="bg-sky-600 dark:bg-sky-500 transition-all duration-500 ease-out motion-reduce:transition-none"
                   title={`Summative: ${item.exam.toFixed(1)}/60`}
                 />
               )}

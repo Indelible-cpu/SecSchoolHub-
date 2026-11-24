@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import * as webpush from 'web-push';
 import {
@@ -23,15 +24,15 @@ import {
   isValidTimeZone,
   parseHHMMToSeconds,
   type RecentGpsPing,
-} from '../src/school/timebookUtils';
+} from '../src/school/timebookUtils.ts';
 import type {
   TeacherRole,
   TimebookEntryStatus,
   TimebookHoliday,
   TimebookNotification,
   TimebookSettings,
-} from '../src/school/types';
-import { isPlatformAdminEmail, type VerifiedFirebaseUser } from './firebaseAuth';
+} from '../src/school/types.ts';
+import { isPlatformAdminEmail, type VerifiedFirebaseUser } from './firebaseAuth.ts';
 
 export interface SyncedStaffRosterItem {
   teacherId: string;
@@ -209,7 +210,7 @@ function sanitizeCategoryDeadlines(raw: unknown): Record<string, string> {
 }
 
 export class TimebookEngine {
-  private readonly storeFilePath: string;
+  private storeFilePath: string;
   private readonly nowFn: () => number;
   private readonly maxRequestsPerMinute: number;
   private readonly customPushSender?: PushSenderFn;
@@ -229,8 +230,12 @@ export class TimebookEngine {
 
   private loadOrInitStore(overrideHmacSecret?: string): PersistedTimebookStore {
     const dir = path.dirname(this.storeFilePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    try {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+    } catch {
+      this.storeFilePath = path.join(os.tmpdir(), 'secschoolhub-timebook-store.json');
     }
 
     if (fs.existsSync(this.storeFilePath)) {
@@ -319,13 +324,29 @@ export class TimebookEngine {
   }
 
   private persistStore(target: PersistedTimebookStore = this.store): void {
-    const dir = path.dirname(this.storeFilePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    const writeToPath = (filePath: string) => {
+      const dir = path.dirname(filePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const tmpPath = `${filePath}.${process.pid}.tmp`;
+      fs.writeFileSync(tmpPath, JSON.stringify(target, null, 2), 'utf8');
+      fs.renameSync(tmpPath, filePath);
+    };
+
+    try {
+      writeToPath(this.storeFilePath);
+    } catch {
+      const fallbackPath = path.join(os.tmpdir(), 'secschoolhub-timebook-store.json');
+      if (this.storeFilePath !== fallbackPath) {
+        this.storeFilePath = fallbackPath;
+        try {
+          writeToPath(fallbackPath);
+        } catch {
+          // Keep operating in-memory if filesystem is strictly read-only
+        }
+      }
     }
-    const tmpPath = `${this.storeFilePath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(target, null, 2), 'utf8');
-    fs.renameSync(tmpPath, this.storeFilePath);
   }
 
   public getVapidPublicKey(): string {

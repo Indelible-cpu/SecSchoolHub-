@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   Users,
   Banknote,
@@ -11,6 +11,7 @@ import {
   BookCheck,
   BookOpen,
   UserCheck,
+  FileDown,
   FileSpreadsheet,
   Settings,
   ShieldAlert,
@@ -55,9 +56,11 @@ import {
   summarizeSubjectComponents,
 } from './AnalyticsCharts';
 import { ClassPerformanceTrendChart } from './ClassPerformanceTrendChart';
+import { TermPerformanceTrendChart } from './TermPerformanceTrendChart';
 import { CaDropAlertsPanel } from './CaDropAlertsPanel';
 import { AnnouncementsPanel } from './AnnouncementsPanel';
 import { StudentAttendanceHeatmap } from './StudentAttendanceHeatmap';
+import { BoardReportExportModal } from './BoardReportExportModal';
 
 interface OverviewDashboardProps {
   school: School;
@@ -105,6 +108,8 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
   onOpenStaff,
   onOpenLibrary,
 }) => {
+  const [showBoardExportModal, setShowBoardExportModal] = useState(false);
+  const dashboardRootRef = useRef<HTMLDivElement>(null);
   const govTuitionOnly = isGovernmentSchool(school.schoolType);
   const isTeachingRole =
     rolePermissions.role === 'Subject Teacher' ||
@@ -624,9 +629,36 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
             <span>Staff Timebook</span>
           </button>
         )}
+        {rolePermissions.canReadMarks && (
+          <button
+            type="button"
+            onClick={() => setShowBoardExportModal(true)}
+            className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <FileDown className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>Export Board PDF</span>
+          </button>
+        )}
       </div>
     </div>
   );
+
+  const boardExportModal = rolePermissions.canReadMarks ? (
+    <BoardReportExportModal
+      open={showBoardExportModal}
+      onClose={() => setShowBoardExportModal(false)}
+      school={school}
+      rolePermissions={rolePermissions}
+      authorDisplayName={authorDisplayName}
+      students={students}
+      teachers={teachers}
+      assessments={assessments}
+      attendance={attendance}
+      invoices={rolePermissions.canReadFees ? invoices : []}
+      todayIso={todayIso}
+      dashboardRootEl={dashboardRootRef.current}
+    />
+  ) : null;
 
   const LibraryDueReminderBanner =
     rolePermissions.canReadLibrary &&
@@ -1217,7 +1249,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
     rolePermissions.role === 'Head of Department'
   ) {
     return (
-      <div className="space-y-6">
+      <div ref={dashboardRootRef} className="space-y-6">
         {RoleHeaderBanner}
         <AnnouncementsPanel
           school={school}
@@ -1283,6 +1315,13 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
             </div>
           </div>
         </div>
+
+        <TermPerformanceTrendChart
+          assessments={assessments}
+          currentAcademicYear={school.academicYear}
+          currentTerm={school.currentTerm}
+          onOpenGradebook={() => onNavigate('marks')}
+        />
 
         <ClassPerformanceTrendChart
           assessments={termAssessments}
@@ -1550,6 +1589,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
             <EnrollmentGenderChart rows={formBreakdown} />
           </section>
         </div>
+        {boardExportModal}
       </div>
     );
   }
@@ -1559,7 +1599,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
   // =========================================================================
   if (rolePermissions.role === 'Deputy Head') {
     return (
-      <div className="space-y-6">
+      <div ref={dashboardRootRef} className="space-y-6">
         {RoleHeaderBanner}
         <AnnouncementsPanel
           school={school}
@@ -1623,6 +1663,13 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
             </div>
           </div>
         </div>
+
+        <TermPerformanceTrendChart
+          assessments={assessments}
+          currentAcademicYear={school.academicYear}
+          currentTerm={school.currentTerm}
+          onOpenGradebook={() => onNavigate('marks')}
+        />
 
         <ClassPerformanceTrendChart
           assessments={termAssessments}
@@ -1754,6 +1801,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
             </div>
           )}
         </section>
+        {boardExportModal}
       </div>
     );
   }
@@ -1762,7 +1810,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
   // 4. OWNER / HEAD TEACHER EXECUTIVE DASHBOARD
   // =========================================================================
   return (
-    <div className="space-y-6">
+    <div ref={dashboardRootRef} className="space-y-6">
       {RoleHeaderBanner}
       <AnnouncementsPanel
         school={school}
@@ -1877,6 +1925,14 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Term-over-Term Student Aggregate Performance Trends (Recharts) */}
+      <TermPerformanceTrendChart
+        assessments={assessments}
+        currentAcademicYear={school.academicYear}
+        currentTerm={school.currentTerm}
+        onOpenGradebook={() => onNavigate('marks')}
+      />
 
       {/* Class-Wide Academic Performance Trends (CA1, CA2, Summative) */}
       <ClassPerformanceTrendChart
@@ -2062,6 +2118,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
         )}
         </section>
       </div>
+      {boardExportModal}
     </div>
   );
 };

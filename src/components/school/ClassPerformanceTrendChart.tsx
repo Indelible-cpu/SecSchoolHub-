@@ -13,6 +13,7 @@ import {
 } from 'recharts';
 import { ArrowRight } from 'lucide-react';
 import { FORM_LEVELS, normalizeAssessmentComponents } from '../../school/malawi';
+import { usePrefersReducedMotion } from '../../school/useChartAnimation';
 import { Assessment, FormLevel, TermName } from '../../school/types';
 
 interface ClassPerformanceTrendChartProps {
@@ -57,6 +58,8 @@ export const ClassPerformanceTrendChart: React.FC<ClassPerformanceTrendChartProp
   onOpenGradebook,
 }) => {
   const [mode, setMode] = useState<ChartMode>('trend');
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const animateCharts = !prefersReducedMotion;
 
   const analytics = useMemo(() => {
     const accum = {
@@ -150,7 +153,11 @@ export const ClassPerformanceTrendChart: React.FC<ClassPerformanceTrendChartProp
   }, [assessments]);
 
   return (
-    <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 space-y-4">
+    <section
+      data-board-chart="class-trend"
+      data-chart-filter-summary={`Term: ${term} · Mode: ${mode === 'trend' ? 'Stage Trend (CA 1, CA 2, Summative)' : 'By Form Breakdown'}`}
+      className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 space-y-4"
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
@@ -275,7 +282,7 @@ export const ClassPerformanceTrendChart: React.FC<ClassPerformanceTrendChartProp
                 />
                 <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '6px' }} />
 
-                {analytics.activeForms.map((f) => (
+                {analytics.activeForms.map((f, idx) => (
                   <Line
                     key={f}
                     type="monotone"
@@ -286,6 +293,10 @@ export const ClassPerformanceTrendChart: React.FC<ClassPerformanceTrendChartProp
                     dot={{ r: 4, strokeWidth: 2 }}
                     activeDot={{ r: 6 }}
                     connectNulls
+                    isAnimationActive={animateCharts}
+                    animationBegin={idx * 65}
+                    animationDuration={550}
+                    animationEasing="ease-out"
                   />
                 ))}
 
@@ -299,6 +310,10 @@ export const ClassPerformanceTrendChart: React.FC<ClassPerformanceTrendChartProp
                     strokeDasharray="5 4"
                     dot={{ r: 3.5 }}
                     connectNulls
+                    isAnimationActive={animateCharts}
+                    animationBegin={180}
+                    animationDuration={550}
+                    animationEasing="ease-out"
                   />
                 )}
               </LineChart>
@@ -335,9 +350,36 @@ export const ClassPerformanceTrendChart: React.FC<ClassPerformanceTrendChartProp
                   itemStyle={{ fontFamily: 'ui-monospace, monospace' }}
                 />
                 <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '6px' }} />
-                <Bar dataKey="ca1" name="CA 1 (20%)" fill="#059669" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="ca2" name="CA 2 (20%)" fill="#0d9488" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="exam" name="Summative (60%)" fill="#0284c7" radius={[4, 4, 0, 0]} />
+                <Bar
+                  dataKey="ca1"
+                  name="CA 1 (20%)"
+                  fill="#059669"
+                  radius={[4, 4, 0, 0]}
+                  isAnimationActive={animateCharts}
+                  animationBegin={0}
+                  animationDuration={500}
+                  animationEasing="ease-out"
+                />
+                <Bar
+                  dataKey="ca2"
+                  name="CA 2 (20%)"
+                  fill="#0d9488"
+                  radius={[4, 4, 0, 0]}
+                  isAnimationActive={animateCharts}
+                  animationBegin={75}
+                  animationDuration={500}
+                  animationEasing="ease-out"
+                />
+                <Bar
+                  dataKey="exam"
+                  name="Summative (60%)"
+                  fill="#0284c7"
+                  radius={[4, 4, 0, 0]}
+                  isAnimationActive={animateCharts}
+                  animationBegin={150}
+                  animationDuration={500}
+                  animationEasing="ease-out"
+                />
               </BarChart>
             )}
           </ResponsiveContainer>
