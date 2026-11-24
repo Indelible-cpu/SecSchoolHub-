@@ -1,5 +1,12 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
+import {
+  getAuth,
+  getRedirectResult,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithRedirect,
+  signOut,
+} from 'firebase/auth';
 import { doc, getDocFromServer, initializeFirestore } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
@@ -102,7 +109,25 @@ export function testConnection(): Promise<void> {
 }
 
 export async function signInWithGoogle(): Promise<void> {
-  await signInWithPopup(auth, googleProvider);
+  try {
+    await signInWithPopup(auth, googleProvider);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.message.includes('Cross-Origin-Opener-Policy') ||
+        error.message.includes('popup') ||
+        (error as { code?: string }).code === 'auth/popup-blocked')
+    ) {
+      await signInWithRedirect(auth, googleProvider);
+      return;
+    }
+    throw error;
+  }
+}
+
+// Automatically resolve redirect credentials if returning from a COOP redirect flow
+if (typeof window !== 'undefined') {
+  getRedirectResult(auth).catch(() => {});
 }
 
 export async function signOutUser(): Promise<void> {
