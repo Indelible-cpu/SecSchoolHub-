@@ -7,7 +7,6 @@ import {
   FileText,
   Pencil,
   Plus,
-  Printer,
   Sparkles,
   Trash2,
   TrendingDown,
@@ -16,6 +15,7 @@ import {
 import {
   Assessment,
   AssessmentType,
+  AttendanceRecord,
   FormLevel,
   School,
   SchoolSubject,
@@ -24,7 +24,6 @@ import {
 } from '../../school/types';
 import {
   calculateManebGrade,
-  calculateTermReportSummary,
   calculateWeightedComponent,
   detectCaDownwardAlerts,
   detectNextAssessmentStage,
@@ -34,14 +33,12 @@ import {
   normalizeAssessmentComponents,
   TERMS,
 } from '../../school/malawi';
-import {
-  downloadMarksPdfReport,
-  downloadStudentTermReportCardPdf,
-} from '../../school/pdfReports';
+import { downloadMarksPdfReport } from '../../school/pdfReports';
 import { removeAssessment, saveAssessment } from '../../school/firestoreService';
 import { buildModalDraftKey, clearModalDraft, loadModalDraft, saveModalDraft } from '../../school/modalDrafts';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { DraftRestoredNotice, ModalBackdrop } from './ModalBackdrop';
+import { ReportCardExportModal } from './ReportCardExportModal';
 import {
   ManebGradeDistributionChart,
   SubjectComponentBarChart,
@@ -53,6 +50,7 @@ interface MarksGradebookProps {
   ownerId: string;
   students: Student[];
   assessments: Assessment[];
+  attendance?: AttendanceRecord[];
   schoolSubjects?: SchoolSubject[];
   canWriteMarks?: boolean;
   onOpenStaffSettings?: () => void;
@@ -66,6 +64,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
   ownerId,
   students,
   assessments,
+  attendance = [],
   schoolSubjects = [],
   canWriteMarks = true,
   onOpenStaffSettings,
@@ -711,19 +710,6 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
     setReportCardOpen(true);
   };
 
-  const reportStudent = useMemo(
-    () => sortedReportStudents.find((s) => s.id === reportStudentId) || null,
-    [reportStudentId, sortedReportStudents]
-  );
-
-  const reportSummary = useMemo(() => {
-    if (!reportStudent) return null;
-    const studentTermAssessments = assessments.filter(
-      (a) => a.studentId === reportStudent.id && a.term === reportTerm
-    );
-    return calculateTermReportSummary(reportStudent.formLevel, studentTermAssessments);
-  }, [assessments, reportStudent, reportTerm]);
-
   return (
     <div className="space-y-5">
       {/* Header & Filters */}
@@ -742,25 +728,25 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
               type="button"
               onClick={() => openTermReportCard()}
               disabled={students.length === 0}
-              className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-emerald-700/30 bg-emerald-50/70 dark:bg-emerald-950/40 text-xs font-semibold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100/70 dark:hover:bg-emerald-950/70 disabled:opacity-40 cursor-pointer"
+              className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-emerald-700/30 bg-emerald-50/70 dark:bg-emerald-950/40 text-xs font-semibold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100/70 dark:hover:bg-emerald-950/70 disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <FileText className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Term Report Card</span>
+              <span>Report Cards PDF</span>
             </button>
             <button
               type="button"
               onClick={handleDownloadPdf}
               disabled={filtered.length === 0}
-              className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
+              className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <FileDown className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Download Report</span>
+              <span>Marks Ledger PDF</span>
             </button>
             <button
               type="button"
               onClick={handleExportCSV}
               disabled={filtered.length === 0}
-              className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
+              className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" aria-hidden="true" />
               <span>Export CSV</span>
@@ -770,7 +756,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
                 type="button"
                 onClick={openNewMark}
                 disabled={activeStudents.length === 0}
-                className="inline-flex items-center gap-1.5 min-h-[40px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white text-xs font-semibold cursor-pointer"
+                className="inline-flex items-center gap-1.5 min-h-[40px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Record Score</span>
@@ -1435,288 +1421,17 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
         </ModalBackdrop>
       )}
 
-      {/* Term Report Card Generator Modal */}
-      {reportCardOpen && reportStudent && reportSummary && (
-        <ModalBackdrop
-          open={reportCardOpen}
-          onClose={() => setReportCardOpen(false)}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
-        >
-          <div className="w-full max-w-3xl rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-5 sm:p-6 shadow-xl max-h-[92vh] overflow-y-auto">
-            {/* Top Letterhead & Actions */}
-            <div className="flex flex-wrap items-start justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
-              <div>
-                <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-                  {school.name} · {school.district} District
-                </div>
-                <h2 className="mt-1 text-lg font-bold text-slate-900 dark:text-white">
-                  Term Report Card ({school.academicYear})
-                </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono">
-                  CA 1 (20%) + CA 2 (20%) + Summative (60%) · Exam {reportSummary.system}
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-1.5">
-                <button
-                  type="button"
-                  disabled={reportSummary.subjectCount === 0}
-                  onClick={() =>
-                    downloadStudentTermReportCardPdf({
-                      school,
-                      student: reportStudent,
-                      term: reportTerm,
-                      summary: reportSummary,
-                    })
-                  }
-                  className="inline-flex items-center gap-1.5 min-h-[38px] px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white text-xs font-semibold cursor-pointer"
-                >
-                  <FileDown className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>Download PDF</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => window.print()}
-                  className="inline-flex items-center gap-1.5 min-h-[38px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
-                >
-                  <Printer className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>Print</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setReportCardOpen(false)}
-                  aria-label="Close Term Report Card"
-                  className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            {/* Student & Term Selector */}
-            <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="sm:col-span-2">
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Select Student
-                </label>
-                <select
-                  value={reportStudentId}
-                  onChange={(e) => setReportStudentId(e.target.value)}
-                  className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm font-medium"
-                >
-                  {sortedReportStudents.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.fullName} — {s.admissionNo} (Form {s.formLevel}{s.stream})
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Academic Term
-                </label>
-                <select
-                  value={reportTerm}
-                  onChange={(e) => setReportTerm(e.target.value as TermName)}
-                  className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm font-medium"
-                >
-                  {TERMS.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {/* Student Metadata Bar */}
-            <div className="mt-3 px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/70 border border-slate-200/80 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-300">
-              <div>
-                <span className="font-semibold text-slate-900 dark:text-white">
-                  {reportStudent.fullName}
-                </span>{' '}
-                · {reportStudent.admissionNo}
-              </div>
-              <div>
-                Form {reportStudent.formLevel}{reportStudent.stream} ({reportSummary.system}) ·{' '}
-                {reportStudent.boardingStatus} · {reportTerm}
-              </div>
-            </div>
-
-            {/* 4-Card Exam Standing Summary */}
-            <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div className="p-3.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/70 dark:border-emerald-900/60">
-                <div className="text-[11px] font-medium text-emerald-800 dark:text-emerald-300">
-                  {reportStudent.formLevel >= 3 ? 'MSCE Best 6' : 'Subjects Passed'}
-                </div>
-                <div className="mt-1 text-xl font-bold font-mono tabular-nums text-emerald-800 dark:text-emerald-300">
-                  {reportSummary.subjectCount === 0
-                    ? '—'
-                    : reportStudent.formLevel >= 3
-                    ? reportSummary.standing.bestSixPoints !== null
-                      ? `${reportSummary.standing.bestSixPoints} pts`
-                      : `${reportSummary.subjectCount}/6`
-                    : `${reportSummary.passedSubjectCount}/${reportSummary.subjectCount}`}
-                </div>
-                <div className="text-[11px] text-emerald-700/80 dark:text-emerald-400/80 font-mono">
-                  {reportStudent.formLevel >= 3 && reportSummary.meanManebPoint !== null
-                    ? `Mean Pt: ${reportSummary.meanManebPoint}`
-                    : `${reportSummary.creditSubjectCount} credits`}
-                </div>
-              </div>
-
-              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800">
-                <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-                  Overall Grade
-                </div>
-                <div className="mt-1 text-xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
-                  {reportSummary.overallGrade}
-                </div>
-                <div className="text-[11px] text-slate-600 dark:text-slate-400">
-                  {reportSummary.overallRemark}
-                </div>
-              </div>
-
-              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800">
-                <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-                  Term Average
-                </div>
-                <div className="mt-1 text-xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
-                  {reportSummary.subjectCount > 0
-                    ? `${reportSummary.weightedAverage.toFixed(1)}%`
-                    : '—'}
-                </div>
-                <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
-                  CA {reportSummary.caAverage.toFixed(1)} + Exam {reportSummary.summativeAverage.toFixed(1)}
-                </div>
-              </div>
-
-              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800">
-                <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-                  {reportSummary.system} Standing
-                </div>
-                <div
-                  className={`mt-1 text-xl font-bold ${
-                    reportSummary.standing.outcome === 'Pass'
-                      ? 'text-emerald-700 dark:text-emerald-400'
-                      : reportSummary.standing.outcome === 'Fail'
-                      ? 'text-rose-600 dark:text-rose-400'
-                      : 'text-slate-700 dark:text-slate-300'
-                  }`}
-                >
-                  {reportSummary.standing.outcome}
-                </div>
-                <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
-                  {reportSummary.subjectCount} graded
-                </div>
-              </div>
-            </div>
-
-            {reportSummary.rows.length > 0 && (
-              <div className="mt-4 p-4 rounded-xl bg-slate-50/70 dark:bg-slate-900/50 border border-slate-200/80 dark:border-slate-800">
-                <SubjectComponentBarChart
-                  items={reportSummary.rows.map((r) => ({
-                    subject: r.assessment.subject,
-                    ca1: r.ca1Score,
-                    ca2: r.ca2Score,
-                    exam: r.examScore,
-                    total: r.totalScore,
-                    grade: r.grade,
-                  }))}
-                  maxItems={12}
-                />
-              </div>
-            )}
-
-            {/* Subject Breakdown Table */}
-            <div className="mt-4 overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-xl">
-              {reportSummary.rows.length === 0 ? (
-                <div className="py-10 px-6 text-center text-sm text-slate-500 dark:text-slate-400">
-                  No {reportTerm} assessments recorded for {reportStudent.fullName}.
-                </div>
-              ) : (
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 text-slate-500 dark:text-slate-400">
-                      <th className="py-2.5 px-3 font-medium">Subject</th>
-                      <th className="py-2.5 px-2.5 font-medium text-right">CA 1 (20%)</th>
-                      <th className="py-2.5 px-2.5 font-medium text-right">CA 2 (20%)</th>
-                      <th className="py-2.5 px-2.5 font-medium text-right">Summative (60%)</th>
-                      <th className="py-2.5 px-2.5 font-medium text-right">Total (100%)</th>
-                      <th className="py-2.5 px-2.5 font-medium text-right">Pts (1–9)</th>
-                      <th className="py-2.5 px-2.5 font-medium text-right">Grade</th>
-                      <th className="py-2.5 px-3 font-medium text-right">Remark</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
-                    {reportSummary.rows.map((r) => (
-                      <tr key={r.assessment.id}>
-                        <td className="py-2.5 px-3 font-medium text-slate-900 dark:text-slate-100">
-                          {r.assessment.subject}
-                        </td>
-                        <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-600 dark:text-slate-300">
-                          {r.hasCa1 ? r.ca1Score.toFixed(1) : '—'}
-                        </td>
-                        <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-600 dark:text-slate-300">
-                          {r.hasCa2 ? r.ca2Score.toFixed(1) : '—'}
-                        </td>
-                        <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-600 dark:text-slate-300">
-                          {r.hasExam ? r.examScore.toFixed(1) : '—'}
-                        </td>
-                        <td className="py-2.5 px-2.5 text-right font-mono tabular-nums font-semibold text-slate-900 dark:text-white">
-                          {r.totalScore.toFixed(1)}%
-                        </td>
-                        <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-700 dark:text-slate-300">
-                          {r.gradePoint}
-                        </td>
-                        <td
-                          className={`py-2.5 px-2.5 text-right font-mono font-bold ${
-                            r.gradePoint <= 6
-                              ? 'text-emerald-700 dark:text-emerald-400'
-                              : r.gradePoint <= 8
-                              ? 'text-amber-700 dark:text-amber-400'
-                              : 'text-rose-600 dark:text-rose-400'
-                          }`}
-                        >
-                          {r.grade}
-                        </td>
-                        <td className="py-2.5 px-3 text-right text-slate-600 dark:text-slate-400">
-                          {r.remark}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr className="border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/80 font-semibold text-slate-900 dark:text-white">
-                      <td className="py-2.5 px-3">
-                        Overall ({reportSummary.subjectCount} Subjects)
-                      </td>
-                      <td className="py-2.5 px-2.5 text-right font-mono tabular-nums">
-                        {reportSummary.ca1Average.toFixed(1)}
-                      </td>
-                      <td className="py-2.5 px-2.5 text-right font-mono tabular-nums">
-                        {reportSummary.ca2Average.toFixed(1)}
-                      </td>
-                      <td className="py-2.5 px-2.5 text-right font-mono tabular-nums">
-                        {reportSummary.summativeAverage.toFixed(1)}
-                      </td>
-                      <td className="py-2.5 px-2.5 text-right font-mono tabular-nums">
-                        {reportSummary.weightedAverage.toFixed(1)}%
-                      </td>
-                      <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-emerald-700 dark:text-emerald-400">
-                        {reportSummary.meanManebPoint !== null ? reportSummary.meanManebPoint.toFixed(1) : '—'}
-                      </td>
-                      <td className="py-2.5 px-2.5 text-right font-mono font-bold text-emerald-700 dark:text-emerald-400">
-                        {reportSummary.overallGrade}
-                      </td>
-                      <td className="py-2.5 px-3 text-right">{reportSummary.overallRemark}</td>
-                    </tr>
-                  </tfoot>
-                </table>
-              )}
-            </div>
-          </div>
-        </ModalBackdrop>
-      )}
+      {/* Printable Student Report Card PDF Exporter Modal */}
+      <ReportCardExportModal
+        open={reportCardOpen}
+        onClose={() => setReportCardOpen(false)}
+        school={school}
+        students={students}
+        assessments={assessments}
+        attendance={attendance}
+        initialStudentId={reportStudentId}
+        initialTerm={reportTerm}
+      />
 
       {/* Safe Delete Assessment Modal */}
       <ConfirmDeleteModal

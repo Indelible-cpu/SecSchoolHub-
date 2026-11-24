@@ -6,10 +6,39 @@ import {defineConfig} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
+  let isHmrDisabled = process.env.DISABLE_HMR === 'true';
+
   return {
     plugins: [
       react(),
       tailwindcss(),
+      {
+        name: 'pwa-dev-sw-no-hmr',
+        apply: 'serve',
+        enforce: 'pre',
+        configResolved(config) {
+          isHmrDisabled = config.server.hmr === false || process.env.DISABLE_HMR === 'true';
+        },
+        resolveId(id) {
+          if (isHmrDisabled && id === '/@vite-plugin-pwa/pwa-entry-point-loaded') {
+            return '\0/@vite-plugin-pwa/pwa-entry-point-loaded';
+          }
+          return undefined;
+        },
+        load(id) {
+          if (isHmrDisabled && id === '\0/@vite-plugin-pwa/pwa-entry-point-loaded') {
+            return `export default function registerDevSW() {
+  if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+    navigator.serviceWorker
+      .register('/dev-sw.js?dev-sw', { scope: '/', type: 'module' })
+      .catch(() => {});
+  }
+}
+`;
+          }
+          return undefined;
+        },
+      },
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: [

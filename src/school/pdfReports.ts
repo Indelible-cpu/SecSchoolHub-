@@ -2,6 +2,17 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { formatMWK, normalizeAssessmentComponents, TermReportCardSummary } from './malawi';
 import {
+  buildStudentReportCardPayload,
+  BuiltStudentReportCard,
+  computeSubjectCaDeltaPct,
+  formatOrdinalPosition,
+  getReportTemplateMeta,
+  ReportCardExportOptions,
+  ReportCardTemplateId,
+  StudentClassRank,
+  StudentReportAttendanceStats,
+} from './reportCardTemplates';
+import {
   Assessment,
   FeeInvoice,
   FeePayment,
@@ -234,73 +245,448 @@ export function downloadMarksPdfReport(params: {
   doc.save(`${slug}-marks-report-${termSlug}.pdf`);
 }
 
-export function downloadStudentTermReportCardPdf(params: {
-  school: School;
-  student: Student;
-  term: TermName;
-  summary: TermReportCardSummary;
-}) {
-  const { school, student, term, summary } = params;
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+function addSchoolLogoSafe(
+  doc: jsPDF,
+  school: School,
+  x: number,
+  y: number,
+  size: number
+): boolean {
+  if (!school.logoDataUrl || !school.logoDataUrl.startsWith('data:image/')) {
+    return false;
+  }
+  try {
+    const imgFormat = school.logoDataUrl.startsWith('data:image/jpeg')
+      ? 'JPEG'
+      : school.logoDataUrl.startsWith('data:image/webp')
+      ? 'WEBP'
+      : 'PNG';
+    doc.addImage(school.logoDataUrl, imgFormat, x, y, size, size);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-  const studentLine = `${student.fullName}  ·  Adm #: ${student.admissionNo}  ·  Form ${student.formLevel}${student.stream} (${summary.system})  ·  ${term}`;
-  let y = drawReportHeader(doc, school, 'Official Student Term Report Card', studentLine);
+function drawGradingKeyBox(
+  doc: jsPDF,
+  startY: number,
+  formLevel: FormLevel,
+  monochrome = false
+): number {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const margin = 14;
+  const usableWidth = pageWidth - margin * 2;
+  const boxHeight = 14;
 
-  y = drawSummaryStrip(doc, y, [
+  doc.setFillColor(monochrome ? 255 : 248, monochrome ? 255 : 250, monochrome ? 255 : 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.25);
+  doc.roundedRect(margin, startY, usableWidth, boxHeight, 1.5, 1.5, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.2);
+  doc.setTextColor(30, 41, 59);
+  const title =
+    formLevel <= 2
+      ? 'JCE GRADING KEY (Forms 1–2):'
+      : 'MSCE GRADING KEY (Forms 3–4):';
+  doc.text(title, margin + 3, startY + 5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(71, 85, 105);
+  const scaleText =
+    formLevel <= 2
+      ? 'A (80–100% Distinction · Pt 1)  |  B (70–79% Very Good · Pt 3)  |  C (60–69% Credit · Pt 5)  |  D (50–59% Pass · Pt 7)  |  F (0–49% Fail · Pt 9)'
+      : '1–2 (75–100% Distinction)  |  3 (70–74% Strong Credit)  |  4–6 (55–69% Credit)  |  7–8 (40–54% Pass)  |  9 (0–39% Fail)  |  Pass requires English';
+  doc.text(scaleText, margin + 3, startY + 10.5, { maxWidth: usableWidth - 6 });
+
+  return startY + boxHeight + 4;
+}
+
+function drawRemarksBlock(
+  doc: jsPDF,
+  startY: number,
+  card: BuiltStudentReportCard,
+  monochrome = false
+): number {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const margin = 14;
+  const usableWidth = pageWidth - margin * 2;
+  const boxHeight = card.nextTermOpens ? 24 : 20;
+
+  doc.setFillColor(monochrome ? 255 : 248, monochrome ? 255 : 250, monochrome ? 255 : 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.25);
+  doc.roundedRect(margin, startY, usableWidth, boxHeight, 1.5, 1.5, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.4);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Form Teacher:', margin + 3, startY + 5.2);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(51, 65, 85);
+  doc.text(card.formTeacherRemark, margin + 27, startY + 5.2, { maxWidth: usableWidth - 30 });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(15, 23, 42);
+  doc.text('Head Teacher:', margin + 3, startY + 13.5);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(51, 65, 85);
+  doc.text(card.headTeacherRemark, margin + 27, startY + 13.5, { maxWidth: usableWidth - 30 });
+
+  if (card.nextTermOpens) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.2);
+    doc.setTextColor(monochrome ? 30 : 13, monochrome ? 41 : 110, monochrome ? 59 : 82);
+    doc.text(`Next Term Opens: ${card.nextTermOpens}`, margin + 3, startY + 21);
+  }
+
+  return startY + boxHeight + 4;
+}
+
+function drawSignaturesBlock(
+  doc: jsPDF,
+  startY: number,
+  leftLabel = 'Form Teacher Signature & Date',
+  rightLabel = 'Head Teacher Signature & Official School Stamp'
+): number {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const sigY = Math.min(pageHeight - 23, Math.max(startY + 9, startY));
+
+  doc.setDrawColor(148, 163, 184);
+  doc.setLineWidth(0.35);
+  doc.line(14, sigY, 82, sigY);
+  doc.line(pageWidth - 88, sigY, pageWidth - 14, sigY);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.6);
+  doc.setTextColor(71, 85, 105);
+  doc.text(leftLabel, 14, sigY + 4.2);
+  doc.text(rightLabel, pageWidth - 88, sigY + 4.2);
+
+  return sigY + 7;
+}
+
+function drawGuardianTearOffSlip(
+  doc: jsPDF,
+  startY: number,
+  card: BuiltStudentReportCard
+) {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 14;
+  const slipY = Math.min(pageHeight - 38, Math.max(startY + 4, startY));
+
+  // Dashed cut line
+  doc.setDrawColor(148, 163, 184);
+  doc.setLineWidth(0.3);
+  doc.setLineDashPattern([2, 1.5], 0);
+  doc.line(margin, slipY, pageWidth - margin, slipY);
+  doc.setLineDashPattern([], 0);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(30, 41, 59);
+  doc.text('PARENT / GUARDIAN ACKNOWLEDGEMENT RETURN SLIP', margin, slipY + 5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(71, 85, 105);
+  doc.text(
+    `I acknowledge receipt of ${card.term} (${card.school.academicYear}) academic report for ${card.student.fullName} (Adm #: ${card.student.admissionNo}, Form ${card.student.formLevel}${card.student.stream}).`,
+    margin,
+    slipY + 10,
+    { maxWidth: pageWidth - margin * 2 }
+  );
+
+  const lineY = slipY + 20;
+  doc.setDrawColor(148, 163, 184);
+  doc.line(margin, lineY, margin + 62, lineY);
+  doc.line(margin + 72, lineY, margin + 132, lineY);
+  doc.line(margin + 142, lineY, pageWidth - margin, lineY);
+
+  doc.setFontSize(7);
+  doc.text(
+    card.student.guardianName ? `Guardian: ${card.student.guardianName}` : 'Parent / Guardian Name',
+    margin,
+    lineY + 3.8
+  );
+  doc.text('Parent / Guardian Signature', margin + 72, lineY + 3.8);
+  doc.text('Date Returned', margin + 142, lineY + 3.8);
+}
+
+function getStandingStripItems(
+  card: BuiltStudentReportCard,
+  options: ReportCardExportOptions
+): { label: string; value: string }[] {
+  const { student, summary, classRank, attendanceStats } = card;
+  const bestOrPassValue =
+    student.formLevel >= 3
+      ? summary.standing.bestSixPoints !== null
+        ? `${summary.standing.bestSixPoints} pts (Mean ${summary.meanManebPoint ?? '—'})`
+        : `${summary.subjectCount}/6 subjects`
+      : `${summary.passedSubjectCount}/${summary.subjectCount} (${summary.creditSubjectCount} credits)`;
+
+  const items: { label: string; value: string }[] = [
     {
       label: student.formLevel >= 3 ? 'MSCE Best 6 Pts' : 'Subjects Passed',
-      value:
-        student.formLevel >= 3
-          ? summary.standing.bestSixPoints !== null
-            ? `${summary.standing.bestSixPoints} pts (Mean ${summary.meanManebPoint ?? '—'})`
-            : `${summary.subjectCount}/6 subjects`
-          : `${summary.passedSubjectCount} / ${summary.subjectCount} (${summary.creditSubjectCount} credits)`,
+      value: bestOrPassValue,
     },
-    { label: 'Overall Grade', value: `${summary.overallGrade} (${summary.overallRemark})` },
-    { label: 'Term Average', value: `${summary.weightedAverage.toFixed(1)}%` },
-    {
-      label: `${summary.system} Standing`,
-      value: summary.standing.outcome,
-    },
-  ]);
+    { label: 'Term Average', value: `${summary.weightedAverage.toFixed(1)}% (${summary.overallGrade})` },
+    { label: `${summary.system} Standing`, value: `${summary.standing.outcome} · ${summary.overallRemark}` },
+  ];
 
-  autoTable(doc, {
-    startY: y,
-    margin: { left: 14, right: 14, bottom: 26 },
-    theme: 'grid',
-    styles: {
-      font: 'helvetica',
-      fontSize: 8.5,
-      cellPadding: 2.6,
-      textColor: [30, 41, 59],
-      lineColor: [226, 232, 240],
-      lineWidth: 0.25,
-    },
-    headStyles: {
-      fillColor: [13, 110, 82],
-      textColor: [255, 255, 255],
-      fontStyle: 'bold',
-    },
-    footStyles: {
-      fillColor: [241, 245, 249],
-      textColor: [15, 23, 42],
-      fontStyle: 'bold',
-    },
-    alternateRowStyles: {
-      fillColor: [248, 250, 252],
-    },
-    columnStyles: {
-      0: { cellWidth: 40 },
-      1: { halign: 'right', cellWidth: 21 },
-      2: { halign: 'right', cellWidth: 21 },
-      3: { halign: 'right', cellWidth: 25 },
-      4: { halign: 'right', cellWidth: 22, fontStyle: 'bold' },
-      5: { halign: 'right', cellWidth: 16 },
-      6: { halign: 'center', cellWidth: 14, fontStyle: 'bold' },
-      7: { cellWidth: 23 },
-    },
-    head: [['Subject', 'CA 1 (20%)', 'CA 2 (20%)', 'Summative (60%)', 'Total (100%)', 'Pts (1-9)', 'Grade', 'Remark']],
-    body: summary.rows.map((r) => [
+  if (options.includeRank && classRank) {
+    items.push({
+      label: `${classRank.formLabel} Position`,
+      value: `${formatOrdinalPosition(classRank.rank)} of ${classRank.totalRanked}`,
+    });
+  } else if (options.includeAttendance && attendanceStats && attendanceStats.ratePct !== null) {
+    items.push({
+      label: 'Term Attendance',
+      value: `${attendanceStats.ratePct.toFixed(0)}% (${attendanceStats.present + attendanceStats.late}/${attendanceStats.totalMarked}d)`,
+    });
+  } else {
+    items.push({
+      label: 'CA / Exam Split',
+      value: `${summary.caAverage.toFixed(1)} / ${summary.summativeAverage.toFixed(1)}`,
+    });
+  }
+
+  return items;
+}
+
+function renderReportCardPage(
+  doc: jsPDF,
+  card: BuiltStudentReportCard,
+  templateId: ReportCardTemplateId,
+  options: ReportCardExportOptions
+) {
+  const { school, student, term, summary, classRank, attendanceStats } = card;
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const margin = 14;
+  const usableWidth = pageWidth - margin * 2;
+  const isCompact = templateId === 'compact-parent-slip';
+  const isModern = templateId === 'modern-executive';
+  const isDetailed = templateId === 'detailed-transcript';
+  const compactRows = summary.rows.length > 9;
+
+  // Theme colors per pre-defined template
+  const headerRgb: [number, number, number] =
+    templateId === 'classic-maneb'
+      ? [13, 110, 82]
+      : templateId === 'modern-executive'
+      ? [15, 23, 42]
+      : templateId === 'detailed-transcript'
+      ? [30, 58, 95]
+      : [51, 65, 85];
+
+  let y = 10;
+
+  if (isCompact) {
+    // Monochrome ink-saving border bar
+    doc.setDrawColor(51, 65, 85);
+    doc.setLineWidth(0.7);
+    doc.line(margin, 7, pageWidth - margin, 7);
+    let textX = margin;
+    if (addSchoolLogoSafe(doc, school, margin, 9, 10)) {
+      textX = margin + 12.5;
+    }
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text(school.name.toUpperCase(), textX, 13.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(71, 85, 105);
+    doc.text(
+      `${school.district} District  ·  ${school.academicYear}  ·  ${term} Parent Academic Slip`,
+      textX,
+      18
+    );
+    y = 22;
+  } else {
+    // Top colored accent bar
+    doc.setFillColor(...headerRgb);
+    doc.rect(0, 0, pageWidth, 4, 'F');
+
+    let textX = margin;
+    if (addSchoolLogoSafe(doc, school, margin, 8, 13)) {
+      textX = margin + 16;
+    }
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text(school.name.toUpperCase(), textX, 14);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(71, 85, 105);
+    const subline = [
+      `${school.district} District`,
+      school.schoolType,
+      school.motto ? `"${school.motto}"` : '',
+    ]
+      .filter(Boolean)
+      .join('  ·  ');
+    doc.text(subline, textX, 19.2);
+
+    const generatedStr = new Date().toLocaleDateString('en-MW', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+    doc.setFontSize(8);
+    doc.text(`${school.academicYear}  ·  ${term}`, pageWidth - margin, 14, { align: 'right' });
+    doc.text(`Issued: ${generatedStr}`, pageWidth - margin, 19.2, { align: 'right' });
+
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.35);
+    doc.line(margin, 23, pageWidth - margin, 23);
+
+    const reportHeading =
+      templateId === 'classic-maneb'
+        ? 'OFFICIAL STUDENT ACADEMIC REPORT CARD'
+        : templateId === 'modern-executive'
+        ? 'Executive Student Term Report Card'
+        : 'Detailed Continuous Assessment & Exam Transcript';
+
+    if (isModern) {
+      doc.setFillColor(13, 110, 82);
+      doc.rect(margin, 26.5, 2, 5.5, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text(reportHeading, margin + 4.5, 31);
+      y = 35;
+    } else {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11.5);
+      doc.setTextColor(...headerRgb);
+      doc.text(reportHeading, margin, 29.5);
+      y = 33.5;
+    }
+  }
+
+  // Student Biodata Grid
+  const bioHeight = isCompact ? 13 : 16;
+  doc.setFillColor(isCompact ? 255 : 248, isCompact ? 255 : 250, isCompact ? 255 : 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.25);
+  doc.roundedRect(margin, y, usableWidth, bioHeight, 1.5, 1.5, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.2);
+  doc.setTextColor(15, 23, 42);
+  doc.text(`Student: ${student.fullName}`, margin + 3.5, y + 5.2);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.8);
+  doc.setTextColor(71, 85, 105);
+  const leftLine2Parts = [
+    `Adm #: ${student.admissionNo}`,
+    `Class: Form ${student.formLevel}${student.stream} (${summary.system})`,
+    student.boardingStatus,
+  ];
+  if (isCompact && student.guardianName) {
+    leftLine2Parts.push(`Guardian: ${student.guardianName}`);
+  }
+  doc.text(leftLine2Parts.join('  ·  '), margin + 3.5, y + (isCompact ? 10 : 11.2));
+
+  const rightLine1 =
+    options.includeRank && classRank
+      ? `Position: ${formatOrdinalPosition(classRank.rank)} / ${classRank.totalRanked}`
+      : `Subjects: ${summary.subjectCount}`;
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(15, 23, 42);
+  doc.text(rightLine1, pageWidth - margin - 3.5, y + 5.2, { align: 'right' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(71, 85, 105);
+  const rightLine2 =
+    options.includeAttendance && attendanceStats && attendanceStats.ratePct !== null
+      ? `Attendance: ${attendanceStats.present + attendanceStats.late}/${attendanceStats.totalMarked} days (${attendanceStats.ratePct.toFixed(0)}%)`
+      : `Term: ${term} (${school.academicYear})`;
+  doc.text(rightLine2, pageWidth - margin - 3.5, y + (isCompact ? 10 : 11.2), { align: 'right' });
+
+  y += bioHeight + 3.5;
+
+  // Summary strip
+  y = drawSummaryStrip(doc, y, getStandingStripItems(card, options)) - 2;
+
+  // Modern template: horizontal weighted score composition visual bar
+  if (isModern && summary.subjectCount > 0) {
+    const barW = usableWidth;
+    const barH = 4.2;
+    const totalPossible = 100;
+    const ca1W = (Math.min(20, summary.ca1Average) / totalPossible) * barW;
+    const ca2W = (Math.min(20, summary.ca2Average) / totalPossible) * barW;
+    const examW = (Math.min(60, summary.summativeAverage) / totalPossible) * barW;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(71, 85, 105);
+    doc.text(
+      `Weighted Score Composition: CA1 ${summary.ca1Average.toFixed(1)}/20  +  CA2 ${summary.ca2Average.toFixed(1)}/20  +  Exam ${summary.summativeAverage.toFixed(1)}/60  =  ${summary.weightedAverage.toFixed(1)}%`,
+      margin,
+      y + 2.5
+    );
+    y += 4;
+    doc.setFillColor(226, 232, 240);
+    doc.rect(margin, y, barW, barH, 'F');
+    if (ca1W > 0) {
+      doc.setFillColor(16, 185, 129);
+      doc.rect(margin, y, ca1W, barH, 'F');
+    }
+    if (ca2W > 0) {
+      doc.setFillColor(14, 165, 233);
+      doc.rect(margin + ca1W, y, ca2W, barH, 'F');
+    }
+    if (examW > 0) {
+      doc.setFillColor(15, 23, 42);
+      doc.rect(margin + ca1W + ca2W, y, examW, barH, 'F');
+    }
+    y += barH + 4;
+  }
+
+  // Subject marks table tailored to template
+  const tableHead = isCompact
+    ? [['Subject', 'CA (40%)', 'Exam (60%)', 'Total (100%)', 'Grade', 'Remark']]
+    : isDetailed
+    ? [['Subject', 'CA 1 (20%)', 'CA 2 (20%)', 'CA Δ', 'Exam (60%)', 'Total', 'Pts', 'Grade', 'Remark']]
+    : [['Subject', 'CA 1 (20%)', 'CA 2 (20%)', 'Summative (60%)', 'Total (100%)', 'Pts (1-9)', 'Grade', 'Remark']];
+
+  const tableBody = summary.rows.map((r) => {
+    if (isCompact) {
+      return [
+        r.assessment.subject,
+        (r.ca1Score + r.ca2Score).toFixed(1),
+        r.hasExam ? r.examScore.toFixed(1) : '—',
+        `${r.totalScore.toFixed(1)}%`,
+        r.grade,
+        r.remark,
+      ];
+    }
+    if (isDetailed) {
+      const delta = computeSubjectCaDeltaPct(r);
+      const deltaStr = delta === null ? '—' : `${delta >= 0 ? '+' : ''}${delta.toFixed(0)}%`;
+      return [
+        r.assessment.subject,
+        r.hasCa1 ? r.ca1Score.toFixed(1) : '—',
+        r.hasCa2 ? r.ca2Score.toFixed(1) : '—',
+        deltaStr,
+        r.hasExam ? r.examScore.toFixed(1) : '—',
+        `${r.totalScore.toFixed(1)}%`,
+        String(r.gradePoint),
+        r.grade,
+        r.remark,
+      ];
+    }
+    return [
       r.assessment.subject,
       r.hasCa1 ? r.ca1Score.toFixed(1) : '—',
       r.hasCa2 ? r.ca2Score.toFixed(1) : '—',
@@ -309,9 +695,31 @@ export function downloadStudentTermReportCardPdf(params: {
       String(r.gradePoint),
       r.grade,
       r.remark,
-    ]),
-    foot: [
-      [
+    ];
+  });
+
+  const tableFoot = isCompact
+    ? [[
+        `OVERALL (${summary.subjectCount} Subjects)`,
+        summary.caAverage.toFixed(1),
+        summary.summativeAverage.toFixed(1),
+        `${summary.weightedAverage.toFixed(1)}%`,
+        summary.overallGrade,
+        summary.overallRemark,
+      ]]
+    : isDetailed
+    ? [[
+        `OVERALL (${summary.subjectCount} Subjects)`,
+        summary.ca1Average.toFixed(1),
+        summary.ca2Average.toFixed(1),
+        '—',
+        summary.summativeAverage.toFixed(1),
+        `${summary.weightedAverage.toFixed(1)}%`,
+        summary.meanManebPoint !== null ? summary.meanManebPoint.toFixed(1) : '—',
+        summary.overallGrade,
+        summary.overallRemark,
+      ]]
+    : [[
         `OVERALL (${summary.subjectCount} Subjects)`,
         summary.ca1Average.toFixed(1),
         summary.ca2Average.toFixed(1),
@@ -320,31 +728,217 @@ export function downloadStudentTermReportCardPdf(params: {
         summary.meanManebPoint !== null ? summary.meanManebPoint.toFixed(1) : '—',
         summary.overallGrade,
         summary.overallRemark,
-      ],
-    ],
+      ]];
+
+  const colStyles: Record<number, { halign?: 'left' | 'right' | 'center'; cellWidth?: number; fontStyle?: 'normal' | 'bold' }> =
+    isCompact
+      ? {
+          0: { cellWidth: 58 },
+          1: { halign: 'right', cellWidth: 23 },
+          2: { halign: 'right', cellWidth: 24 },
+          3: { halign: 'right', cellWidth: 25, fontStyle: 'bold' },
+          4: { halign: 'center', cellWidth: 18, fontStyle: 'bold' },
+          5: { cellWidth: 34 },
+        }
+      : isDetailed
+      ? {
+          0: { cellWidth: 36 },
+          1: { halign: 'right', cellWidth: 18 },
+          2: { halign: 'right', cellWidth: 18 },
+          3: { halign: 'right', cellWidth: 14 },
+          4: { halign: 'right', cellWidth: 21 },
+          5: { halign: 'right', cellWidth: 18, fontStyle: 'bold' },
+          6: { halign: 'right', cellWidth: 12 },
+          7: { halign: 'center', cellWidth: 14, fontStyle: 'bold' },
+          8: { cellWidth: 31 },
+        }
+      : {
+          0: { cellWidth: 40 },
+          1: { halign: 'right', cellWidth: 21 },
+          2: { halign: 'right', cellWidth: 21 },
+          3: { halign: 'right', cellWidth: 25 },
+          4: { halign: 'right', cellWidth: 22, fontStyle: 'bold' },
+          5: { halign: 'right', cellWidth: 16 },
+          6: { halign: 'center', cellWidth: 14, fontStyle: 'bold' },
+          7: { cellWidth: 23 },
+        };
+
+  autoTable(doc, {
+    startY: y,
+    margin: { left: 14, right: 14, bottom: 26 },
+    theme: isCompact ? 'plain' : 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: compactRows ? 7.6 : 8.2,
+      cellPadding: compactRows ? 1.8 : 2.3,
+      textColor: [30, 41, 59],
+      lineColor: [203, 213, 225],
+      lineWidth: 0.25,
+    },
+    headStyles: isCompact
+      ? {
+          fillColor: [241, 245, 249],
+          textColor: [15, 23, 42],
+          fontStyle: 'bold',
+          lineWidth: 0.3,
+          lineColor: [148, 163, 184],
+        }
+      : {
+          fillColor: headerRgb,
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+        },
+    footStyles: {
+      fillColor: [241, 245, 249],
+      textColor: [15, 23, 42],
+      fontStyle: 'bold',
+    },
+    alternateRowStyles: isCompact
+      ? undefined
+      : {
+          fillColor: [248, 250, 252],
+        },
+    columnStyles: colStyles,
+    head: tableHead,
+    body: tableBody,
+    foot: tableFoot,
   });
 
-  // Signature block below table
+  let nextY =
+    ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y + 60) + 4;
+
+  // Attendance Breakdown Box for Detailed Transcript when enabled
+  if (isDetailed && options.includeAttendance && attendanceStats && nextY < 236) {
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(203, 213, 225);
+    doc.setLineWidth(0.25);
+    doc.roundedRect(margin, nextY, usableWidth, 10, 1.5, 1.5, 'FD');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.4);
+    doc.setTextColor(15, 23, 42);
+    doc.text('Attendance Record:', margin + 3, nextY + 6.2);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(71, 85, 105);
+    doc.text(
+      `Present: ${attendanceStats.present}  ·  Late: ${attendanceStats.late}  ·  Absent: ${attendanceStats.absent}  ·  Excused: ${attendanceStats.excused}  ·  Total Sessions Marked: ${attendanceStats.totalMarked}${attendanceStats.ratePct !== null ? ` (${attendanceStats.ratePct.toFixed(1)}%)` : ''}`,
+      margin + 34,
+      nextY + 6.2
+    );
+    nextY += 13;
+  }
+
+  if (options.includeRemarks && nextY < 248) {
+    nextY = drawRemarksBlock(doc, nextY, card, isCompact);
+  }
+
+  if (options.includeGradingKey && nextY < 252) {
+    nextY = drawGradingKeyBox(doc, nextY, student.formLevel, isCompact);
+  }
+
+  if (options.includeGuardianSlip) {
+    nextY = drawSignaturesBlock(doc, nextY, 'Form Teacher Signature', 'Head Teacher & Stamp');
+    if (nextY < 266) {
+      drawGuardianTearOffSlip(doc, nextY, card);
+    }
+  } else {
+    drawSignaturesBlock(doc, nextY);
+  }
+}
+
+export function downloadStudentTermReportCardPdf(params: {
+  school: School;
+  student: Student;
+  term: TermName;
+  summary: TermReportCardSummary;
+  templateId?: ReportCardTemplateId;
+  options?: Partial<ReportCardExportOptions>;
+  classRank?: StudentClassRank | null;
+  attendanceStats?: StudentReportAttendanceStats | null;
+  formTeacherRemark?: string;
+  headTeacherRemark?: string;
+  nextTermOpens?: string;
+}) {
+  const templateId = params.templateId ?? 'classic-maneb';
+  const meta = getReportTemplateMeta(templateId);
+  const options: ReportCardExportOptions = {
+    ...meta.defaultOptions,
+    ...(params.options || {}),
+  };
+
+  const card = buildStudentReportCardPayload({
+    school: params.school,
+    student: params.student,
+    term: params.term,
+    summary: params.summary,
+    classRank: params.classRank,
+    attendanceStats: params.attendanceStats,
+    formTeacherRemark: params.formTeacherRemark,
+    headTeacherRemark: params.headTeacherRemark,
+    nextTermOpens: params.nextTermOpens,
+  });
+
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  renderReportCardPage(doc, card, templateId, options);
+  addPageFooters(doc, params.school.name);
+
+  const stuSlug = slugifySchool(params.student.fullName);
+  const termSlug = params.term.toLowerCase().replace(/\s+/g, '-');
+  doc.save(`${stuSlug}-${termSlug}-${templateId}-report-card.pdf`);
+}
+
+export function downloadBatchStudentReportCardsPdf(params: {
+  school: School;
+  cards: BuiltStudentReportCard[];
+  templateId: ReportCardTemplateId;
+  options?: Partial<ReportCardExportOptions>;
+  batchLabel: string;
+  term: TermName;
+}) {
+  if (params.cards.length === 0) return;
+
+  const meta = getReportTemplateMeta(params.templateId);
+  const options: ReportCardExportOptions = {
+    ...meta.defaultOptions,
+    ...(params.options || {}),
+  };
+
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+  params.cards.forEach((card, index) => {
+    if (index > 0) {
+      doc.addPage('a4', 'portrait');
+    }
+    renderReportCardPage(doc, card, params.templateId, options);
+  });
+
+  // Add subtle per-student footers on every page
+  const totalPages = doc.getNumberOfPages();
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
-  const finalY = (doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y + 60;
-  const sigY = Math.min(pageHeight - 28, finalY + 14);
+  const margin = 14;
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i);
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.3);
+    doc.line(margin, pageHeight - 11, pageWidth - margin, pageHeight - 11);
 
-  doc.setDrawColor(148, 163, 184);
-  doc.setLineWidth(0.35);
-  doc.line(14, sigY, 82, sigY);
-  doc.line(pageWidth - 82, sigY, pageWidth - 14, sigY);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      `${params.school.name} — ${params.term} (${params.school.academicYear})`,
+      margin,
+      pageHeight - 6.5
+    );
+    doc.text(`Sheet ${i} of ${totalPages}`, pageWidth - margin, pageHeight - 6.5, {
+      align: 'right',
+    });
+  }
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(71, 85, 105);
-  doc.text('Form Teacher Signature & Date', 14, sigY + 4.5);
-  doc.text('Head Teacher Signature & School Stamp', pageWidth - 82, sigY + 4.5);
-
-  addPageFooters(doc, school.name);
-  const stuSlug = slugifySchool(student.fullName);
-  const termSlug = term.toLowerCase().replace(/\s+/g, '-');
-  doc.save(`${stuSlug}-${termSlug}-report-card.pdf`);
+  const schoolSlug = slugifySchool(params.school.name);
+  const batchSlug = slugifySchool(params.batchLabel);
+  const termSlug = params.term.toLowerCase().replace(/\s+/g, '-');
+  doc.save(`${schoolSlug}-${batchSlug}-${termSlug}-${params.templateId}-report-cards.pdf`);
 }
 
 export function downloadFeesPdfReport(params: {

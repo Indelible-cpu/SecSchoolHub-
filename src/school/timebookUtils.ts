@@ -175,6 +175,51 @@ export function isValidLongitude(lng: unknown): lng is number {
   return typeof lng === 'number' && Number.isFinite(lng) && lng >= -180 && lng <= 180;
 }
 
+export const MALAWI_GEO_BOUNDS = {
+  minLat: -17.2,
+  maxLat: -9.3,
+  minLng: 32.6,
+  maxLng: 36.0,
+} as const;
+
+export const MALAWI_DEFAULT_COORDS = {
+  latitude: -15.7861,
+  longitude: 35.0058,
+} as const;
+
+export interface MalawiBoundsCheckResult {
+  inMalawi: boolean;
+  validCoordinates: boolean;
+  reason: string;
+}
+
+export function validateMalawiCoordinates(lat: unknown, lng: unknown): MalawiBoundsCheckResult {
+  if (!isValidLatitude(lat) || !isValidLongitude(lng)) {
+    return {
+      inMalawi: false,
+      validCoordinates: false,
+      reason: 'Coordinates must be a valid latitude (-90 to 90) and longitude (-180 to 180).',
+    };
+  }
+
+  const latOk = lat >= MALAWI_GEO_BOUNDS.minLat && lat <= MALAWI_GEO_BOUNDS.maxLat;
+  const lngOk = lng >= MALAWI_GEO_BOUNDS.minLng && lng <= MALAWI_GEO_BOUNDS.maxLng;
+
+  if (!latOk || !lngOk) {
+    return {
+      inMalawi: false,
+      validCoordinates: true,
+      reason: `Selected coordinates (${lat.toFixed(4)}, ${lng.toFixed(4)}) appear outside Malawi (expected lat ${MALAWI_GEO_BOUNDS.minLat}° to ${MALAWI_GEO_BOUNDS.maxLat}°, lng ${MALAWI_GEO_BOUNDS.minLng}° to ${MALAWI_GEO_BOUNDS.maxLng}°).`,
+    };
+  }
+
+  return {
+    inMalawi: true,
+    validCoordinates: true,
+    reason: 'Coordinates are within Malawi geographical bounds.',
+  };
+}
+
 export function calculateHaversineDistanceMeters(
   lat1: number,
   lon1: number,

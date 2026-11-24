@@ -2,10 +2,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Calendar,
+  CheckCheck,
   CheckCircle2,
   ClipboardCheck,
   Clock,
-  Crosshair,
   Download,
   FileText,
   Filter,
@@ -43,6 +43,7 @@ import {
   isValidHHMM,
 } from '../../school/timebookUtils';
 import {
+  adminBulkMarkUnmarkedTimebook,
   adminRejectTimebookCorrectionRequest,
   adminSaveTimebookCorrection,
   saveTimebookSettings,
@@ -51,6 +52,7 @@ import { syncTimebookPolicyToServer } from '../../school/timebookApi';
 import { downloadStaffTimebookPdfReport } from '../../school/pdfReports';
 import type {
   School,
+  StaffAttendanceRecord,
   StaffTimebookEntry,
   Teacher,
   TeacherRole,
@@ -62,6 +64,7 @@ import type {
   TimebookSuspiciousLog,
 } from '../../school/types';
 import { ModalBackdrop } from './ModalBackdrop';
+import { TimebookLocationMapPicker } from './TimebookLocationMapPicker';
 
 const STAFF_ROLE_OPTIONS: TeacherRole[] = [
   'Head Teacher',
@@ -73,9 +76,12 @@ const STAFF_ROLE_OPTIONS: TeacherRole[] = [
   'School Bursar',
 ];
 
+type StaffCategoryFilter = 'all' | 'teachers' | 'leadership' | 'support';
+
 interface StaffTimebookAdminDashboardProps {
   school: School;
   teachers: Teacher[];
+  staffAttendance?: StaffAttendanceRecord[];
   timebookSettings: TimebookSettings | null;
   entries: StaffTimebookEntry[];
   correctionRequests: TimebookCorrectionRequest[];
@@ -116,6 +122,7 @@ function csvEscape(val: unknown): string {
 export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardProps> = ({
   school,
   teachers,
+  staffAttendance = [],
   timebookSettings,
   entries,
   correctionRequests,
@@ -132,12 +139,22 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
 
   const [activeTab, setActiveTab] = useState<AdminTimebookTab>('register');
   const [selectedDate, setSelectedDate] = useState(todayIso);
+  const [categoryFilter, setCategoryFilter] = useState<StaffCategoryFilter>('all');
   const [roleFilter, setRoleFilter] = useState<string>('ALL');
   const [methodFilter, setMethodFilter] = useState<
     'ALL' | 'GPS Auto' | 'Admin Recorded' | 'Not Signed In'
   >('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Bulk Mark Unmarked Staff Modal (Audited)
+  const [bulkModalOpen, setBulkModalOpen] = useState(false);
+  const [bulkTimeIn, setBulkTimeIn] = useState('07:55:00');
+  const [bulkExplanation, setBulkExplanation] = useState(
+    'Morning campus turnout verified by school administration'
+  );
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState('');
 
   // Admin Correction / Manual Entry Modal
   const [editModal, setEditModal] = useState<{
@@ -217,22 +234,69 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
     return map;
   }, [entries, selectedDate]);
 
+  const legacyPresenceForDate = useMemo(() => {
+    const map = new Map<string, StaffAttendanceRecord>();
+    for (const r of staffAttendance) {
+      if (r.date === selectedDate) {
+        map.set(r.teacherId, r);
+      }
+    }
+    return map;
+  }, [selectedDate, staffAttendance]);
+
+  const unmarkedTeachersForDate = useMemo(
+    () =>
+      teachers.filter(
+        (t) => !entriesForDate.has(t.id) && !legacyPresenceForDate.has(t.id) && t.status !== 'On Leave'
+      ),
+    [entriesForDate, legacyPresenceForDate, teachers]
+  );
+
   const registerRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return teachers
       .map((teacher) => {
         const entry = entriesForDate.get(teacher.id) || null;
+        const legacy = entry ? null : legacyPresenceForDate.get(teacher.id) || null;
         const derivedStatus: string =
-          entry?.status || (teacher.status === 'On Leave' ? 'On Leave' : 'Not Signed In');
-        const derivedMethod = entry?.recordingMethod || 'Not Signed In';
-        return { teacher, entry, derivedStatus, derivedMethod };
+          entry?.status ||
+          legacy?.status ||
+          (teacher.status === 'On Leave' ? 'On Leave' : 'Not Signed In');
+        const derivedMethod = entry
+          ? entry.recordingMethod
+          : legacy
+          ? 'Admin Recorded'
+          : 'Not Signed In';
+        return { teacher, entry, legacy, derivedStatus, derivedMethod };
       })
-      .filter(({ teacher, entry }) => {
+      .filter(({ teacher, entry, legacy }) => {
+        if (categoryFilter === 'leadership') {
+          if (!['Head Teacher', 'Deputy Head', 'Head of Department'].includes(teacher.roleTitle)) {
+            return false;
+          }
+        } else if (categoryFilter === 'teachers') {
+          if (
+            !['Form Teacher', 'Form Master', 'Subject Teacher', 'Head of Department'].includes(
+              teacher.roleTitle
+            )
+          ) {
+            return false;
+          }
+        } else if (categoryFilter === 'support') {
+          if (!['School Librarian', 'School Bursar'].includes(teacher.roleTitle)) {
+            return false;
+          }
+        }
+
         if (roleFilter !== 'ALL' && teacher.roleTitle !== roleFilter) return false;
         if (methodFilter === 'GPS Auto' && entry?.recordingMethod !== 'GPS Auto') return false;
-        if (methodFilter === 'Admin Recorded' && entry?.recordingMethod !== 'Admin Recorded')
+        if (
+          methodFilter === 'Admin Recorded' &&
+          entry?.recordingMethod !== 'Admin Recorded' &&
+          !legacy
+        )
           return false;
-        if (methodFilter === 'Not Signed In' && (entry || teacher.status === 'On Leave'))
+        if (methodFilter === 'Not Signed In' && (entry || legacy || teacher.status === 'On Leave'))
           return false;
         if (q) {
           const matches =
@@ -244,59 +308,88 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
         return true;
       })
       .sort((a, b) => a.teacher.fullName.localeCompare(b.teacher.fullName));
-  }, [entriesForDate, methodFilter, roleFilter, searchQuery, teachers]);
+  }, [categoryFilter, entriesForDate, legacyPresenceForDate, methodFilter, roleFilter, searchQuery, teachers]);
 
   const kpis = useMemo(() => {
     const activeTeachers = teachers.filter((t) => t.status === 'Active');
     let presentGps = 0;
     let adminRecorded = 0;
+    let totalPresent = 0;
     let absentCount = 0;
     let notSignedIn = 0;
+    let onLeaveCount = 0;
 
     for (const teacher of teachers) {
       const entry = entriesForDate.get(teacher.id);
-      if (!entry) {
-        if (teacher.status !== 'On Leave') {
+      const legacy = entry ? undefined : legacyPresenceForDate.get(teacher.id);
+      const status =
+        entry?.status || legacy?.status || (teacher.status === 'On Leave' ? 'On Leave' : '');
+
+      if (!entry && !legacy) {
+        if (teacher.status === 'On Leave') {
+          onLeaveCount += 1;
+        } else {
           notSignedIn += 1;
         }
         continue;
       }
-      if (entry.recordingMethod === 'Admin Recorded') {
+
+      const isAdmin = entry ? entry.recordingMethod === 'Admin Recorded' : true;
+      if (isAdmin) {
         adminRecorded += 1;
-      } else if (entry.status === 'Present' || entry.status === 'Late') {
+      } else if (status === 'Present' || status === 'Late') {
         presentGps += 1;
       }
-      if (entry.status === 'Absent') {
+
+      if (status === 'Present' || status === 'Late' || status === 'Administratively Recorded') {
+        totalPresent += 1;
+      } else if (status === 'Absent') {
         absentCount += 1;
+      } else if (status === 'On Leave') {
+        onLeaveCount += 1;
       }
     }
 
+    const expectedStaff = Math.max(0, teachers.length - onLeaveCount);
+    const turnoutRate = expectedStaff > 0 ? Math.round((totalPresent / expectedStaff) * 100) : 0;
     const pendingCorrections = correctionRequests.filter((r) => r.status === 'Pending').length;
     return {
       totalStaff: teachers.length,
       activeStaff: activeTeachers.length,
       presentGps,
       adminRecorded,
+      totalPresent,
+      turnoutRate,
       absentCount,
+      onLeaveCount,
       notSignedIn,
       pendingCorrections,
     };
-  }, [correctionRequests, entriesForDate, teachers]);
+  }, [correctionRequests, entriesForDate, legacyPresenceForDate, teachers]);
 
-  // Build 7-day trend chart data from entries
+  // Build 7-day trend chart data from unified timebook + legacy presence entries
   const trendData = useMemo(() => {
+    const allDates = Array.from(
+      new Set([
+        selectedDate,
+        ...entries.map((e) => e.date),
+        ...staffAttendance.map((s) => s.date),
+      ])
+    ).sort();
+    const recentDates = allDates.slice(-7);
     const byDate = new Map<
       string,
       { date: string; gpsAuto: number; adminRecorded: number; absent: number }
     >();
-    const allDates = Array.from(new Set([selectedDate, ...entries.map((e) => e.date)])).sort();
-    const recentDates = allDates.slice(-7);
+    const seenPerDate = new Map<string, Set<string>>();
     for (const d of recentDates) {
       byDate.set(d, { date: d.slice(5), gpsAuto: 0, adminRecorded: 0, absent: 0 });
+      seenPerDate.set(d, new Set());
     }
     for (const e of entries) {
       const bucket = byDate.get(e.date);
       if (!bucket) continue;
+      seenPerDate.get(e.date)?.add(e.teacherId);
       if (e.status === 'Absent') {
         bucket.absent += 1;
       } else if (e.recordingMethod === 'Admin Recorded') {
@@ -305,8 +398,19 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
         bucket.gpsAuto += 1;
       }
     }
+    for (const r of staffAttendance) {
+      const bucket = byDate.get(r.date);
+      const seen = seenPerDate.get(r.date);
+      if (!bucket || !seen || seen.has(r.teacherId)) continue;
+      seen.add(r.teacherId);
+      if (r.status === 'Absent') {
+        bucket.absent += 1;
+      } else if (r.status === 'Present' || r.status === 'Late') {
+        bucket.adminRecorded += 1;
+      }
+    }
     return Array.from(byDate.values());
-  }, [entries, selectedDate]);
+  }, [entries, selectedDate, staffAttendance]);
 
   const openCorrectionModal = (
     teacher: Teacher,
@@ -359,6 +463,34 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
       setEditError(err instanceof Error ? err.message : 'Unable to save attendance correction.');
     } finally {
       setEditBusy(false);
+    }
+  };
+
+  const handleConfirmBulkMark = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canManageTimebook || unmarkedTeachersForDate.length === 0) return;
+    setBulkError('');
+    setBulkBusy(true);
+    try {
+      const count = await adminBulkMarkUnmarkedTimebook({
+        schoolId: school.id,
+        ownerId: school.ownerId,
+        teachers: unmarkedTeachersForDate,
+        date: selectedDate,
+        explanation: bulkExplanation,
+        authorizedByName: recordedByName,
+        timeInDisplay: bulkTimeIn,
+        getDeadlineHHMM: (role) => getEffectiveDeadlineHHMM(timebookSettings || defaults, role),
+      });
+      setBulkModalOpen(false);
+      setNotice({
+        type: 'success',
+        text: `Recorded ${count} unmarked staff member${count === 1 ? '' : 's'} for ${selectedDate} with immutable audit logs.`,
+      });
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : 'Unable to record bulk staff attendance.');
+    } finally {
+      setBulkBusy(false);
     }
   };
 
@@ -589,7 +721,7 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-              Staff Timebook Control Center
+              Staff Timebook &amp; Turnout
             </h2>
             <span
               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold ${
@@ -612,8 +744,8 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
             </span>
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-mono tabular-nums">
-            {effectiveTimezone} · Deadline: {basePolicy.defaultDeadlineHHMM} · Alerts:{' '}
-            {(basePolicy.reminderSlots || []).join(', ')}
+            Turnout ({selectedDate}): {kpis.totalPresent}/{kpis.totalStaff} ({kpis.turnoutRate}%) ·{' '}
+            {effectiveTimezone} · Deadline: {basePolicy.defaultDeadlineHHMM}
           </p>
         </div>
 
@@ -624,7 +756,7 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
         >
           {(
             [
-              { id: 'register', label: 'Daily Register', icon: Users },
+              { id: 'register', label: 'Daily Turnout & Register', icon: Users },
               {
                 id: 'corrections',
                 label: `Corrections (${kpis.pendingCorrections})`,
@@ -679,16 +811,12 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
       {/* KPI Strip */}
       <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
-          { label: 'Total Staff', value: kpis.totalStaff, tone: 'text-slate-900 dark:text-slate-100' },
-          { label: 'GPS Present', value: kpis.presentGps, tone: 'text-emerald-700 dark:text-emerald-400' },
-          { label: 'Admin Recorded', value: kpis.adminRecorded, tone: 'text-sky-700 dark:text-sky-400' },
-          { label: 'Not Signed In', value: kpis.notSignedIn, tone: 'text-amber-700 dark:text-amber-400' },
-          { label: 'Marked Absent', value: kpis.absentCount, tone: 'text-rose-700 dark:text-rose-400' },
-          {
-            label: 'Pending Requests',
-            value: kpis.pendingCorrections,
-            tone: 'text-violet-700 dark:text-violet-400',
-          },
+          { label: 'Total Staff', value: String(kpis.totalStaff), tone: 'text-slate-900 dark:text-slate-100' },
+          { label: 'Turnout Rate', value: `${kpis.turnoutRate}%`, tone: 'text-emerald-700 dark:text-emerald-400' },
+          { label: 'GPS Auto', value: String(kpis.presentGps), tone: 'text-emerald-700 dark:text-emerald-400' },
+          { label: 'Admin Recorded', value: String(kpis.adminRecorded), tone: 'text-sky-700 dark:text-sky-400' },
+          { label: 'Not Signed In', value: String(kpis.notSignedIn), tone: 'text-amber-700 dark:text-amber-400' },
+          { label: 'Absent / Leave', value: String(kpis.absentCount + kpis.onLeaveCount), tone: 'text-rose-700 dark:text-rose-400' },
         ].map((card) => (
           <div
             key={card.label}
@@ -804,6 +932,19 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
                   Showing {registerRows.length} of {teachers.length} staff for {selectedDate}
                 </span>
                 <div className="flex flex-wrap items-center gap-2">
+                  {canManageTimebook && unmarkedTeachersForDate.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBulkError('');
+                        setBulkModalOpen(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold hover:opacity-90 whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <CheckCheck className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>Mark Unmarked Present ({unmarkedTeachersForDate.length})</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={handleExportCsv}
@@ -825,8 +966,37 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
             </section>
           </div>
 
-          {/* Daily Staff Register Table */}
-          <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
+          {/* Daily Staff Register & Turnout Table */}
+          <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {(
+                  [
+                    { id: 'all', label: 'All Staff' },
+                    { id: 'teachers', label: 'Teaching Staff' },
+                    { id: 'leadership', label: 'Head / HOD' },
+                    { id: 'support', label: 'Librarian & Bursar' },
+                  ] as const
+                ).map((group) => (
+                  <button
+                    key={group.id}
+                    type="button"
+                    onClick={() => setCategoryFilter(group.id)}
+                    className={`min-h-[34px] px-3 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${
+                      categoryFilter === group.id
+                        ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    {group.label}
+                  </button>
+                ))}
+              </div>
+              <span className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                Present: {kpis.totalPresent} · Absent: {kpis.absentCount} · On Leave: {kpis.onLeaveCount}
+              </span>
+            </div>
+
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-sm">
                 <thead>
@@ -841,14 +1011,14 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
-                  {registerRows.map(({ teacher, entry, derivedStatus, derivedMethod }) => (
+                  {registerRows.map(({ teacher, entry, legacy, derivedStatus, derivedMethod }) => (
                     <tr key={teacher.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30">
                       <td className="py-3 pr-3">
                         <p className="font-semibold text-slate-900 dark:text-slate-100">
                           {teacher.fullName}
                         </p>
                         <p className="text-xs text-slate-500 dark:text-slate-400 font-mono">
-                          {teacher.staffCode} · {teacher.staffEmail}
+                          {teacher.staffCode}{teacher.staffEmail ? ` · ${teacher.staffEmail}` : ''}
                         </p>
                       </td>
                       <td className="py-3 pr-3 text-xs text-slate-700 dark:text-slate-300">
@@ -888,7 +1058,7 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
                       <td className="py-3 pr-3 font-mono tabular-nums text-xs text-slate-600 dark:text-slate-400">
                         {entry?.recordingMethod === 'GPS Auto'
                           ? `${Math.round(entry.distanceMeters)}m (±${Math.round(entry.accuracyMeters)}m)`
-                          : entry?.correctionReason || '—'}
+                          : entry?.correctionReason || legacy?.note || '—'}
                       </td>
                       <td className="py-3 text-right">
                         {canManageTimebook && (
@@ -1120,26 +1290,34 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
           onSubmit={handleSavePolicy}
           className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 space-y-6"
         >
-          <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
-            <div>
-              <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                School GPS Geofence &amp; Time-In Policy
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Configure campus coordinates, permitted radius, GPS accuracy threshold, reporting deadline, and reminder schedule.
-              </p>
-            </div>
-            {canManageTimebook && (
-              <button
-                type="button"
-                disabled={detectingGps}
-                onClick={handleDetectCurrentCampusGps}
-                className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <Crosshair className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
-                <span>{detectingGps ? 'Detecting GPS...' : 'Use Current School GPS'}</span>
-              </button>
-            )}
+          <div className="pb-4 border-b border-slate-100 dark:border-slate-800">
+            <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+              School GPS Geofence &amp; Time-In Policy
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Select your school campus on the map and configure permitted radius, GPS accuracy threshold, reporting deadline, and reminder schedule.
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            <p className="text-xs font-medium text-slate-600 dark:text-slate-400">
+              Campus Geofence Location (Select on Map)
+            </p>
+            <TimebookLocationMapPicker
+              latitude={Number(schoolLat)}
+              longitude={Number(schoolLng)}
+              radiusMeters={Number(radiusMeters) || DEFAULT_TIMEBOOK_RADIUS_METERS}
+              disabled={!canManageTimebook}
+              schoolDistrict={school.district}
+              onChange={(nextLat, nextLng) => {
+                setSchoolLat(nextLat.toFixed(6));
+                setSchoolLng(nextLng.toFixed(6));
+                setLocationConfigured(true);
+              }}
+              onUseCurrentGps={canManageTimebook ? handleDetectCurrentCampusGps : undefined}
+              detectingGps={detectingGps}
+              heightClassName="h-72 sm:h-80"
+            />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1153,36 +1331,6 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
                 value={locationLabel}
                 onChange={(e) => setLocationLabel(e.target.value)}
                 className="w-full min-h-[42px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#0F141B] text-sm"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                School Latitude
-              </label>
-              <input
-                type="number"
-                step="0.000001"
-                disabled={!canManageTimebook}
-                value={schoolLat}
-                onChange={(e) => setSchoolLat(e.target.value)}
-                className="w-full min-h-[42px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#0F141B] text-sm font-mono tabular-nums"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                School Longitude
-              </label>
-              <input
-                type="number"
-                step="0.000001"
-                disabled={!canManageTimebook}
-                value={schoolLng}
-                onChange={(e) => setSchoolLng(e.target.value)}
-                className="w-full min-h-[42px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#0F141B] text-sm font-mono tabular-nums"
                 required
               />
             </div>
@@ -1617,6 +1765,85 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
             </form>
           </div>
         )}
+      </ModalBackdrop>
+
+      {/* Bulk Mark Unmarked Staff Present Modal (Audited) */}
+      <ModalBackdrop
+        open={bulkModalOpen}
+        onClose={() => setBulkModalOpen(false)}
+        disabled={bulkBusy}
+        ariaLabel="Mark Unmarked Staff Present"
+      >
+        <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 shadow-xl p-5 sm:p-6 space-y-4">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+              Mark Unmarked Staff Present ({unmarkedTeachersForDate.length})
+            </h3>
+            <button
+              type="button"
+              onClick={() => setBulkModalOpen(false)}
+              className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <p className="text-xs text-slate-600 dark:text-slate-400">
+            Records <span className="font-semibold">Admin Recorded</span> attendance for{' '}
+            <span className="font-mono">{unmarkedTeachersForDate.length}</span> unsigned staff on{' '}
+            <span className="font-mono">{selectedDate}</span> and creates immutable audit records. Existing GPS check-ins are untouched.
+          </p>
+
+          <form onSubmit={handleConfirmBulkMark} className="space-y-3.5">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                Verified Arrival Time (HH:MM:SS)
+              </label>
+              <input
+                type="text"
+                value={bulkTimeIn}
+                onChange={(e) => setBulkTimeIn(e.target.value)}
+                placeholder="07:55:00"
+                className="w-full min-h-[40px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#0F141B] text-sm font-mono"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                Audit Justification
+              </label>
+              <textarea
+                rows={3}
+                required
+                minLength={5}
+                maxLength={600}
+                value={bulkExplanation}
+                onChange={(e) => setBulkExplanation(e.target.value)}
+                className="w-full p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#0F141B] text-sm"
+              />
+            </div>
+
+            {bulkError && <p className="text-xs text-rose-600 dark:text-rose-400">{bulkError}</p>}
+
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setBulkModalOpen(false)}
+                className="min-h-[40px] px-4 rounded-xl border border-slate-200 dark:border-slate-700 text-sm font-medium cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={bulkBusy}
+                className="min-h-[40px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold disabled:opacity-50 cursor-pointer"
+              >
+                {bulkBusy ? 'Recording...' : `Record ${unmarkedTeachersForDate.length} Staff`}
+              </button>
+            </div>
+          </form>
+        </div>
       </ModalBackdrop>
     </div>
   );

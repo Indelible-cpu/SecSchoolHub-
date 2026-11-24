@@ -5,6 +5,12 @@ import http from 'http';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { requireFirebaseAuth, type AuthenticatedRequest } from './server/firebaseAuth';
+import {
+  extractBookFromCoverImage,
+  isValidIsbn,
+  lookupBookByIsbn,
+  normalizeIsbn,
+} from './server/libraryScanner';
 import { TimebookEngine } from './server/timebookEngine';
 
 interface SmsGatewayStatus {
@@ -147,7 +153,71 @@ async function startServer() {
   const httpServer = http.createServer(app);
   const port = Number(process.env.PORT) || 3000;
 
+  // Parse up to 4MB specifically for camera book-cover scan photos
+  app.post(
+    '/api/library/scan-book',
+    express.json({ limit: '4mb' }),
+    requireFirebaseAuth,
+    async (req: AuthenticatedRequest, res) => {
+      const body = (req.body || {}) as {
+        imageBase64?: string;
+        mimeType?: string;
+        allowedSubjects?: unknown;
+      };
+      const imageBase64 = typeof body.imageBase64 === 'string' ? body.imageBase64 : '';
+      const mimeType = typeof body.mimeType === 'string' ? body.mimeType : 'image/jpeg';
+      const allowedSubjects = Array.isArray(body.allowedSubjects)
+        ? body.allowedSubjects
+            .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+            .map((s) => s.trim())
+            .slice(0, 30)
+        : [];
+
+      if (!imageBase64) {
+        res.status(400).json({ ok: false, error: 'Book image payload is required.' });
+        return;
+      }
+
+      try {
+        const book = await extractBookFromCoverImage({
+          imageBase64,
+          mimeType,
+          allowedSubjects,
+        });
+        res.json({ ok: true, book });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unable to scan book details from image.';
+        const status = msg.includes('GEMINI_API_KEY') ? 503 : 422;
+        res.status(status).json({ ok: false, error: msg });
+      }
+    }
+  );
+
   app.use(express.json({ limit: '64kb' }));
+
+  app.get('/api/library/isbn/:isbn', requireFirebaseAuth, async (req, res) => {
+    const clean = normalizeIsbn(req.params.isbn || '');
+    if (!isValidIsbn(clean)) {
+      res.status(400).json({ ok: false, error: 'Enter a valid 10-digit or 13-digit ISBN.' });
+      return;
+    }
+    const rawSubjects = typeof req.query.subjects === 'string' ? req.query.subjects : '';
+    const allowedSubjects = rawSubjects
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 30);
+
+    try {
+      const result = await lookupBookByIsbn(clean, allowedSubjects);
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      res.status(502).json({
+        ok: false,
+        error: err instanceof Error ? err.message : 'ISBN lookup failed.',
+      });
+    }
+  });
 
   app.get('/api/sms/status', (_req, res) => {
     res.json(getGatewayStatus());

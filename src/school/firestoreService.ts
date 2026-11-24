@@ -4997,5 +4997,124 @@ export async function adminRejectTimebookCorrectionRequest(params: {
   await batch.commit();
 }
 
+export async function adminBulkMarkUnmarkedTimebook(params: {
+  schoolId: string;
+  ownerId: string;
+  teachers: Teacher[];
+  date: string;
+  explanation: string;
+  authorizedByName: string;
+  timeInDisplay: string;
+  getDeadlineHHMM: (roleTitle: TeacherRole) => string;
+}): Promise<number> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error('Administrator authentication is required.');
+  if (params.teachers.length === 0) return 0;
+
+  const cleanExplanation = clampStr(params.explanation, 600);
+  if (cleanExplanation.length < 5) {
+    throw new Error('Enter a justification (minimum 5 characters) for bulk attendance recording.');
+  }
+
+  const cleanTimeIn = clampStr(params.timeInDisplay || '07:55:00', 20) || '07:55:00';
+  const path = `schools/${params.schoolId}/timebookEntries`;
+
+  try {
+    // 2 writes per teacher (timebookEntry + immutable auditLog) -> chunk by 150 teachers (300 writes < 500 limit)
+    for (let i = 0; i < params.teachers.length; i += 150) {
+      const chunk = params.teachers.slice(i, i + 150);
+      const batch = writeBatch(db);
+
+      for (const teacher of chunk) {
+        const entryId = `${params.date}_${teacher.id}`;
+        const entryRef = doc(db, 'schools', params.schoolId, 'timebookEntries', entryId);
+        const auditId = makeId('taudit');
+        const auditRef = doc(db, 'schools', params.schoolId, 'timebookAuditLogs', auditId);
+
+        const nextStatus: TimebookEntryStatus =
+          teacher.status === 'On Leave' ? 'On Leave' : 'Present';
+        const effectiveTimeIn = nextStatus === 'On Leave' ? '' : cleanTimeIn;
+        const rowReason =
+          nextStatus === 'On Leave'
+            ? `${cleanExplanation} (Scheduled staff leave)`
+            : cleanExplanation;
+
+        batch.set(entryRef, {
+          ownerId: params.ownerId,
+          schoolId: params.schoolId,
+          date: params.date,
+          teacherId: teacher.id,
+          staffUid: '',
+          staffCode: clampStr(teacher.staffCode, 30),
+          staffName: clampStr(teacher.fullName, 120),
+          roleTitle: teacher.roleTitle,
+          status: nextStatus,
+          recordingMethod: 'Admin Recorded',
+          timeInServer: nextStatus === 'On Leave' ? null : serverTimestamp(),
+          timeInDisplay: effectiveTimeIn,
+          gpsVerificationStatus: 'Admin Override' as TimebookGpsVerificationStatus,
+          latitude: 0,
+          longitude: 0,
+          distanceMeters: 0,
+          accuracyMeters: 0,
+          deadlineHHMM: isValidHHMM(params.getDeadlineHHMM(teacher.roleTitle))
+            ? params.getDeadlineHHMM(teacher.roleTitle)
+            : DEFAULT_TIMEBOOK_DEADLINE,
+          isSuspicious: false,
+          spoofingFlags: [],
+          correctionStatus: 'Approved',
+          correctionReason: clampStr(rowReason, 400),
+          authorizedByUid: uid,
+          authorizedByName: clampStr(params.authorizedByName, 120),
+          serverReceiptSignature: `ADMIN_BULK_${Date.now().toString(36)}`,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+
+        batch.set(auditRef, {
+          ownerId: params.ownerId,
+          schoolId: params.schoolId,
+          entryId,
+          teacherId: teacher.id,
+          staffCode: clampStr(teacher.staffCode, 30),
+          staffName: clampStr(teacher.fullName, 120),
+          attendanceDate: params.date,
+          originalStatus: 'Not Signed In',
+          correctedStatus: nextStatus,
+          previousValues: 'Status: Not Signed In; Method: None; TimeIn: —',
+          updatedValues: `Status: ${nextStatus}; Method: Admin Recorded; TimeIn: ${effectiveTimeIn || '—'}`,
+          explanation: clampStr(rowReason, 600),
+          authorizedByUid: uid,
+          authorizedByName: clampStr(params.authorizedByName, 120),
+          createdAt: serverTimestamp(),
+        });
+      }
+
+      await batch.commit();
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+
+  for (const teacher of params.teachers) {
+    const nextStatus: TimebookEntryStatus =
+      teacher.status === 'On Leave' ? 'On Leave' : 'Present';
+    try {
+      await syncAdminEntryToServer({
+        schoolId: params.schoolId,
+        date: params.date,
+        teacherId: teacher.id,
+        status: nextStatus,
+        timeInDisplay: nextStatus === 'On Leave' ? '' : cleanTimeIn,
+      });
+    } catch {
+      // Non-blocking sync to backend reminder scheduler
+    }
+  }
+
+  return params.teachers.length;
+}
+
+
 
 

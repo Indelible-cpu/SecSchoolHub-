@@ -49,9 +49,9 @@ import { processSchoolLogoFile } from '../../school/schoolLogoHelper';
 import { buildModalDraftKey, clearModalDraft, loadModalDraft, saveModalDraft } from '../../school/modalDrafts';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { DraftRestoredNotice, ModalBackdrop } from './ModalBackdrop';
-import { StaffPresencePanel } from './AttendanceRegister';
 import { StaffTimebookAdminDashboard } from './StaffTimebookAdminDashboard';
 import { TimebookConfigCard } from './TimebookConfigCard';
+import { DEFAULT_TIMEBOOK_TIMEZONE, getZonedDateTimeParts } from '../../school/timebookUtils';
 
 interface StaffAndSettingsProps {
   school: School;
@@ -67,10 +67,9 @@ interface StaffAndSettingsProps {
   timebookSuspiciousLogs?: TimebookSuspiciousLog[];
   canManageStaffAndSettings?: boolean;
   canReadStaffAttendance?: boolean;
-  canWriteStaffAttendance?: boolean;
   canManageTimebook?: boolean;
   recordedByName?: string;
-  initialTab?: 'directory' | 'timebook' | 'presence';
+  initialTab?: 'directory' | 'timebook';
   tabRequestNonce?: number;
   onSwitchSchool: (schoolId: string) => void;
   onAddNewSchool?: () => void;
@@ -117,7 +116,6 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
   timebookSuspiciousLogs = [],
   canManageStaffAndSettings = true,
   canReadStaffAttendance = false,
-  canWriteStaffAttendance = false,
   canManageTimebook = false,
   recordedByName = 'School Admin',
   initialTab,
@@ -125,30 +123,39 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
   onSwitchSchool,
   onAddNewSchool,
 }) => {
-  const [staffSectionTab, setStaffSectionTab] = useState<'directory' | 'timebook' | 'presence'>(() =>
-    initialTab === 'timebook' && canReadStaffAttendance
-      ? 'timebook'
-      : initialTab === 'presence' && canReadStaffAttendance
-      ? 'presence'
-      : 'directory'
+  const [staffSectionTab, setStaffSectionTab] = useState<'directory' | 'timebook'>(() =>
+    initialTab === 'timebook' && canReadStaffAttendance ? 'timebook' : 'directory'
   );
 
   useEffect(() => {
     if (!tabRequestNonce || !initialTab) return;
-    if ((initialTab === 'presence' || initialTab === 'timebook') && !canReadStaffAttendance) return;
+    if (initialTab === 'timebook' && !canReadStaffAttendance) return;
     setStaffSectionTab(initialTab);
   }, [canReadStaffAttendance, initialTab, tabRequestNonce]);
 
-  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const todayIso = useMemo(
+    () =>
+      getZonedDateTimeParts(
+        Date.now(),
+        timebookSettings?.timezone || DEFAULT_TIMEBOOK_TIMEZONE
+      ).isoDate,
+    [timebookSettings?.timezone]
+  );
+
   const todayStaffPresenceMap = useMemo(() => {
-    const map = new Map<string, StaffAttendanceRecord>();
+    const map = new Map<string, { status: string }>();
     for (const r of staffAttendance) {
       if (r.date === todayIso) {
-        map.set(r.teacherId, r);
+        map.set(r.teacherId, { status: r.status });
+      }
+    }
+    for (const e of timebookEntries) {
+      if (e.date === todayIso) {
+        map.set(e.teacherId, { status: e.status });
       }
     }
     return map;
-  }, [staffAttendance, todayIso]);
+  }, [staffAttendance, timebookEntries, todayIso]);
 
   const todayStaffTurnout = useMemo(() => {
     let present = 0;
@@ -157,15 +164,16 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
     let onLeave = 0;
     for (const t of teachers) {
       const rec = todayStaffPresenceMap.get(t.id);
-      if (!rec) continue;
-      if (rec.status === 'Present') present += 1;
-      else if (rec.status === 'Late') late += 1;
-      else if (rec.status === 'Absent') absent += 1;
-      else if (rec.status === 'On Leave') onLeave += 1;
+      const status = rec?.status || (t.status === 'On Leave' ? 'On Leave' : '');
+      if (!status) continue;
+      if (status === 'Present' || status === 'Administratively Recorded') present += 1;
+      else if (status === 'Late') late += 1;
+      else if (status === 'Absent') absent += 1;
+      else if (status === 'On Leave') onLeave += 1;
     }
-    const marked = present + late + absent + onLeave;
-    const rate = marked > 0 ? Math.round(((present + late) / marked) * 100) : null;
-    return { present, late, absent, onLeave, marked, rate };
+    const expected = Math.max(0, teachers.length - onLeave);
+    const rate = expected > 0 ? Math.round(((present + late) / expected) * 100) : null;
+    return { present, late, absent, onLeave, rate };
   }, [teachers, todayStaffPresenceMap]);
   // School Settings Form
   const [name, setName] = useState(school.name);
@@ -689,20 +697,7 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
               }`}
             >
-              Staff Timebook
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={staffSectionTab === 'presence'}
-              onClick={() => setStaffSectionTab('presence')}
-              className={`min-h-[34px] px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
-                staffSectionTab === 'presence'
-                  ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-              }`}
-            >
-              Staff Presence &amp; Turnout
+              Staff Timebook &amp; Turnout
             </button>
           </div>
         </div>
@@ -712,21 +707,13 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
         <StaffTimebookAdminDashboard
           school={school}
           teachers={teachers}
+          staffAttendance={staffAttendance}
           timebookSettings={timebookSettings}
           entries={timebookEntries}
           correctionRequests={timebookCorrectionRequests}
           auditLogs={timebookAuditLogs}
           suspiciousLogs={timebookSuspiciousLogs}
           canManageTimebook={canManageTimebook}
-          recordedByName={recordedByName}
-        />
-      ) : staffSectionTab === 'presence' && canReadStaffAttendance ? (
-        <StaffPresencePanel
-          school={school}
-          ownerId={ownerId}
-          teachers={teachers}
-          staffAttendance={staffAttendance}
-          canWriteStaffAttendance={canWriteStaffAttendance}
           recordedByName={recordedByName}
         />
       ) : (
@@ -956,7 +943,8 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
                     {canReadStaffAttendance && (
                       <span
                         className={`text-[11px] font-semibold ${
-                          todayPresence?.status === 'Present'
+                          todayPresence?.status === 'Present' ||
+                          todayPresence?.status === 'Administratively Recorded'
                             ? 'text-emerald-700 dark:text-emerald-400'
                             : todayPresence?.status === 'Absent'
                             ? 'text-rose-600 dark:text-rose-400'
@@ -965,7 +953,7 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
                             : 'text-slate-400 dark:text-slate-500'
                         }`}
                       >
-                        · Today: {todayPresence?.status || 'Unmarked'}
+                        · Today: {todayPresence?.status || 'Not Signed In'}
                       </span>
                     )}
                   </div>

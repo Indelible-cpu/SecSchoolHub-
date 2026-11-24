@@ -57,6 +57,7 @@ import {
 import { ClassPerformanceTrendChart } from './ClassPerformanceTrendChart';
 import { CaDropAlertsPanel } from './CaDropAlertsPanel';
 import { AnnouncementsPanel } from './AnnouncementsPanel';
+import { StudentAttendanceHeatmap } from './StudentAttendanceHeatmap';
 
 interface OverviewDashboardProps {
   school: School;
@@ -76,7 +77,7 @@ interface OverviewDashboardProps {
   authorDisplayName?: string;
   onNavigate: (section: SchoolSection) => void;
   onOpenStudents?: (tab: 'directory' | 'attendance' | 'cases') => void;
-  onOpenStaff?: (tab: 'directory' | 'timebook' | 'presence') => void;
+  onOpenStaff?: (tab: 'directory' | 'timebook') => void;
   onOpenLibrary?: (
     tab: 'catalog' | 'reservations' | 'online',
     audience?: 'all' | 'teaching' | 'student'
@@ -157,19 +158,52 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
     return { marked: todayRows.length, present, rate, todayRows };
   }, [attendance, todayIso]);
 
-  const staffPresenceStats = useMemo(() => {
-    const todayRows = staffAttendance.filter((a) => a.date === todayIso);
-    const present = todayRows.filter((a) => a.status === 'Present' || a.status === 'Late').length;
-    const absent = todayRows.filter((a) => a.status === 'Absent').length;
-    const onLeave = todayRows.filter((a) => a.status === 'On Leave').length;
+  const staffTurnoutStats = useMemo(() => {
+    const byTeacher = new Map<string, { status: string; isGps: boolean }>();
+    for (const r of staffAttendance) {
+      if (r.date === todayIso) {
+        byTeacher.set(r.teacherId, { status: r.status, isGps: false });
+      }
+    }
+    for (const e of timebookEntries) {
+      if (e.date === todayIso) {
+        byTeacher.set(e.teacherId, {
+          status: e.status,
+          isGps: e.recordingMethod === 'GPS Auto',
+        });
+      }
+    }
+
+    let present = 0;
+    let gpsAuto = 0;
+    let absent = 0;
+    let onLeave = 0;
+    for (const t of teachers) {
+      const rec = byTeacher.get(t.id);
+      const status = rec?.status || (t.status === 'On Leave' ? 'On Leave' : '');
+      if (!status) continue;
+      if (status === 'Present' || status === 'Late' || status === 'Administratively Recorded') {
+        present += 1;
+        if (rec?.isGps) gpsAuto += 1;
+      } else if (status === 'Absent') {
+        absent += 1;
+      } else if (status === 'On Leave') {
+        onLeave += 1;
+      }
+    }
+    const expected = Math.max(0, teachers.length - onLeave);
+    const rate = expected > 0 ? Math.round((present / expected) * 100) : 0;
+    const notSignedIn = Math.max(0, expected - present - absent);
     return {
       totalStaff: teachers.length,
-      marked: todayRows.length,
       present,
+      gpsAuto,
       absent,
       onLeave,
+      notSignedIn,
+      rate,
     };
-  }, [staffAttendance, teachers.length, todayIso]);
+  }, [staffAttendance, teachers, timebookEntries, todayIso]);
 
   const studentCaseStats = useMemo(() => {
     const activeSuspensions = studentCases.filter(
@@ -1256,6 +1290,18 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
           onOpenGradebook={() => onNavigate('marks')}
         />
 
+        {rolePermissions.canReadAttendance && (
+          <StudentAttendanceHeatmap
+            attendance={attendance}
+            term={school.currentTerm}
+            todayIso={todayIso}
+            canWriteAttendance={rolePermissions.canWriteAttendance}
+            onOpenAttendance={() =>
+              onOpenStudents ? onOpenStudents('attendance') : onNavigate('students')
+            }
+          />
+        )}
+
         {rolePermissions.role === 'Head of Department' && hodDepartmentSummary && (
           <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
@@ -1584,6 +1630,18 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
           onOpenGradebook={() => onNavigate('marks')}
         />
 
+        {rolePermissions.canReadAttendance && (
+          <StudentAttendanceHeatmap
+            attendance={attendance}
+            term={school.currentTerm}
+            todayIso={todayIso}
+            canWriteAttendance={rolePermissions.canWriteAttendance}
+            onOpenAttendance={() =>
+              onOpenStudents ? onOpenStudents('attendance') : onNavigate('students')
+            }
+          />
+        )}
+
         <CaDropAlertsPanel
           assessments={termAssessments}
           students={students}
@@ -1775,42 +1833,25 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
         <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex items-center justify-between gap-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
-              <UserCheck className="w-4 h-4 text-emerald-600 shrink-0" aria-hidden="true" />
-              <span>Staff &amp; Teacher Presence ({todayIso})</span>
+              <Clock className="w-4 h-4 text-emerald-600 shrink-0" aria-hidden="true" />
+              <span>Staff Timebook &amp; Turnout ({todayIso})</span>
             </div>
             <div className="mt-2 text-xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
-              {staffPresenceStats.marked > 0
-                ? `${staffPresenceStats.present} / ${staffPresenceStats.totalStaff} Present`
-                : `${staffPresenceStats.totalStaff} Staff Listed`}
+              {staffTurnoutStats.present} / {staffTurnoutStats.totalStaff} Present ({staffTurnoutStats.rate}%)
             </div>
             <div className="mt-1 text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
-              {staffPresenceStats.marked > 0
-                ? `Absent: ${staffPresenceStats.absent} · On Leave: ${staffPresenceStats.onLeave}`
-                : `${staffPresenceStats.totalStaff} staff · ${todayIso}`}
-              {' · '}
-              Timebook signed today: {timebookEntries.filter((e) => e.date === todayIso && (e.status === 'Present' || e.status === 'Administratively Recorded')).length}
+              GPS Auto: {staffTurnoutStats.gpsAuto} · Not Signed In: {staffTurnoutStats.notSignedIn} · Absent: {staffTurnoutStats.absent}
+              {staffTurnoutStats.onLeave > 0 ? ` · On Leave: ${staffTurnoutStats.onLeave}` : ''}
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => (onOpenStaff ? onOpenStaff('timebook') : onNavigate('staff'))}
-              className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Clock className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
-              <span>Timebook</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => (onOpenStaff ? onOpenStaff('presence') : onNavigate('staff'))}
-              className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold hover:opacity-90 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <span>
-                {rolePermissions.canWriteStaffAttendance ? 'Check Staff' : 'Staff Turnout'}
-              </span>
-              <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => (onOpenStaff ? onOpenStaff('timebook') : onNavigate('staff'))}
+            className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold hover:opacity-90 whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <span>Timebook &amp; Turnout</span>
+            <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+          </button>
         </div>
 
         <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex items-center justify-between gap-4">
@@ -1843,6 +1884,19 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
         term={school.currentTerm}
         onOpenGradebook={() => onNavigate('marks')}
       />
+
+      {/* Term Student Attendance Frequency Heatmap (D3) */}
+      {rolePermissions.canReadAttendance && (
+        <StudentAttendanceHeatmap
+          attendance={attendance}
+          term={school.currentTerm}
+          todayIso={todayIso}
+          canWriteAttendance={rolePermissions.canWriteAttendance}
+          onOpenAttendance={() =>
+            onOpenStudents ? onOpenStudents('attendance') : onNavigate('students')
+          }
+        />
+      )}
 
       {/* Automated Early-Warning CA Drop Alerts */}
       <CaDropAlertsPanel

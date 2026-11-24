@@ -128,7 +128,7 @@ export default function App() {
     nonce: number;
   } | null>(null);
   const [staffLaunch, setStaffLaunch] = useState<{
-    tab: 'directory' | 'timebook' | 'presence';
+    tab: 'directory' | 'timebook';
     nonce: number;
   } | null>(null);
   const [libraryLaunch, setLibraryLaunch] = useState<{
@@ -1478,6 +1478,7 @@ export default function App() {
               ownerId={activeSchool.ownerId}
               students={students}
               assessments={assessments}
+              attendance={rolePermissions.canReadAttendance ? attendance : []}
               schoolSubjects={schoolSubjects}
               canWriteMarks={rolePermissions.canWriteMarks}
               onOpenStaffSettings={
@@ -1547,7 +1548,6 @@ export default function App() {
               timebookSuspiciousLogs={timebookSuspiciousLogs}
               canManageStaffAndSettings={rolePermissions.canManageStaff}
               canReadStaffAttendance={rolePermissions.canReadStaffAttendance}
-              canWriteStaffAttendance={rolePermissions.canWriteStaffAttendance}
               canManageTimebook={rolePermissions.canManageTimebook}
               recordedByName={activeStaffLink?.staffName || user.displayName || 'School Admin'}
               initialTab={staffLaunch?.tab}

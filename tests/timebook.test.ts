@@ -16,6 +16,7 @@ import {
   getZonedDateTimeParts,
   isAttendanceWindowOpen,
   resolveStaffTimebookUiState,
+  validateMalawiCoordinates,
 } from '../src/school/timebookUtils';
 
 // Africa/Blantyre is UTC+2 year-round.
@@ -753,4 +754,40 @@ test('14. Anti-spoofing blocks null-island, zero-accuracy, teleport velocity, an
   assert.ok(logs.some((l) => l.reasonCode === 'NULL_ISLAND_COORDS'));
   assert.ok(logs.some((l) => l.reasonCode === 'MOCK_ZERO_ACCURACY'));
   assert.ok(logs.some((l) => l.reasonCode === 'STATIC_REPEATED_COORDINATES'));
+});
+
+test('15. Malawi geographical bounds helper accepts Malawian schools and flags outside/invalid coordinates', () => {
+  const malawiSchools = [
+    { name: 'Blantyre', lat: -15.7861, lng: 35.0058 },
+    { name: 'Lilongwe', lat: -13.9626, lng: 33.7741 },
+    { name: 'Mzuzu', lat: -11.4656, lng: 34.0207 },
+    { name: 'Chitipa North', lat: -9.7019, lng: 33.27 },
+    { name: 'Nsanje South', lat: -16.92, lng: 35.262 },
+    { name: 'Likoma Island', lat: -12.0604, lng: 34.7357 },
+  ];
+
+  for (const s of malawiSchools) {
+    const res = validateMalawiCoordinates(s.lat, s.lng);
+    assert.equal(res.validCoordinates, true, `${s.name} should be valid`);
+    assert.equal(res.inMalawi, true, `${s.name} should be inside Malawi bounds`);
+  }
+
+  const outsideLocations = [
+    { name: 'Lusaka, Zambia', lat: -15.3875, lng: 28.3228 },
+    { name: 'Harare, Zimbabwe', lat: -17.8252, lng: 31.0335 },
+    { name: 'Nairobi, Kenya', lat: -1.2921, lng: 36.8219 },
+    { name: 'London, UK', lat: 51.5072, lng: -0.1276 },
+    { name: 'Null Island', lat: 0, lng: 0 },
+  ];
+
+  for (const loc of outsideLocations) {
+    const res = validateMalawiCoordinates(loc.lat, loc.lng);
+    assert.equal(res.validCoordinates, true, `${loc.name} should have valid lat/lng`);
+    assert.equal(res.inMalawi, false, `${loc.name} should be flagged outside Malawi`);
+    assert.match(res.reason, /outside Malawi/i);
+  }
+
+  const invalidRes = validateMalawiCoordinates(Number.NaN, 35.0);
+  assert.equal(invalidRes.validCoordinates, false);
+  assert.equal(invalidRes.inMalawi, false);
 });

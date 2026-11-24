@@ -18,6 +18,7 @@ import {
   Plus,
   QrCode,
   RotateCcw,
+  ScanBarcode,
   ScanLine,
   Search,
   Trash2,
@@ -115,7 +116,9 @@ import {
 } from '../../school/modalDrafts';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { LibraryBookQrModal, LibraryQrScannerModal } from './LibraryQrModals';
+import { LibraryBookScanModal } from './LibraryBookScanModal';
 import { LibraryCsvImportModal } from './LibraryCsvImportModal';
+import type { ScanCirculationMode } from '../../school/libraryScannerUtils';
 import { DraftRestoredNotice, ModalBackdrop } from './ModalBackdrop';
 import {
   OnlineLibraryReaderModal,
@@ -259,6 +262,9 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
   } | null>(null);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scannerInitialBook, setScannerInitialBook] = useState<LibraryBook | null>(null);
+  const [scannerInitialMode, setScannerInitialMode] = useState<ScanCirculationMode>('auto');
+  const [bookScanModalOpen, setBookScanModalOpen] = useState(false);
+  const [bookScanInitialIsbn, setBookScanInitialIsbn] = useState('');
   const [csvImportOpen, setCsvImportOpen] = useState(false);
 
   // Circulation Register Filters
@@ -2532,19 +2538,20 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
             </div>
           </div>
 
-          {(canWriteLibrary || libraryBooks.length > 0) && (
+          {(canWriteLibrary || libraryBooks.length > 0 || libraryLoans.length > 0) && (
             <div className="flex flex-wrap items-center gap-2">
-              {libraryBooks.length > 0 && (
+              {(canWriteLibrary || libraryBooks.length > 0 || libraryLoans.length > 0) && (
                 <button
                   type="button"
                   onClick={() => {
                     setScannerInitialBook(null);
+                    setScannerInitialMode('auto');
                     setScannerOpen(true);
                   }}
                   className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/70 dark:bg-emerald-950/35 text-xs font-semibold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100/80 dark:hover:bg-emerald-950/60 whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <ScanLine className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>Scan Book QR</span>
+                  <span>Scan Check In / Out</span>
                 </button>
               )}
               {canWriteLibrary && libraryBooks.length === 0 && (
@@ -2566,6 +2573,19 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
                 >
                   <Upload className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>Import CSV</span>
+                </button>
+              )}
+              {canWriteLibrary && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBookScanInitialIsbn('');
+                    setBookScanModalOpen(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/70 dark:bg-emerald-950/35 text-xs font-semibold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100/80 dark:hover:bg-emerald-950/60 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <ScanBarcode className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Scan Book to Add</span>
                 </button>
               )}
               {canWriteLibrary && (
@@ -2817,11 +2837,40 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {canWriteLibrary && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setScannerInitialBook(null);
+                    setScannerInitialMode('check_in');
+                    setScannerOpen(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/70 dark:bg-emerald-950/35 text-xs font-semibold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100/80 dark:hover:bg-emerald-950/60 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Scan Check In</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setScannerInitialBook(null);
+                    setScannerInitialMode('check_out');
+                    setScannerOpen(true);
+                  }}
+                  disabled={students.length === 0}
+                  className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/70 dark:bg-emerald-950/35 text-xs font-semibold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100/80 dark:hover:bg-emerald-950/60 disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <ScanBarcode className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Scan Check Out</span>
+                </button>
+              </>
+            )}
             <button
               type="button"
               onClick={handleExportCsv}
               disabled={sortedAndFilteredLoans.length === 0}
-              className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
+              className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" aria-hidden="true" />
               <span>Export CSV</span>
@@ -2831,7 +2880,7 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
                 type="button"
                 onClick={() => openAssignModal()}
                 disabled={students.length === 0}
-                className="inline-flex items-center gap-1.5 min-h-[40px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold disabled:opacity-40 cursor-pointer"
+                className="inline-flex items-center gap-1.5 min-h-[40px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Plus className="w-4 h-4" aria-hidden="true" />
                 <span>Assign Material</span>
@@ -4411,14 +4460,30 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
               >
                 {editingBook ? 'Edit Library Inventory Book' : 'Add Book to Library Inventory'}
               </h2>
-              <button
-                type="button"
-                onClick={() => setBookModalOpen(false)}
-                aria-label="Close inventory dialog"
-                className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {!editingBook && canWriteLibrary && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBookModalOpen(false);
+                      setBookScanInitialIsbn('');
+                      setBookScanModalOpen(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 min-h-[34px] px-3 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/35 text-xs font-semibold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100/80 whitespace-nowrap cursor-pointer"
+                  >
+                    <ScanBarcode className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Scan Book</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setBookModalOpen(false)}
+                  aria-label="Close inventory dialog"
+                  className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             <DraftRestoredNotice
@@ -4683,6 +4748,7 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
         onOpenScannerWithBook={(bk) => {
           setQrBookTarget(null);
           setScannerInitialBook(bk);
+          setScannerInitialMode('auto');
           setScannerOpen(true);
         }}
       />
@@ -4697,9 +4763,29 @@ export const SchoolLibrary: React.FC<SchoolLibraryProps> = ({
         students={students}
         canWriteLibrary={canWriteLibrary}
         initialBook={scannerInitialBook}
+        initialMode={scannerInitialMode}
+        onAddNewBookFromScan={(rawCode) => {
+          setBookScanInitialIsbn(rawCode);
+          setBookScanModalOpen(true);
+        }}
         onClose={() => {
           setScannerOpen(false);
           setScannerInitialBook(null);
+          setScannerInitialMode('auto');
+        }}
+      />
+
+      {/* Scan Book Barcode / Cover to Add to Catalog Modal */}
+      <LibraryBookScanModal
+        open={bookScanModalOpen}
+        school={school}
+        ownerId={ownerId}
+        libraryBooks={libraryBooks}
+        allSubjectChoices={allSubjectChoices}
+        initialIsbn={bookScanInitialIsbn}
+        onClose={() => {
+          setBookScanModalOpen(false);
+          setBookScanInitialIsbn('');
         }}
       />
 
