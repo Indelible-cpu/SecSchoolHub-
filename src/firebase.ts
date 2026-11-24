@@ -4,13 +4,19 @@ import { doc, getDocFromServer, initializeFirestore } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
+const rawDbId = (firebaseConfig as { firestoreDatabaseId?: string }).firestoreDatabaseId?.trim();
+const databaseId =
+  rawDbId && rawDbId !== '(default)' && !rawDbId.startsWith('ai-studio-ledgercalc')
+    ? rawDbId
+    : undefined;
+
 export const db = initializeFirestore(
   app,
   {
-    experimentalAutoDetectLongPolling: true,
+    experimentalForceLongPolling: true,
     ignoreUndefinedProperties: true,
   },
-  firebaseConfig.firestoreDatabaseId
+  databaseId
 );
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();

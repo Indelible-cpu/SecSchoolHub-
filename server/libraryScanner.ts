@@ -279,7 +279,7 @@ export async function extractBookFromCoverImage(params: {
   });
 
   const response = await ai.models.generateContent({
-    model: 'gemini-4-hydrogen',
+    model: process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash',
     contents: {
       parts: [
         {

@@ -3,7 +3,7 @@
   "appId": "1:132965114437:web:00312ceba3a59f0f6d792c",
   "apiKey": "AIzaSyC4USxuFe1ZRy0U0B3jqp87KLVpUdlOOhI",
   "authDomain": "the-baton-j01dl.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-ledgercalc-9db5c4e2-346a-4282-b06a-333c21f3a472",
+  "firestoreDatabaseId": "(default)",
   "storageBucket": "the-baton-j01dl.firebasestorage.app",
   "messagingSenderId": "132965114437",
   "measurementId": "",

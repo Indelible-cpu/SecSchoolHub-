@@ -270,7 +270,7 @@ export const StudentAttendanceHeatmap: React.FC<StudentAttendanceHeatmapProps> =
               (d) => `translate(${xScale(d.weekIndex) ?? 0},${yScale(d.dayOfWeek) ?? 0})`
             );
 
-          const rect = grp
+          grp
             .append('rect')
             .attr('class', 'heatmap-cell-rect')
             .attr('width', cellW)
@@ -280,16 +280,7 @@ export const StudentAttendanceHeatmap: React.FC<StudentAttendanceHeatmapProps> =
             .attr('fill', resolveFill)
             .attr('stroke', resolveStroke)
             .attr('stroke-width', resolveStrokeWidth)
-            .attr('opacity', prefersReducedMotion ? resolveOpacity : 0);
-
-          if (!prefersReducedMotion) {
-            rect
-              .transition()
-              .duration(dur)
-              .delay((d) => Math.min(220, d.weekIndex * 16))
-              .ease(d3.easeCubicOut)
-              .attr('opacity', resolveOpacity);
-          }
+            .attr('opacity', resolveOpacity);
 
           grp
             .append('text')
@@ -313,20 +304,13 @@ export const StudentAttendanceHeatmap: React.FC<StudentAttendanceHeatmapProps> =
           return grp;
         },
         (update) => {
-          update
-            .transition()
-            .duration(dur)
-            .ease(d3.easeCubicOut)
-            .attr(
-              'transform',
-              (d) => `translate(${xScale(d.weekIndex) ?? 0},${yScale(d.dayOfWeek) ?? 0})`
-            );
+          update.attr(
+            'transform',
+            (d) => `translate(${xScale(d.weekIndex) ?? 0},${yScale(d.dayOfWeek) ?? 0})`
+          );
 
           update
             .select<SVGRectElement>('rect.heatmap-cell-rect')
-            .transition()
-            .duration(dur)
-            .ease(d3.easeCubicOut)
             .attr('width', cellW)
             .attr('height', cellH)
             .attr('rx', cornerRadius)
@@ -345,20 +329,12 @@ export const StudentAttendanceHeatmap: React.FC<StudentAttendanceHeatmapProps> =
                 ? `${Math.round(d.attendanceRate)}%`
                 : ''
             )
-            .transition()
-            .duration(dur)
-            .ease(d3.easeCubicOut)
             .attr('fill', resolveTextColor)
             .attr('opacity', (d) => (showRateLabel && d.attendanceRate !== null ? 1 : 0));
 
           return update;
         },
-        (exit) =>
-          exit
-            .transition()
-            .duration(prefersReducedMotion ? 0 : 180)
-            .attr('opacity', 0)
-            .remove()
+        (exit) => exit.remove()
       );
 
     cellGroups
