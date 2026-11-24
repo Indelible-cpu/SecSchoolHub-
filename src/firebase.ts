@@ -7,7 +7,7 @@ const app = initializeApp(firebaseConfig);
 export const db = initializeFirestore(
   app,
   {
-    experimentalForceLongPolling: true,
+    experimentalAutoDetectLongPolling: true,
     ignoreUndefinedProperties: true,
   },
   firebaseConfig.firestoreDatabaseId
@@ -68,14 +68,31 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
-export async function testConnection(): Promise<void> {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
-    }
+let connectionCheckPromise: Promise<void> | null = null;
+
+export function testConnection(): Promise<void> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return Promise.resolve();
   }
+  if (connectionCheckPromise) {
+    return connectionCheckPromise;
+  }
+  connectionCheckPromise = (async () => {
+    try {
+      await getDocFromServer(doc(db, 'test', 'connection'));
+    } catch (error) {
+      if (
+        (typeof navigator === 'undefined' || navigator.onLine !== false) &&
+        error instanceof Error &&
+        error.message.includes('the client is offline')
+      ) {
+        console.error('Please check your Firebase configuration.');
+      }
+    } finally {
+      connectionCheckPromise = null;
+    }
+  })();
+  return connectionCheckPromise;
 }
 
 export async function signInWithGoogle(): Promise<void> {
