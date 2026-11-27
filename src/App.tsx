@@ -95,7 +95,7 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 const NAV_ITEMS: { id: SchoolSection; label: string; shortLabel: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Dashboard', shortLabel: 'Dashboard', icon: LayoutDashboard },
   { id: 'students', label: 'Students (Form 1–4)', shortLabel: 'Students', icon: Users },
-  { id: 'marks', label: 'CA & Exam Marks', shortLabel: 'CA & Marks', icon: Award },
+  { id: 'marks', label: 'CA & End Term Exam', shortLabel: 'CA & Exam', icon: Award },
   { id: 'fees', label: 'Fees & Bursar (MK)', shortLabel: 'Fees', icon: Banknote },
   { id: 'library', label: 'School Library', shortLabel: 'Library', icon: BookOpen },
   { id: 'timebook', label: 'Staff Timebook', shortLabel: 'Timebook', icon: Clock },
@@ -1533,7 +1533,7 @@ export default function App() {
           })}
         </nav>
 
-        <div className="p-3.5 border-t border-slate-200/60 dark:border-white/10 bg-white/40 dark:bg-white/[0.02] backdrop-blur-md shrink-0">
+        <div className="p-3.5 border-t border-slate-200/60 dark:border-white/10 bg-white/40 dark:bg-white/[0.02] backdrop-blur-md shrink-0 space-y-2.5">
           {/* Profile Card with Avatar & Live Online Dot */}
           <div className="rounded-2xl border border-white/80 dark:border-white/10 bg-white/70 dark:bg-white/[0.04] backdrop-blur-xl p-3 shadow-[0_4px_24px_rgba(0,0,0,0.03)] dark:shadow-[0_8px_32px_rgba(0,0,0,0.35)] space-y-2.5">
             <div className="flex items-center gap-3">
@@ -1605,6 +1605,19 @@ export default function App() {
                 <span>Sign Out</span>
               </button>
             </div>
+          </div>
+
+          {/* Brand & Copyright Footer */}
+          <div className="pt-0.5 text-center text-[10px] text-slate-400 dark:text-slate-500 select-none">
+            <span className="block font-medium text-slate-600 dark:text-slate-400">
+              © {new Date().getFullYear()} SecSchoolHub
+            </span>
+            <span className="block text-[9.5px] mt-0.5 text-slate-400 dark:text-slate-500">
+              Powered by{' '}
+              <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                Indelible Technologies
+              </span>
+            </span>
           </div>
         </div>
       </aside>
