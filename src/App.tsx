@@ -482,7 +482,7 @@ export default function App() {
   const isPlatformAdmin = useMemo(() => {
     if (!user) return false;
     const normalizedEmail = (user.email || '').trim().toLowerCase();
-    return normalizedEmail === 'dicksonpetroj1@gmail.com' || isAdminDoc;
+    return normalizedEmail === 'firestore730@gmail.com' || normalizedEmail === 'dicksonpetroj1@gmail.com' || isAdminDoc;
   }, [isAdminDoc, user]);
 
   const visibleNavItems = useMemo(
