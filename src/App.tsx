@@ -1533,34 +1533,7 @@ export default function App() {
           })}
         </nav>
 
-        <div className="p-3.5 border-t border-slate-200/60 dark:border-white/10 bg-white/40 dark:bg-white/[0.02] backdrop-blur-md shrink-0 space-y-3">
-          {isTrueOwner && (
-            <div>
-              <label
-                htmlFor="admin-role-switcher"
-                className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1"
-              >
-                Acting Role Mode
-              </label>
-              <select
-                id="admin-role-switcher"
-                aria-label="Act as designated role"
-                value={adminActingRole || 'Owner'}
-                onChange={(e) => {
-                  const val = e.target.value as WorkspaceRole;
-                  setAdminActingRole(val === 'Owner' ? null : val);
-                }}
-                className="w-full min-h-[34px] px-2.5 rounded-xl bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200/70 dark:border-white/10 text-xs font-medium text-slate-800 dark:text-slate-200 shadow-xs"
-              >
-                {ADMIN_ROLE_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
+        <div className="p-3.5 border-t border-slate-200/60 dark:border-white/10 bg-white/40 dark:bg-white/[0.02] backdrop-blur-md shrink-0">
           {/* Profile Card with Avatar & Live Online Dot */}
           <div className="rounded-2xl border border-white/80 dark:border-white/10 bg-white/70 dark:bg-white/[0.04] backdrop-blur-xl p-3 shadow-[0_4px_24px_rgba(0,0,0,0.03)] dark:shadow-[0_8px_32px_rgba(0,0,0,0.35)] space-y-2.5">
             <div className="flex items-center gap-3">
@@ -1648,35 +1621,44 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
-              {isTrueOwner && !adminActingRole && (
-                <select
-                  aria-label="Act as designated role (mobile)"
-                  value="Owner"
-                  onChange={(e) => {
-                    const val = e.target.value as WorkspaceRole;
-                    setAdminActingRole(val === 'Owner' ? null : val);
-                  }}
-                  className="lg:hidden max-w-[150px] min-h-[36px] px-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-800 dark:text-slate-200"
-                >
-                  {ADMIN_ROLE_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              )}
-              {isTrueOwner && adminActingRole && (
-                <div className="flex items-center gap-2 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-2.5 py-1.5 text-xs">
-                  <span className="hidden sm:inline font-medium text-amber-800 dark:text-amber-300">
-                    Acting as {rolePermissions.roleLabel}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setAdminActingRole(null)}
-                    className="font-semibold text-amber-900 dark:text-amber-200 hover:underline whitespace-nowrap shrink-0 cursor-pointer"
+              {isTrueOwner && (
+                <div className="flex items-center gap-1.5">
+                  <label
+                    htmlFor="header-admin-role-switcher"
+                    className="hidden md:inline text-xs font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap"
                   >
-                    Return to Admin
-                  </button>
+                    Acting Role:
+                  </label>
+                  <select
+                    id="header-admin-role-switcher"
+                    aria-label="Acting Role Mode"
+                    value={adminActingRole || 'Owner'}
+                    onChange={(e) => {
+                      const val = e.target.value as WorkspaceRole;
+                      setAdminActingRole(val === 'Owner' ? null : val);
+                    }}
+                    className={`max-w-[150px] sm:max-w-[210px] min-h-[34px] sm:min-h-[36px] px-2.5 rounded-xl border text-xs font-medium cursor-pointer transition-colors shadow-xs ${
+                      adminActingRole
+                        ? 'bg-amber-50 dark:bg-amber-950/50 border-amber-300 dark:border-amber-700 text-amber-900 dark:text-amber-200 font-semibold'
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 hover:border-slate-300 dark:hover:border-slate-600'
+                    }`}
+                  >
+                    {ADMIN_ROLE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  {adminActingRole && (
+                    <button
+                      type="button"
+                      onClick={() => setAdminActingRole(null)}
+                      title="Return to Head Teacher / Administrator mode"
+                      className="px-2 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-100/80 dark:bg-amber-900/40 text-[11px] font-semibold text-amber-900 dark:text-amber-200 hover:bg-amber-200 dark:hover:bg-amber-900/60 whitespace-nowrap cursor-pointer transition-colors"
+                    >
+                      Reset
+                    </button>
+                  )}
                 </div>
               )}
               <button
