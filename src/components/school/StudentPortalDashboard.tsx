@@ -16,6 +16,7 @@ import {
 import {
   calculateTermReportSummary,
   formatMWK,
+  formatSchoolTypeLabel,
   TermReportCardSummary,
   TERMS,
 } from '../../school/malawi';
@@ -338,7 +339,7 @@ export const StudentPortalDashboard: React.FC<StudentPortalDashboardProps> = ({
                 {portal.schoolName}
               </h2>
               <p className="text-xs text-slate-600 dark:text-slate-400 truncate">
-                {portal.schoolDistrict} · {portal.schoolType}
+                {portal.schoolDistrict} · {formatSchoolTypeLabel(portal.schoolType)}
                 {portal.motto ? ` · "${portal.motto}"` : ''}
               </p>
             </div>

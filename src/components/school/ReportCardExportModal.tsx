@@ -837,7 +837,7 @@ export const ReportCardExportModal: React.FC<ReportCardExportModalProps> = ({
                           {school.name}
                         </div>
                         <div className="text-[11px] text-slate-500 mt-0.5">
-                          {school.district} District · {school.schoolType}
+                          {school.district} District · {formatSchoolTypeLabel(school.schoolType)}
                           {school.motto ? ` · "${school.motto}"` : ''}
                         </div>
                       </div>

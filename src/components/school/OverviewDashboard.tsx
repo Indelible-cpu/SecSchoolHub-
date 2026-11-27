@@ -44,6 +44,7 @@ import {
   formatMWK,
   getLibraryDaysOverdue,
   getLibraryDueReminderLabel,
+  formatSchoolTypeLabel,
   isGovernmentSchool,
   isLibraryLoanDueWithin48Hours,
   isLibraryLoanOverdue,
@@ -513,12 +514,12 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
     };
   }, [libraryLoans, todayIso]);
 
-  // Role Header Strip (visible across all roles)
+  // Role Header Strip (spacious across all roles)
   const RoleHeaderBanner = (
-    <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-      <div className="flex items-center gap-3.5 min-w-0">
+    <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="flex items-center gap-3.5 sm:gap-4 min-w-0 flex-1">
         {school.logoDataUrl && (
-          <div className="h-12 w-12 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-hidden shrink-0 flex items-center justify-center">
+          <div className="h-12 w-12 sm:h-14 sm:w-14 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-hidden shrink-0 flex items-center justify-center">
             <img
               src={school.logoDataUrl}
               alt={`${school.name} logo`}
@@ -526,130 +527,38 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
             />
           </div>
         )}
-        <div className="min-w-0">
-          <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-            {rolePermissions.roleLabel} · {school.district} · {school.schoolType}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-xs font-semibold">
+            <span className="text-emerald-700 dark:text-emerald-400">
+              {rolePermissions.roleLabel}
+            </span>
+            <span className="text-slate-300 dark:text-slate-700">·</span>
+            <span className="text-slate-600 dark:text-slate-400">
+              {school.district} District
+            </span>
+            <span className="text-slate-300 dark:text-slate-700">·</span>
+            <span className="px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/80 text-[11px] font-medium">
+              {formatSchoolTypeLabel(school.schoolType)}
+            </span>
           </div>
-          <h1 className="mt-0.5 text-lg sm:text-xl font-bold text-slate-900 dark:text-white tracking-tight truncate">
+          <h1 className="mt-1 text-lg sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
             {rolePermissions.homeTitle}
           </h1>
-          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400 font-mono truncate">
+          <p className="mt-0.5 text-xs sm:text-sm text-slate-600 dark:text-slate-300 font-medium">
             {activeStaffLink
-              ? `${activeStaffLink.staffName} (${activeStaffLink.staffCode}) · ${activeStaffLink.assignedForm} · ${school.currentTerm}`
+              ? `${activeStaffLink.staffName} (${activeStaffLink.staffCode}) · ${activeStaffLink.assignedForm} · ${school.name} · ${school.currentTerm}`
               : `${school.name} · ${school.currentTerm} (${school.academicYear})`}
           </p>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2 shrink-0">
-        {rolePermissions.canManageStaff && (
-          <button
-            type="button"
-            onClick={() => onNavigate('staff')}
-            className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <Settings className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>Staff &amp; Settings</span>
-          </button>
-        )}
-        {rolePermissions.canManageStudents && (
-          <button
-            type="button"
-            onClick={() => onNavigate('students')}
-            className={`inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${
-              rolePermissions.canManageStaff
-                ? 'border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200'
-                : 'bg-emerald-700 hover:bg-emerald-800 text-white'
-            }`}
-          >
-            <Users className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>Students</span>
-          </button>
-        )}
-        {rolePermissions.canReadMarks && (
-          <button
-            type="button"
-            onClick={() => onNavigate('marks')}
-            className={`inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${
-              rolePermissions.canWriteMarks && !rolePermissions.canManageStaff
-                ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
-                : 'border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200'
-            }`}
-          >
-            <Award className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>Exam Marks</span>
-          </button>
-        )}
-        {rolePermissions.canReadFees && (
-          <button
-            type="button"
-            onClick={() => onNavigate('fees')}
-            className={`inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${
-              rolePermissions.canWriteFees && !rolePermissions.canManageStaff && !rolePermissions.canWriteMarks
-                ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
-                : 'border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200'
-            }`}
-          >
-            <Banknote className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>Bursar Ledger</span>
-          </button>
-        )}
-        {rolePermissions.canWriteAttendance && (
-          <button
-            type="button"
-            onClick={() =>
-              onOpenStudents ? onOpenStudents('attendance') : onNavigate('students')
-            }
-            className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <CalendarCheck className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>Student Roll Call</span>
-          </button>
-        )}
-        {rolePermissions.canReadLibrary && (
-          <button
-            type="button"
-            onClick={() =>
-              isTeachingRole && onOpenLibrary
-                ? onOpenLibrary('online', 'teaching')
-                : onNavigate('library')
-            }
-            className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>
-              {isTeachingRole ? 'Teaching Resources' : 'School Library'}
-              {overdueLibraryCount > 0 ? (
-                <span className="text-rose-600 dark:text-rose-400">
-                  {' '}
-                  · {overdueLibraryCount} overdue
-                </span>
-              ) : null}
-              {dueSoonLibraryCount > 0 ? (
-                <span className="text-amber-700 dark:text-amber-400">
-                  {' '}
-                  · {dueSoonLibraryCount} due in 48h
-                </span>
-              ) : null}
-            </span>
-          </button>
-        )}
-        {rolePermissions.allowedSections.includes('timebook') && (
-          <button
-            type="button"
-            onClick={() => onNavigate('timebook')}
-            className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50/70 dark:bg-emerald-950/30 hover:bg-emerald-100/70 dark:hover:bg-emerald-950/50 text-xs font-semibold text-emerald-800 dark:text-emerald-300 whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <Clock className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>Staff Timebook</span>
-          </button>
-        )}
+      <div className="flex items-center gap-2 shrink-0">
         {rolePermissions.canReadMarks && (
           <button
             type="button"
             onClick={() => setShowBoardExportModal(true)}
-            className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 whitespace-nowrap shrink-0 cursor-pointer"
+            className="inline-flex items-center gap-2 min-h-[40px] px-4 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 cursor-pointer transition-colors"
           >
-            <FileDown className="w-3.5 h-3.5" aria-hidden="true" />
+            <FileDown className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
             <span>Export Board PDF</span>
           </button>
         )}

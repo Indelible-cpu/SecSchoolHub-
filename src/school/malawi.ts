@@ -117,6 +117,12 @@ export const FORM_LEVELS: FormLevel[] = [1, 2, 3, 4];
 
 export const STREAMS = ['A', 'B', 'C', 'North', 'South'];
 
+export function formatSchoolTypeLabel(schoolType?: string): string {
+  if (!schoolType) return '';
+  if (schoolType === 'Community Day' || schoolType === 'Government Day') return 'Community Day (CDSS)';
+  return schoolType;
+}
+
 export function isGovernmentSchool(schoolType: SchoolType): boolean {
   return schoolType === 'Community Day' || schoolType === 'Government Day' || schoolType === 'Government Boarding';
 }

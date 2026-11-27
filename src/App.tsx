@@ -59,11 +59,13 @@ import {
   WorkspaceRole,
 } from './school/types';
 import {
+  formatSchoolTypeLabel,
   getRolePermissions,
   normalizeRegistrationCode,
   sortStudentsForRegister,
 } from './school/malawi';
 import {
+  updateSchoolSettings,
   syncMissingPortalFeeInvoices,
   syncMissingPortalResults,
   updateOwnUserProfilePhoto,
@@ -1481,7 +1483,7 @@ export default function App() {
         </div>
 
         <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800/80 text-xs text-slate-500 dark:text-slate-400 space-y-1.5 shrink-0">
-          <div>{activeSchool.district} District · {activeSchool.schoolType}</div>
+          <div>{activeSchool.district} District · {formatSchoolTypeLabel(activeSchool.schoolType)}</div>
           <div className="font-mono text-slate-700 dark:text-slate-300">
             {activeSchool.currentTerm} · {activeSchool.academicYear}
           </div>
