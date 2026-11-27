@@ -94,7 +94,7 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 const NAV_ITEMS: { id: SchoolSection; label: string; shortLabel: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Dashboard', shortLabel: 'Dashboard', icon: LayoutDashboard },
   { id: 'students', label: 'Students (Form 1–4)', shortLabel: 'Students', icon: Users },
-  { id: 'marks', label: 'Exam Marks', shortLabel: 'Marks', icon: Award },
+  { id: 'marks', label: 'CA & Exam Marks', shortLabel: 'CA & Marks', icon: Award },
   { id: 'fees', label: 'Fees & Bursar (MK)', shortLabel: 'Fees', icon: Banknote },
   { id: 'library', label: 'School Library', shortLabel: 'Library', icon: BookOpen },
   { id: 'timebook', label: 'Staff Timebook', shortLabel: 'Timebook', icon: Clock },

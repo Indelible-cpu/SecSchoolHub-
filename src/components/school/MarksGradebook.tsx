@@ -875,10 +875,10 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-              Exam Marks &amp; Gradebook
+              Continuous Assessment (CA) &amp; Exam Marks
             </h1>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono">
-              CA1 20% + CA2 20% + Exam 60% · JCE A–F · MSCE 1–9
+              CA 1 (20%) + CA 2 (20%) + Summative Exam (60%) = 100% · JCE A–F · MSCE 1–9
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -917,7 +917,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
                 className="inline-flex items-center gap-1.5 min-h-[40px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>Record Score</span>
+                <span>Enter CA / Exam Marks</span>
               </button>
             )}
           </div>
@@ -1206,7 +1206,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
         <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
           {filtered.length === 0 ? (
             <div className="py-12 px-6 text-center text-sm text-slate-500 dark:text-slate-400">
-              No marks recorded for {termFilter}. Click &ldquo;Record Score&rdquo; to enter CA 1 (20%), CA 2 (20%), or Summative (60%) marks.
+              No marks recorded for {termFilter}. Click &ldquo;Enter CA / Exam Marks&rdquo; to record Continuous Assessment (CA 1: 20%, CA 2: 20%) or Summative Exam (60%) marks.
             </div>
           ) : (
             <>
@@ -1447,10 +1447,10 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <div>
                 <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                  {lockedStudentSubject ? 'Edit Assessment Score' : 'Record Assessment Score'}
+                  {lockedStudentSubject ? 'Edit CA / Exam Score' : 'Enter CA / Exam Marks'}
                 </h2>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                  2 Continuous Assessments (CA 1: 20%, CA 2: 20%) + Final Summative (60%)
+                  Continuous Assessment (CA 1: 20%, CA 2: 20%) + Final Summative Exam (60%) = 100%
                 </p>
               </div>
               <button

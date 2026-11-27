@@ -516,7 +516,17 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
 
   // Compact top utility action (removes redundant header card with Head Teacher Dashboard / LIWONDE CDSS)
   const RoleHeaderBanner = rolePermissions.canReadMarks ? (
-    <div className="flex items-center justify-end">
+    <div className="flex items-center justify-end gap-2.5">
+      {rolePermissions.canWriteMarks && (
+        <button
+          type="button"
+          onClick={() => onNavigate('marks')}
+          className="inline-flex items-center gap-2 min-h-[38px] px-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer transition-colors shadow-xs"
+        >
+          <Award className="w-3.5 h-3.5" aria-hidden="true" />
+          <span>Enter CA Marks</span>
+        </button>
+      )}
       <button
         type="button"
         onClick={() => setShowBoardExportModal(true)}
@@ -1412,7 +1422,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                 onClick={() => onNavigate('marks')}
                 className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline whitespace-nowrap cursor-pointer"
               >
-                <span>Record Marks</span>
+                <span>Record CA Marks</span>
                 <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
               </button>
             </div>
