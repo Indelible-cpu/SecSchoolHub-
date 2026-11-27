@@ -1,12 +1,12 @@
 {
-  "projectId": "the-baton-j01dl",
-  "appId": "1:132965114437:web:00312ceba3a59f0f6d792c",
-  "apiKey": "AIzaSyC4USxuFe1ZRy0U0B3jqp87KLVpUdlOOhI",
-  "authDomain": "the-baton-j01dl.firebaseapp.com",
+  "projectId": "secschoolhub",
+  "appId": "1:74060298137:web:faa2d13bea9d2c83c2c508",
+  "apiKey": "AIzaSyD64CUOtqAcuLOF6ouQztzMMNS1VnskxZw",
+  "authDomain": "secschoolhub.firebaseapp.com",
   "firestoreDatabaseId": "(default)",
-  "storageBucket": "the-baton-j01dl.firebasestorage.app",
-  "messagingSenderId": "132965114437",
-  "measurementId": "",
-  "oAuthClientId": "132965114437-6s7pmhaddsf80dn4ffg8luqf4drqajs2.apps.googleusercontent.com",
+  "storageBucket": "secschoolhub.firebasestorage.app",
+  "messagingSenderId": "74060298137",
+  "measurementId": "G-J94RNQWT0N",
+  "oAuthClientId": "",
   "recaptchaSiteKey": ""
 }
