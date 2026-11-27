@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { ArrowRight, Eye, EyeOff, KeyRound, Lock, Mail, Moon, ShieldAlert, Sun } from 'lucide-react';
-import { PWAInstallButton } from '../PWAInstallButton';
 import { resetUserPassword } from '../../firebase';
 
 export type LoginIntent = 'admin' | 'staff' | 'student';
@@ -118,7 +117,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           </div>
 
           <div className="flex items-center gap-2.5 shrink-0">
-            <PWAInstallButton variant="header" />
             <button
               type="button"
               onClick={onToggleTheme}

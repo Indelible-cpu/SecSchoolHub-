@@ -98,7 +98,6 @@ import {
   TermName,
 } from '../../school/types';
 import { OfflineIndicator } from '../OfflineIndicator';
-import { PWAInstallButton } from '../PWAInstallButton';
 import { SubjectComponentBarChart } from './AnalyticsCharts';
 import { DraftRestoredNotice, ModalBackdrop } from './ModalBackdrop';
 import { OnlineLibraryReaderModal, ReadableDigitalResource } from './OnlineLibraryReaderModal';
@@ -1501,7 +1500,6 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
             >
               {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
-            <PWAInstallButton variant="header" />
             <button
               type="button"
               onClick={() => {

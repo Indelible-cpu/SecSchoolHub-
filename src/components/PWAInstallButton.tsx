@@ -22,7 +22,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ variant = 'h
     setShowGuide(true);
   };
 
-  if (isInstalled && variant === 'header') {
+  if (variant === 'header') {
     return null;
   }
 

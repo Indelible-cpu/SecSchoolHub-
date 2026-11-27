@@ -88,7 +88,6 @@ import { StaffTimebookStaffView } from './components/school/StaffTimebookStaffVi
 import { StudentResultsPortal } from './components/school/StudentResultsPortal';
 import { StudentPhotoCaptureModal } from './components/school/StudentPhotoCaptureModal';
 import { LandingPage } from './components/school/LandingPage';
-import { PWAInstallButton } from './components/PWAInstallButton';
 import { SecSchoolHubLoader } from './components/SecSchoolHubLoader';
 import { OfflineIndicator } from './components/OfflineIndicator';
 
@@ -1718,7 +1717,6 @@ export default function App() {
               >
                 {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
               </button>
-              <PWAInstallButton variant="header" />
               <button
                 type="button"
                 onClick={() => {
