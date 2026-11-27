@@ -373,9 +373,11 @@ export async function updateSchoolSettings(
 export interface StudentPayload {
   admissionNo: string;
   fullName: string;
+  dateOfBirth?: string;
   gender: Gender;
   formLevel: FormLevel;
   stream: string;
+  shift?: string;
   entryYear?: number;
   boardingStatus: BoardingStatus;
   guardianName: string;
@@ -609,6 +611,8 @@ export async function saveStudent(
     school?.academicYear
   );
   let cleanRegCode = normalizeRegistrationCode(data.registrationCode);
+  const cleanDateOfBirth = clampStr(data.dateOfBirth || '', 20);
+  const cleanShift = clampStr(data.shift || 'Morning Shift', 40);
   const cleanSecondaryPhone = clampStr(data.guardianSecondaryPhone || '', 30);
   const cleanRelationship = clampStr(data.guardianRelationship || '', 40);
   const cleanEmergencyName = clampStr(data.emergencyContactName || '', 120);
@@ -692,9 +696,11 @@ export async function saveStudent(
       await updateDoc(doc(db, 'schools', schoolId, 'students', existingId), {
         admissionNo: clampStr(data.admissionNo, 40),
         fullName: clampStr(data.fullName, 120),
+        dateOfBirth: cleanDateOfBirth,
         gender: data.gender,
         formLevel: cleanFormLevel,
         stream: cleanStream,
+        shift: cleanShift,
         entryYear: cleanEntryYear,
         boardingStatus: data.boardingStatus,
         guardianName: clampStr(data.guardianName, 120),
@@ -715,9 +721,11 @@ export async function saveStudent(
         ownerId,
         admissionNo: clampStr(data.admissionNo, 40),
         fullName: clampStr(data.fullName, 120),
+        dateOfBirth: cleanDateOfBirth,
         gender: data.gender,
         formLevel: cleanFormLevel,
         stream: cleanStream,
+        shift: cleanShift,
         entryYear: cleanEntryYear,
         boardingStatus: data.boardingStatus,
         guardianName: clampStr(data.guardianName, 120),

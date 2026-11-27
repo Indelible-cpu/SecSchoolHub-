@@ -127,9 +127,11 @@ const GUARDIAN_RELATIONSHIPS = [
 const EMPTY_FORM: StudentPayload = {
   admissionNo: '',
   fullName: '',
+  dateOfBirth: '',
   gender: 'Female',
   formLevel: 1,
   stream: 'A',
+  shift: 'Morning Shift',
   entryYear: new Date().getFullYear(),
   boardingStatus: 'Day Scholar',
   guardianName: '',
@@ -521,9 +523,11 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
       formState: {
         admissionNo: student.admissionNo,
         fullName: student.fullName,
+        dateOfBirth: student.dateOfBirth || '',
         gender: student.gender,
         formLevel: student.formLevel,
         stream: student.stream,
+        shift: student.shift || 'Morning Shift',
         entryYear: inferredYear,
         boardingStatus: student.boardingStatus,
         guardianName: student.guardianName,
@@ -1677,7 +1681,7 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                             {s.fullName}
                           </button>
                           <div className="text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-1.5">
-                            <span>{s.gender}</span>
+                            <span>{s.gender}</span>{s.dateOfBirth ? <><span>·</span><span className="font-mono text-[11px] text-slate-500">DoB: {s.dateOfBirth}</span></> : null}
                         {s.registrationCode ? (
                           <>
                             <span>·</span>
@@ -1729,7 +1733,7 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                       </div>
                     </td>
                     <td className="py-3 px-4 whitespace-nowrap text-slate-800 dark:text-slate-200 font-medium">
-                      <div>Form {s.formLevel}{s.stream}</div>
+                      <div>Form {s.formLevel}{s.stream}{s.shift ? <span className="text-[11px] font-normal text-slate-500 dark:text-slate-400"> · {s.shift}</span> : null}</div>
                       <div className="text-[11px] font-normal font-mono text-slate-500 dark:text-slate-400">
                         Entry {inferStudentEntryYear(s, school.academicYear)}
                       </div>
@@ -1849,7 +1853,7 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                     {detailData.student.fullName}
                   </h2>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono tabular-nums">
-                    {detailData.student.admissionNo} · Form {detailData.student.formLevel}{detailData.student.stream} ({detailData.student.formLevel <= 2 ? 'JCE' : 'MSCE'}) · Entry {inferStudentEntryYear(detailData.student, school.academicYear)} · {detailData.student.boardingStatus} · {detailData.student.gender}
+                    {detailData.student.admissionNo} · Form {detailData.student.formLevel}{detailData.student.stream} ({detailData.student.formLevel <= 2 ? 'JCE' : 'MSCE'}) · Entry {inferStudentEntryYear(detailData.student, school.academicYear)} · {detailData.student.boardingStatus} · {detailData.student.shift || 'Morning Shift'} · {detailData.student.gender}{detailData.student.dateOfBirth ? ` · DoB: ${detailData.student.dateOfBirth}` : ''}
                   </p>
                   <button
                     type="button"
@@ -2463,7 +2467,7 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                   </select>
                 </div>
 
-                <div className="sm:col-span-2">
+                <div>
                   <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                     Student Full Name
                   </label>
@@ -2474,6 +2478,18 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                     value={formState.fullName}
                     onChange={(e) => setFormState({ ...formState, fullName: e.target.value })}
                     placeholder="e.g. Chifundo Tembo"
+                    className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Date of Birth
+                  </label>
+                  <input
+                    type="date"
+                    value={formState.dateOfBirth || ''}
+                    onChange={(e) => setFormState({ ...formState, dateOfBirth: e.target.value })}
                     className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"
                   />
                 </div>
@@ -2531,6 +2547,22 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                         Stream {st}
                       </option>
                     ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Shift
+                  </label>
+                  <select
+                    value={formState.shift || 'Morning Shift'}
+                    onChange={(e) => setFormState({ ...formState, shift: e.target.value })}
+                    className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"
+                  >
+                    <option value="Morning Shift">Morning Shift</option>
+                    <option value="Afternoon Shift">Afternoon Shift</option>
+                    <option value="Day (Normal)">Day (Normal)</option>
+                    <option value="Evening Shift">Evening Shift</option>
                   </select>
                 </div>
 

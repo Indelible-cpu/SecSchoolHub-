@@ -19,6 +19,8 @@ export type TermName = 'Term 1' | 'Term 2' | 'Term 3';
 export type FormLevel = 1 | 2 | 3 | 4;
 export type Gender = 'Male' | 'Female';
 export type BoardingStatus = 'Day Scholar' | 'Boarder';
+export const SHIFTS = ['Morning Shift', 'Afternoon Shift', 'Day (Normal)'] as const;
+export type StudentShift = (typeof SHIFTS)[number];
 export type StudentStatus = 'Active' | 'Transferred' | 'Suspended' | 'Rusticated' | 'Graduated';
 export type TeacherRole =
   | 'Head Teacher'
@@ -59,9 +61,11 @@ export interface Student {
   ownerId: string;
   admissionNo: string;
   fullName: string;
+  dateOfBirth?: string;
   gender: Gender;
   formLevel: FormLevel;
   stream: string;
+  shift?: string;
   entryYear?: number;
   boardingStatus: BoardingStatus;
   guardianName: string;
@@ -91,9 +95,11 @@ export interface StudentPortal {
   currentTerm: TermName;
   studentId: string;
   studentName: string;
+  dateOfBirth?: string;
   admissionNo: string;
   formLevel: FormLevel;
   stream: string;
+  shift?: string;
   boardingStatus: BoardingStatus;
   registrationCode: string;
   status: StudentStatus;
