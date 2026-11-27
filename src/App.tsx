@@ -1455,8 +1455,8 @@ export default function App() {
   return (
     <div className="min-h-[100dvh] w-full flex bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100">
       {/* Desktop Left Sidebar */}
-      <aside className="hidden lg:flex lg:flex-col lg:w-68 shrink-0 border-r border-slate-200/80 dark:border-slate-800 bg-white dark:bg-[#161B22] sticky top-0 h-screen overflow-hidden z-20 shadow-[2px_0_12px_rgba(0,0,0,0.02)] dark:shadow-[2px_0_16px_rgba(0,0,0,0.25)]">
-        <div className="h-18 px-4 sm:px-5 flex items-center gap-3 border-b border-slate-200/80 dark:border-slate-800 shrink-0 bg-slate-50/50 dark:bg-slate-900/40">
+      <aside className="hidden lg:flex lg:flex-col lg:w-68 shrink-0 border-r border-slate-200/60 dark:border-white/10 bg-white/70 dark:bg-[#11161F]/75 backdrop-blur-2xl sticky top-0 h-screen overflow-hidden z-20 shadow-[4px_0_24px_rgba(0,0,0,0.03)] dark:shadow-[4px_0_32px_rgba(0,0,0,0.4)]">
+        <div className="h-18 px-4 sm:px-5 flex items-center gap-3 border-b border-slate-200/60 dark:border-white/10 shrink-0 bg-white/40 dark:bg-white/[0.02] backdrop-blur-md">
           {activeSchool.logoDataUrl ? (
             <div className="h-10 w-10 rounded-xl border border-emerald-600/20 dark:border-emerald-500/30 bg-white dark:bg-slate-900 overflow-hidden shrink-0 flex items-center justify-center shadow-xs ring-2 ring-emerald-500/10">
               <img
@@ -1508,13 +1508,13 @@ export default function App() {
                 onClick={() => setActiveSection(item.id)}
                 className={`relative group w-full min-h-[44px] px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs sm:text-sm font-medium transition-all duration-150 cursor-pointer ${
                   active
-                    ? 'bg-emerald-50/90 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 font-semibold shadow-xs border border-emerald-600/15 dark:border-emerald-500/20'
-                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100/70 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-100'
+                    ? 'bg-emerald-500/15 dark:bg-emerald-400/15 text-emerald-950 dark:text-emerald-200 font-semibold shadow-[0_4px_16px_rgba(16,185,129,0.12)] border border-emerald-500/25 dark:border-emerald-400/25 backdrop-blur-md'
+                    : 'text-slate-600 dark:text-slate-400 hover:bg-white/60 dark:hover:bg-white/[0.06] hover:text-slate-900 dark:hover:text-white hover:backdrop-blur-md hover:shadow-xs'
                 }`}
               >
                 {active && (
                   <span
-                    className="absolute left-0 top-2 bottom-2 w-1 rounded-r-full bg-emerald-600 dark:bg-emerald-400 shadow-[0_0_8px_rgba(5,150,105,0.4)]"
+                    className="absolute left-0 top-2 bottom-2 w-1 rounded-r-full bg-emerald-600 dark:bg-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.6)]"
                     aria-hidden="true"
                   />
                 )}
@@ -1533,7 +1533,7 @@ export default function App() {
           })}
         </nav>
 
-        <div className="p-3.5 border-t border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/40 shrink-0 space-y-3">
+        <div className="p-3.5 border-t border-slate-200/60 dark:border-white/10 bg-white/40 dark:bg-white/[0.02] backdrop-blur-md shrink-0 space-y-3">
           {isTrueOwner && (
             <div>
               <label
@@ -1550,7 +1550,7 @@ export default function App() {
                   const val = e.target.value as WorkspaceRole;
                   setAdminActingRole(val === 'Owner' ? null : val);
                 }}
-                className="w-full min-h-[34px] px-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-800 dark:text-slate-200 shadow-xs"
+                className="w-full min-h-[34px] px-2.5 rounded-xl bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200/70 dark:border-white/10 text-xs font-medium text-slate-800 dark:text-slate-200 shadow-xs"
               >
                 {ADMIN_ROLE_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
@@ -1562,7 +1562,7 @@ export default function App() {
           )}
 
           {/* Profile Card with Avatar & Live Online Dot */}
-          <div className="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-[#161B22] p-3 shadow-xs space-y-2.5">
+          <div className="rounded-2xl border border-white/80 dark:border-white/10 bg-white/70 dark:bg-white/[0.04] backdrop-blur-xl p-3 shadow-[0_4px_24px_rgba(0,0,0,0.03)] dark:shadow-[0_8px_32px_rgba(0,0,0,0.35)] space-y-2.5">
             <div className="flex items-center gap-3">
               <div className="relative shrink-0">
                 <button
@@ -1573,7 +1573,7 @@ export default function App() {
                   }}
                   title="Update profile photo"
                   aria-label="Update profile photo"
-                  className="w-10 h-10 rounded-full border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 overflow-hidden flex items-center justify-center cursor-pointer shadow-xs focus:outline-none focus:ring-2 focus:ring-emerald-600 transition-transform hover:scale-105"
+                  className="w-10 h-10 rounded-full border border-white/80 dark:border-white/15 bg-white/80 dark:bg-slate-800/80 backdrop-blur-md overflow-hidden flex items-center justify-center cursor-pointer shadow-xs focus:outline-none focus:ring-2 focus:ring-emerald-600 transition-transform hover:scale-105"
                 >
                   {userPhotoDataUrl && !userPhotoFailed ? (
                     <img
@@ -1590,7 +1590,7 @@ export default function App() {
                   )}
                 </button>
                 <span
-                  className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-[#161B22]"
+                  className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-900"
                   title="Signed In"
                   aria-hidden="true"
                 />
@@ -1609,14 +1609,14 @@ export default function App() {
             </div>
 
             {/* Compact Action Buttons */}
-            <div className="grid grid-cols-2 gap-1.5 pt-1 border-t border-slate-100 dark:border-slate-800/80">
+            <div className="grid grid-cols-2 gap-1.5 pt-1 border-t border-slate-200/60 dark:border-white/10">
               <button
                 type="button"
                 onClick={() => {
                   setUserPhotoError('');
                   setUserPhotoModalOpen(true);
                 }}
-                className="min-h-[32px] px-2 rounded-lg border border-slate-200 dark:border-slate-700/80 flex items-center justify-center gap-1.5 text-[11px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer transition-colors"
+                className="min-h-[32px] px-2 rounded-lg border border-slate-200/80 dark:border-white/10 bg-white/60 dark:bg-white/[0.04] backdrop-blur-md flex items-center justify-center gap-1.5 text-[11px] font-medium text-slate-700 dark:text-slate-300 hover:bg-white dark:hover:bg-white/[0.1] cursor-pointer transition-colors"
                 title="Change Profile Photo"
               >
                 <Camera className="w-3 h-3 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
@@ -1625,7 +1625,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => signOutUser()}
-                className="min-h-[32px] px-2 rounded-lg border border-slate-200 dark:border-slate-700/80 flex items-center justify-center gap-1.5 text-[11px] font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 cursor-pointer transition-colors"
+                className="min-h-[32px] px-2 rounded-lg border border-rose-200/60 dark:border-rose-900/40 bg-white/60 dark:bg-rose-950/20 backdrop-blur-md flex items-center justify-center gap-1.5 text-[11px] font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer transition-colors"
                 title="Sign Out"
               >
                 <LogOut className="w-3 h-3" aria-hidden="true" />
@@ -1641,26 +1641,10 @@ export default function App() {
         {/* Top Bar */}
         <header className="sticky top-0 z-30 h-14 lg:h-16 bg-white/95 dark:bg-[#161B22]/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800">
           <div className="h-full px-4 sm:px-6 flex items-center justify-between gap-4">
-            <div className="min-w-0 flex items-center gap-2 text-sm">
-              {activeSchool.logoDataUrl && (
-                <div className="lg:hidden h-8 w-8 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-hidden shrink-0 flex items-center justify-center">
-                  <img
-                    src={activeSchool.logoDataUrl}
-                    alt={`${activeSchool.name} logo`}
-                    className="h-full w-full object-contain p-0.5"
-                  />
-                </div>
-              )}
-              <span className="lg:hidden font-bold text-slate-900 dark:text-white truncate">
-                {activeSchool.name}
-              </span>
-              <span className="hidden lg:inline text-slate-500 dark:text-slate-400">
-                {activeSchool.name}
-              </span>
-              <span className="hidden lg:inline text-slate-300 dark:text-slate-700">/</span>
-              <span className="hidden lg:inline font-semibold text-slate-900 dark:text-white">
+            <div className="min-w-0 flex items-center gap-2">
+              <h1 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
                 {currentNavLabel}
-              </span>
+              </h1>
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
