@@ -537,87 +537,89 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
     canWriteMarks ||
     canManageBackups;
 
-  // Executive Top Quick Actions Row
+  // Executive Top Quick Actions Row (Strictly single row)
   const RoleHeaderBanner = hasAnyTopAction ? (
-    <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-2.5">
-      {canManageAnnouncements && (
-        <button
-          type="button"
-          onClick={() => setCreateAnnouncementTrigger((prev) => prev + 1)}
-          className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-emerald-600/30 dark:border-emerald-500/30 bg-emerald-50/70 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-xs font-semibold cursor-pointer transition-colors shadow-xs"
-        >
-          <Plus className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
-          <span>New Announcement</span>
-        </button>
-      )}
+    <div className="w-full flex items-center justify-end overflow-x-auto no-scrollbar py-0.5">
+      <div className="flex items-center flex-nowrap gap-2 sm:gap-2.5 shrink-0">
+        {canManageAnnouncements && (
+          <button
+            type="button"
+            onClick={() => setCreateAnnouncementTrigger((prev) => prev + 1)}
+            className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-emerald-600/30 dark:border-emerald-500/30 bg-emerald-50/70 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors shadow-xs"
+          >
+            <Plus className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+            <span>New Announcement</span>
+          </button>
+        )}
 
-      {canRollCall && (
-        <button
-          type="button"
-          onClick={() =>
-            onOpenStudents ? onOpenStudents('attendance') : onNavigate('students')
-          }
-          className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-semibold cursor-pointer transition-colors shadow-xs"
-        >
-          <CalendarCheck className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
-          <span>Take Roll Call</span>
-        </button>
-      )}
+        {canRollCall && (
+          <button
+            type="button"
+            onClick={() =>
+              onOpenStudents ? onOpenStudents('attendance') : onNavigate('students')
+            }
+            className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors shadow-xs"
+          >
+            <CalendarCheck className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+            <span>Take Roll Call</span>
+          </button>
+        )}
 
-      {canTimebook && (
-        <button
-          type="button"
-          onClick={() => (onOpenStaff ? onOpenStaff('timebook') : onNavigate('staff'))}
-          className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-semibold cursor-pointer transition-colors shadow-xs"
-        >
-          <Clock className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
-          <span>Timebook &amp; Turnout</span>
-        </button>
-      )}
+        {canTimebook && (
+          <button
+            type="button"
+            onClick={() => (onOpenStaff ? onOpenStaff('timebook') : onNavigate('staff'))}
+            className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors shadow-xs"
+          >
+            <Clock className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+            <span>Timebook &amp; Turnout</span>
+          </button>
+        )}
 
-      {canReadMarks && (
-        <button
-          type="button"
-          onClick={() => onNavigate('marks')}
-          className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-semibold cursor-pointer transition-colors shadow-xs"
-        >
-          <BookOpen className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
-          <span>Review in Gradebook</span>
-        </button>
-      )}
+        {canReadMarks && (
+          <button
+            type="button"
+            onClick={() => onNavigate('marks')}
+            className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors shadow-xs"
+          >
+            <BookOpen className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+            <span>Review in Gradebook</span>
+          </button>
+        )}
 
-      {canManageBackups && (
-        <button
-          type="button"
-          onClick={() => (onOpenStaff ? onOpenStaff('backups') : onNavigate('staff'))}
-          className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-semibold cursor-pointer transition-colors shadow-xs"
-        >
-          <Database className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
-          <span>Database Backups</span>
-        </button>
-      )}
+        {canWriteMarks && (
+          <button
+            type="button"
+            onClick={() => onNavigate('marks')}
+            className="inline-flex items-center gap-2 min-h-[38px] px-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors shadow-xs"
+          >
+            <Award className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>Enter CA Marks</span>
+          </button>
+        )}
 
-      {canWriteMarks && (
-        <button
-          type="button"
-          onClick={() => onNavigate('marks')}
-          className="inline-flex items-center gap-2 min-h-[38px] px-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer transition-colors shadow-xs"
-        >
-          <Award className="w-3.5 h-3.5" aria-hidden="true" />
-          <span>Enter CA Marks</span>
-        </button>
-      )}
+        {canReadMarks && (
+          <button
+            type="button"
+            onClick={() => setShowBoardExportModal(true)}
+            className="inline-flex items-center gap-2 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 whitespace-nowrap shrink-0 cursor-pointer transition-colors shadow-xs"
+          >
+            <FileDown className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+            <span>Export Board PDF</span>
+          </button>
+        )}
 
-      {canReadMarks && (
-        <button
-          type="button"
-          onClick={() => setShowBoardExportModal(true)}
-          className="inline-flex items-center gap-2 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 cursor-pointer transition-colors shadow-xs"
-        >
-          <FileDown className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
-          <span>Export Board PDF</span>
-        </button>
-      )}
+        {canManageBackups && (
+          <button
+            type="button"
+            onClick={() => (onOpenStaff ? onOpenStaff('backups') : onNavigate('staff'))}
+            className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors shadow-xs"
+          >
+            <Database className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+            <span>Database Backups</span>
+          </button>
+        )}
+      </div>
     </div>
   ) : null;
 
