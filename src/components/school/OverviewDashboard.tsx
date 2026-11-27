@@ -518,6 +518,11 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
 
   const canManageAnnouncements = rolePermissions.canManageStaff;
   const canRollCall = rolePermissions.canWriteAttendance || rolePermissions.canReadAttendance;
+  const canTimebook =
+    (rolePermissions.canManageStaff ||
+      rolePermissions.role === 'Owner' ||
+      rolePermissions.isDeputyHead) &&
+    Boolean(onOpenStaff || onNavigate);
   const canReadMarks = rolePermissions.canReadMarks;
   const canWriteMarks = rolePermissions.canWriteMarks;
   const canManageBackups =
@@ -525,7 +530,12 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
     Boolean(onOpenStaff || onNavigate);
 
   const hasAnyTopAction =
-    canManageAnnouncements || canRollCall || canReadMarks || canWriteMarks || canManageBackups;
+    canManageAnnouncements ||
+    canRollCall ||
+    canTimebook ||
+    canReadMarks ||
+    canWriteMarks ||
+    canManageBackups;
 
   // Executive Top Quick Actions Row
   const RoleHeaderBanner = hasAnyTopAction ? (
@@ -551,6 +561,17 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
         >
           <CalendarCheck className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
           <span>Take Roll Call</span>
+        </button>
+      )}
+
+      {canTimebook && (
+        <button
+          type="button"
+          onClick={() => (onOpenStaff ? onOpenStaff('timebook') : onNavigate('staff'))}
+          className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-semibold cursor-pointer transition-colors shadow-xs"
+        >
+          <Clock className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+          <span>Timebook &amp; Turnout</span>
         </button>
       )}
 

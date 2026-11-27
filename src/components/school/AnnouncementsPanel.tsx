@@ -547,29 +547,19 @@ export const AnnouncementsPanel: React.FC<AnnouncementsPanelProps> = ({
           </h2>
         </div>
 
-        {canManage && (
+        {canManage && roleVisibleAnnouncements.length > 0 && (
           <div className="flex flex-wrap items-center gap-2">
-            {roleVisibleAnnouncements.length > 0 && (
-              <div className="w-56 max-w-full">
-                <AudienceMultiSelectDropdown
-                  selected={selectedAudienceFilters}
-                  onChange={setSelectedAudienceFilters}
-                  placeholder="All Audiences"
-                  emptyMeansAll
-                  compact
-                  counts={audienceCounts}
-                  ariaLabel="Filter announcements by target audience"
-                />
-              </div>
-            )}
-            <button
-              type="button"
-              onClick={openCreateModal}
-              className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>New Announcement</span>
-            </button>
+            <div className="w-56 max-w-full">
+              <AudienceMultiSelectDropdown
+                selected={selectedAudienceFilters}
+                onChange={setSelectedAudienceFilters}
+                placeholder="All Audiences"
+                emptyMeansAll
+                compact
+                counts={audienceCounts}
+                ariaLabel="Filter announcements by target audience"
+              />
+            </div>
           </div>
         )}
       </div>
@@ -578,7 +568,7 @@ export const AnnouncementsPanel: React.FC<AnnouncementsPanelProps> = ({
         <div className="rounded-xl bg-slate-50 dark:bg-slate-900/50 border border-slate-200/70 dark:border-slate-800 px-4 py-5 text-xs text-slate-500 dark:text-slate-400 text-center">
           {canManage
             ? selectedAudienceFilters.length === 0
-              ? 'No announcements posted yet. Click New Announcement to notify Teachers, Librarians, or Students.'
+              ? 'No announcements posted yet. Click New Announcement above to notify Teachers, Librarians, or Students.'
               : `No announcements currently match ${formatAudienceLabelList(selectedAudienceFilters)}.`
             : 'No school announcements for your role at this time.'}
         </div>
