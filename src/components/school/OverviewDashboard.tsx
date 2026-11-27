@@ -528,20 +528,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
           </div>
         )}
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-xs font-semibold">
-            <span className="text-emerald-700 dark:text-emerald-400">
-              {rolePermissions.roleLabel}
-            </span>
-            <span className="text-slate-300 dark:text-slate-700">·</span>
-            <span className="text-slate-600 dark:text-slate-400">
-              {school.district} District
-            </span>
-            <span className="text-slate-300 dark:text-slate-700">·</span>
-            <span className="px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/80 text-[11px] font-medium">
-              {formatSchoolTypeLabel(school.schoolType)}
-            </span>
-          </div>
-          <h1 className="mt-1 text-lg sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
+          <h1 className="text-lg sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
             {rolePermissions.homeTitle}
           </h1>
           <p className="mt-0.5 text-xs sm:text-sm text-slate-600 dark:text-slate-300 font-medium">
