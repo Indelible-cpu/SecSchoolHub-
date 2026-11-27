@@ -78,6 +78,7 @@ export interface Student {
   emergencyNotes?: string;
   studentEmail?: string;
   registrationCode?: string;
+  portalPassword?: string;
   photoDataUrl?: string;
   status: StudentStatus;
   createdAt?: Timestamp;
@@ -103,6 +104,7 @@ export interface StudentPortal {
   shift?: string;
   boardingStatus: BoardingStatus;
   registrationCode: string;
+  portalPassword?: string;
   status: StudentStatus;
   logoDataUrl?: string;
   createdAt?: Timestamp;
@@ -114,6 +116,7 @@ export interface StudentPortalResult {
   ownerId: string;
   schoolId: string;
   registrationCode: string;
+  portalPassword?: string;
   studentId: string;
   studentName: string;
   formLevel: FormLevel;
@@ -296,6 +299,7 @@ export interface StudentPortalFeeInvoice {
   ownerId: string;
   schoolId: string;
   registrationCode: string;
+  portalPassword?: string;
   studentId: string;
   studentName: string;
   formLevel: FormLevel;
@@ -326,6 +330,7 @@ export interface StudentFeeSubmission {
   formLevel: FormLevel;
   stream: string;
   registrationCode: string;
+  portalPassword?: string;
   invoiceId: string;
   term: TermName;
   academicYear: string;
@@ -501,6 +506,7 @@ export interface LibraryReservation {
   formLevel: FormLevel;
   stream: string;
   registrationCode: string;
+  portalPassword?: string;
   status: LibraryReservationStatus;
   requestedDate: string;
   notes: string;
@@ -583,6 +589,7 @@ export interface LibraryReadingSession {
   resourceId: string;
   readerKey: string;
   registrationCode: string;
+  portalPassword?: string;
   mode: LibraryReadingMode;
   isReading: boolean;
   isRead: boolean;
@@ -872,6 +879,7 @@ export interface StudentReportRemark {
   ownerId: string;
   schoolId: string;
   registrationCode?: string;
+  portalPassword?: string;
   studentId: string;
   studentName: string;
   formLevel: FormLevel;

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { ArrowRight, Lock, Mail, Moon, Sun } from 'lucide-react';
+import { ArrowRight, Eye, EyeOff, KeyRound, Lock, Mail, Moon, ShieldAlert, Sun } from 'lucide-react';
 import { PWAInstallButton } from '../PWAInstallButton';
+import { resetUserPassword } from '../../firebase';
 
 export type LoginIntent = 'admin' | 'staff' | 'student';
 
@@ -9,6 +10,8 @@ interface LandingPageProps {
   onChangeLoginIntent: (intent: LoginIntent) => void;
   studentCodeInput: string;
   onChangeStudentCodeInput: (val: string) => void;
+  studentPasswordInput: string;
+  onChangeStudentPasswordInput: (val: string) => void;
   verifyingStudentCode: boolean;
   signingIn: boolean;
   authError: string;
@@ -25,6 +28,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onChangeLoginIntent,
   studentCodeInput,
   onChangeStudentCodeInput,
+  studentPasswordInput,
+  onChangeStudentPasswordInput,
   verifyingStudentCode,
   signingIn,
   authError,
@@ -38,6 +43,14 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [isRegisterMode, setIsRegisterMode] = useState(false);
+  const [showStudentPassword, setShowStudentPassword] = useState(false);
+
+  // Password Reset Flow
+  const [isResetMode, setIsResetMode] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetSuccess, setResetSuccess] = useState('');
+  const [resetError, setResetError] = useState('');
 
   const handleEmailFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,6 +60,45 @@ export const LandingPage: React.FC<LandingPageProps> = ({
     } else {
       onEmailSignIn(emailInput, passwordInput);
     }
+  };
+
+  const handlePasswordResetSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const targetEmail = resetEmail.trim() || emailInput.trim();
+    if (!targetEmail) {
+      setResetError('Please enter your school email address.');
+      return;
+    }
+    setResetLoading(true);
+    setResetError('');
+    setResetSuccess('');
+    try {
+      await resetUserPassword(targetEmail);
+      setResetSuccess(
+        `A password reset link has been sent to ${targetEmail}. Please check your inbox and follow the instructions.`
+      );
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code;
+      if (code === 'auth/user-not-found') {
+        setResetError('No registered account was found with this email address.');
+      } else if (code === 'auth/invalid-email') {
+        setResetError('Please enter a valid email address.');
+      } else {
+        setResetError(
+          err instanceof Error ? err.message : 'Unable to send password reset link right now.'
+        );
+      }
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
+  const handleSwitchTab = (tabId: LoginIntent) => {
+    onChangeLoginIntent(tabId);
+    setIsRegisterMode(false);
+    setIsResetMode(false);
+    setResetSuccess('');
+    setResetError('');
   };
 
   return (
@@ -113,10 +165,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     type="button"
                     role="tab"
                     aria-selected={loginIntent === tab.id}
-                    onClick={() => {
-                      onChangeLoginIntent(tab.id);
-                      setIsRegisterMode(false);
-                    }}
+                    onClick={() => handleSwitchTab(tab.id)}
                     className={`min-h-[38px] px-3 rounded-lg text-xs font-semibold cursor-pointer transition-colors whitespace-nowrap shrink-0 ${
                       loginIntent === tab.id
                         ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
@@ -128,30 +177,33 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 ))}
               </div>
 
+              {/* Title & Subtitle */}
               <div className="text-center">
                 <h2 className="text-lg font-semibold tracking-tight text-slate-900 dark:text-white">
                   {loginIntent === 'student'
                     ? 'Student Sign In'
+                    : isResetMode
+                    ? 'Reset Password'
                     : isRegisterMode
-                    ? loginIntent === 'staff'
-                      ? 'Staff Account Registration'
-                      : 'Head Teacher / Admin Registration'
+                    ? 'Head Teacher Registration'
                     : loginIntent === 'staff'
-                    ? 'Staff & Librarian Sign In'
+                    ? 'Staff & Teacher Sign In'
                     : 'Head Teacher Sign In'}
                 </h2>
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                   {loginIntent === 'student'
-                    ? 'Use the registration code issued by your school.'
+                    ? 'Enter your school Registration Code and Password / PIN.'
+                    : isResetMode
+                    ? 'Enter your institutional email to receive a password reset link.'
                     : isRegisterMode
-                    ? 'Create your password to manage your school workspace.'
+                    ? 'Create your administrative password to register your school workspace.'
                     : loginIntent === 'staff'
                     ? 'Teachers, Form Teachers, HODs, Librarians, and Bursars.'
-                    : 'School administration, Head Teacher oversight, and staff workspace.'}
+                    : 'School administration, Head Teacher oversight, and management workspace.'}
                 </p>
               </div>
 
-              {authError && (
+              {authError && !isResetMode && (
                 <div
                   role="alert"
                   className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200"
@@ -160,7 +212,74 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 </div>
               )}
 
-              {loginIntent === 'student' ? (
+              {/* Reset Password Form Mode */}
+              {isResetMode ? (
+                <form onSubmit={handlePasswordResetSubmit} className="space-y-4">
+                  {resetSuccess && (
+                    <div
+                      role="status"
+                      className="rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-900 px-3.5 py-2.5 text-xs text-emerald-800 dark:text-emerald-200 leading-relaxed"
+                    >
+                      {resetSuccess}
+                    </div>
+                  )}
+
+                  {resetError && (
+                    <div
+                      role="alert"
+                      className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200"
+                    >
+                      {resetError}
+                    </div>
+                  )}
+
+                  <div>
+                    <label
+                      htmlFor="reset-email-input"
+                      className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
+                    >
+                      Registered Email Address
+                    </label>
+                    <div className="relative">
+                      <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" aria-hidden="true" />
+                      <input
+                        id="reset-email-input"
+                        type="email"
+                        required
+                        autoComplete="email"
+                        value={resetEmail}
+                        onChange={(e) => setResetEmail(e.target.value)}
+                        placeholder="e.g. name@school.edu"
+                        className="w-full min-h-[44px] pl-9.5 pr-3.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-slate-900 dark:focus:border-slate-100"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={resetLoading}
+                    className="w-full min-h-[44px] px-4 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-sm font-semibold inline-flex items-center justify-center gap-2 hover:opacity-90 disabled:opacity-50 transition-opacity cursor-pointer whitespace-nowrap"
+                  >
+                    <span>{resetLoading ? 'Sending Link...' : 'Send Password Reset Link'}</span>
+                    {!resetLoading && <ArrowRight className="w-4 h-4" aria-hidden="true" />}
+                  </button>
+
+                  <div className="text-center pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsResetMode(false);
+                        setResetSuccess('');
+                        setResetError('');
+                      }}
+                      className="text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
+                    >
+                      ← Back to Sign In
+                    </button>
+                  </div>
+                </form>
+              ) : loginIntent === 'student' ? (
+                /* Student Registration Code & Password/PIN Sign-In */
                 <form onSubmit={onStudentCodeSignIn} className="space-y-4">
                   <div>
                     <label
@@ -185,20 +304,65 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                       className="w-full min-h-[46px] px-3.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono text-sm tracking-wider uppercase text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
                     />
                   </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label
+                        htmlFor="student-password-input"
+                        className="block text-xs font-medium text-slate-700 dark:text-slate-300"
+                      >
+                        Student Password / PIN
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setShowStudentPassword((prev) => !prev)}
+                        className="text-[11px] text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        {showStudentPassword ? (
+                          <>
+                            <EyeOff className="w-3.5 h-3.5" />
+                            <span>Hide</span>
+                          </>
+                        ) : (
+                          <>
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Show</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    <div className="relative">
+                      <KeyRound className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" aria-hidden="true" />
+                      <input
+                        id="student-password-input"
+                        type={showStudentPassword ? 'text' : 'password'}
+                        required
+                        autoComplete="current-password"
+                        value={studentPasswordInput}
+                        onChange={(e) => onChangeStudentPasswordInput(e.target.value)}
+                        placeholder="Enter password or Admission No."
+                        className="w-full min-h-[46px] pl-9.5 pr-3.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+                      />
+                    </div>
+                    <p className="mt-1.5 text-[11px] text-slate-500 dark:text-slate-400 leading-tight">
+                      Default password is your school Admission Number (e.g. 2026/001). Once signed in, you can update your PIN anytime.
+                    </p>
+                  </div>
+
                   <button
                     type="submit"
                     disabled={verifyingStudentCode}
                     className="w-full min-h-[46px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap"
                   >
                     <span>
-                      {verifyingStudentCode ? 'Verifying Code...' : 'Open Student Portal'}
+                      {verifyingStudentCode ? 'Verifying Credentials...' : 'Open Student Portal'}
                     </span>
                     {!verifyingStudentCode && <ArrowRight className="w-4 h-4" aria-hidden="true" />}
                   </button>
                 </form>
               ) : (
+                /* Head Teacher & Staff Sign-In Forms */
                 <div className="space-y-4">
-                  {/* Standard Direct Email & Password Form (No popups, zero configuration) */}
                   <form onSubmit={handleEmailFormSubmit} className="space-y-3.5">
                     <div>
                       <label
@@ -223,12 +387,28 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     </div>
 
                     <div>
-                      <label
-                        htmlFor="password-input"
-                        className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
-                      >
-                        Password
-                      </label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label
+                          htmlFor="password-input"
+                          className="block text-xs font-medium text-slate-700 dark:text-slate-300"
+                        >
+                          Password
+                        </label>
+                        {!isRegisterMode && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setResetEmail(emailInput);
+                              setResetSuccess('');
+                              setResetError('');
+                              setIsResetMode(true);
+                            }}
+                            className="text-[11px] text-slate-500 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
+                          >
+                            Forgot password?
+                          </button>
+                        )}
+                      </div>
                       <div className="relative">
                         <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" aria-hidden="true" />
                         <input
@@ -245,6 +425,15 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                       </div>
                     </div>
 
+                    {isRegisterMode && loginIntent === 'admin' && (
+                      <div className="rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 p-3 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2">
+                        <ShieldAlert className="w-4 h-4 text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
+                        <span>
+                          <strong>Institutional Verification:</strong> Only authorized Head Teachers and administrators may register. School profile verification is required before accessing records.
+                        </span>
+                      </div>
+                    )}
+
                     <button
                       type="submit"
                       disabled={signingIn}
@@ -254,23 +443,33 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                         {signingIn
                           ? 'Processing...'
                           : isRegisterMode
-                          ? 'Create Account'
+                          ? 'Register Head Teacher Account'
                           : 'Sign In'}
                       </span>
                       {!signingIn && <ArrowRight className="w-4 h-4" aria-hidden="true" />}
                     </button>
 
-                    <div className="text-center pt-1">
-                      <button
-                        type="button"
-                        onClick={() => setIsRegisterMode((m) => !m)}
-                        className="text-xs text-slate-500 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
-                      >
-                        {isRegisterMode
-                          ? 'Already have an account? Sign in'
-                          : "First time here? Create an account"}
-                      </button>
-                    </div>
+                    {/* Registration is restricted for staff, only available for Head Teacher */}
+                    {loginIntent === 'admin' ? (
+                      <div className="text-center pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setIsRegisterMode((m) => !m)}
+                          className="text-xs text-slate-500 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
+                        >
+                          {isRegisterMode
+                            ? 'Already have an account? Sign in'
+                            : 'First time here? Register as Head Teacher'}
+                        </button>
+                      </div>
+                    ) : (
+                      /* Staff Institutional Access Security Notice */
+                      <div className="pt-1.5 text-center">
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-normal">
+                          Staff accounts are provisioned by the Head Teacher. If your email is not activated yet, contact your school administrator.
+                        </p>
+                      </div>
+                    )}
                   </form>
 
                   {/* Clean Divider */}
@@ -280,7 +479,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     <div className="flex-grow border-t border-slate-200 dark:border-slate-800"></div>
                   </div>
 
-                  {/* One-Click Google Sign-In with Synchronous User Gesture Binding */}
+                  {/* One-Click Google Sign-In */}
                   <button
                     type="button"
                     onClick={onGoogleSignIn}

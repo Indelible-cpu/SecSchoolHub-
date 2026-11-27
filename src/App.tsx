@@ -177,6 +177,7 @@ export default function App() {
     }
   });
   const [studentCodeInput, setStudentCodeInput] = useState('');
+  const [studentPasswordInput, setStudentPasswordInput] = useState('');
   const [verifyingStudentCode, setVerifyingStudentCode] = useState(false);
 
   const [schoolsLoading, setSchoolsLoading] = useState(true);
@@ -1227,6 +1228,14 @@ export default function App() {
     }
 
     setAuthError('');
+    const enteredPassword = studentPasswordInput.trim();
+    if (!enteredPassword) {
+      setAuthError(
+        'Please enter your Student Password or PIN. Default password is your school Admission Number (e.g. 2026/001).'
+      );
+      return;
+    }
+
     setVerifyingStudentCode(true);
     try {
       const portalSnap = await getDoc(doc(db, 'studentPortals', normalized));
@@ -1236,21 +1245,41 @@ export default function App() {
         );
         return;
       }
+      const portalData = portalSnap.data() as StudentPortal;
+      const expectedPassword = (portalData.portalPassword || portalData.admissionNo || '').trim();
+      const isPasswordMatch = portalData.portalPassword
+        ? portalData.portalPassword.trim() === enteredPassword
+        : expectedPassword.toLowerCase() === enteredPassword.toLowerCase();
+      if (!isPasswordMatch) {
+        setAuthError(
+          'Incorrect password or PIN. The default password is your school Admission Number (e.g. 2026/001). Contact your school administrator or form teacher if you need assistance.'
+        );
+        return;
+      }
       try {
         window.localStorage.setItem('malawisec_student_code', normalized);
       } catch {
         // Ignore storage error
       }
       setStudentSessionCode(normalized);
+      setStudentPasswordInput('');
       setPortalOverride('student');
     } catch (err) {
       const msg = err instanceof Error ? err.message : '';
       if (msg.toLowerCase().includes('offline') || msg.toLowerCase().includes('unavailable')) {
         let hasOfflinePortal = false;
         try {
-          hasOfflinePortal = Boolean(
-            window.localStorage.getItem(`malawisec_student_portal_${normalized}`)
-          );
+          const cached = window.localStorage.getItem(`malawisec_student_portal_${normalized}`);
+          if (cached) {
+            const parsed = JSON.parse(cached) as StudentPortal;
+            const expectedPassword = (parsed.portalPassword || parsed.admissionNo || '').trim();
+            const isPasswordMatch = parsed.portalPassword
+              ? parsed.portalPassword.trim() === enteredPassword
+              : expectedPassword.toLowerCase() === enteredPassword.toLowerCase();
+            if (isPasswordMatch) {
+              hasOfflinePortal = true;
+            }
+          }
         } catch {
           hasOfflinePortal = false;
         }
@@ -1283,6 +1312,7 @@ export default function App() {
     }
     setStudentSessionCode('');
     setStudentCodeInput('');
+    setStudentPasswordInput('');
     setAuthError('');
     setPortalOverride('auto');
     setLoginIntent('student');
@@ -1340,6 +1370,8 @@ export default function App() {
           }}
           studentCodeInput={studentCodeInput}
           onChangeStudentCodeInput={setStudentCodeInput}
+          studentPasswordInput={studentPasswordInput}
+          onChangeStudentPasswordInput={setStudentPasswordInput}
           verifyingStudentCode={verifyingStudentCode}
           signingIn={signingIn}
           authError={authError}

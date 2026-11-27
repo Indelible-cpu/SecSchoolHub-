@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -263,6 +263,15 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
   const [offlineSyncFeedback, setOfflineSyncFeedback] = useState('');
   const [readingSessions, setReadingSessions] = useState<LibraryReadingSession[]>([]);
   const [announcements, setAnnouncements] = useState<SchoolAnnouncement[]>([]);
+
+  // Student Portal Password / PIN Management
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [currentPasswordInput, setCurrentPasswordInput] = useState('');
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
+  const [passwordModalSaving, setPasswordModalSaving] = useState(false);
+  const [passwordModalError, setPasswordModalError] = useState('');
+  const [passwordModalSuccess, setPasswordModalSuccess] = useState('');
 
   const studentScopeKey = `student:${registrationCode}`;
   const {
@@ -1385,6 +1394,66 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
     ? (`Form ${activePortal.formLevel}` as DigitalResourceFormLevel)
     : 'All';
 
+  const handleUpdateStudentPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activePortal) return;
+    const enteredCurrent = currentPasswordInput.trim();
+    const enteredNew = newPasswordInput.trim();
+    const enteredConfirm = confirmPasswordInput.trim();
+
+    const expectedCurrent = (activePortal.portalPassword || activePortal.admissionNo || '').trim();
+    const isCurrentMatch = activePortal.portalPassword
+      ? activePortal.portalPassword.trim() === enteredCurrent
+      : expectedCurrent.toLowerCase() === enteredCurrent.toLowerCase();
+
+    if (!isCurrentMatch) {
+      setPasswordModalError(
+        'Current password / PIN is incorrect. (Default is your school Admission Number).'
+      );
+      return;
+    }
+
+    if (enteredNew.length < 4) {
+      setPasswordModalError('New password / PIN must be at least 4 characters long.');
+      return;
+    }
+
+    if (enteredNew !== enteredConfirm) {
+      setPasswordModalError('New passwords do not match. Please re-enter.');
+      return;
+    }
+
+    setPasswordModalSaving(true);
+    setPasswordModalError('');
+    setPasswordModalSuccess('');
+    try {
+      await updateDoc(doc(db, 'studentPortals', registrationCode), {
+        portalPassword: enteredNew,
+        updatedAt: serverTimestamp(),
+      });
+
+      const updatedPortal: StudentPortal = {
+        ...activePortal,
+        portalPassword: enteredNew,
+      };
+      setActivePortal(updatedPortal);
+      writeCachedJson(`malawisec_student_portal_${registrationCode}`, updatedPortal);
+
+      setPasswordModalSuccess('Your Password / PIN has been updated successfully!');
+      setCurrentPasswordInput('');
+      setNewPasswordInput('');
+      setConfirmPasswordInput('');
+    } catch (err) {
+      setPasswordModalError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to update password. Ensure you are connected to the internet.'
+      );
+    } finally {
+      setPasswordModalSaving(false);
+    }
+  };
+
   const handleSelectTab = (nextTab: StudentPortalTab) => {
     setActiveTab(nextTab);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1434,6 +1503,22 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
               {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
             <PWAInstallButton variant="header" />
+            <button
+              type="button"
+              onClick={() => {
+                setShowPasswordModal(true);
+                setPasswordModalError('');
+                setPasswordModalSuccess('');
+                setCurrentPasswordInput('');
+                setNewPasswordInput('');
+                setConfirmPasswordInput('');
+              }}
+              title="Change your portal password or PIN"
+              className="inline-flex items-center gap-1.5 min-h-[38px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <KeyRound className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+              <span className="hidden sm:inline">Change PIN</span>
+            </button>
             <button
               type="button"
               onClick={onSignOut}
@@ -1532,6 +1617,24 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                   )}
                   <span className="font-semibold text-slate-700 dark:text-slate-200">
                     {activePortal.registrationCode}
+                  </span>
+                  <span>·</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowPasswordModal(true);
+                      setPasswordModalError('');
+                      setPasswordModalSuccess('');
+                      setCurrentPasswordInput('');
+                      setNewPasswordInput('');
+                      setConfirmPasswordInput('');
+                    }}
+                    className="inline-flex items-center gap-1 font-sans text-xs text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer"
+                  >
+                    <KeyRound className="w-3 h-3" aria-hidden="true" />
+                    <span>Change PIN</span>
+                  </button>
+                  <span className="hidden">
                   </span>
                 </div>
               </div>
@@ -3361,6 +3464,118 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
         }
         onClose={() => setActiveReaderResource(null)}
       />
+
+      {/* Student Change Password / PIN Modal */}
+      <ModalBackdrop
+        isOpen={showPasswordModal}
+        onClose={() => {
+          if (!passwordModalSaving) {
+            setShowPasswordModal(false);
+          }
+        }}
+      >
+        <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-7 max-w-md w-full space-y-4 shadow-xl">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
+            <div className="flex items-center gap-2">
+              <div className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400">
+                <KeyRound className="w-5 h-5" aria-hidden="true" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Change Password / PIN
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Protect your report card, fee records, and library account
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowPasswordModal(false)}
+              disabled={passwordModalSaving}
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          {passwordModalSuccess && (
+            <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-900 px-3.5 py-2.5 text-xs text-emerald-800 dark:text-emerald-200">
+              {passwordModalSuccess}
+            </div>
+          )}
+
+          {passwordModalError && (
+            <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
+              {passwordModalError}
+            </div>
+          )}
+
+          <form onSubmit={handleUpdateStudentPassword} className="space-y-3.5">
+            <div>
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Current Password or PIN
+              </label>
+              <input
+                type="password"
+                required
+                value={currentPasswordInput}
+                onChange={(e) => setCurrentPasswordInput(e.target.value)}
+                placeholder="Default is Admission No. (e.g. 2026/001)"
+                className="w-full min-h-[42px] px-3.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                New Password or PIN
+              </label>
+              <input
+                type="password"
+                required
+                minLength={4}
+                value={newPasswordInput}
+                onChange={(e) => setNewPasswordInput(e.target.value)}
+                placeholder="Min. 4 characters / numbers"
+                className="w-full min-h-[42px] px-3.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Confirm New Password or PIN
+              </label>
+              <input
+                type="password"
+                required
+                minLength={4}
+                value={confirmPasswordInput}
+                onChange={(e) => setConfirmPasswordInput(e.target.value)}
+                placeholder="Re-enter new password or PIN"
+                className="w-full min-h-[42px] px-3.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
+              />
+            </div>
+
+            <div className="pt-2 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setShowPasswordModal(false)}
+                disabled={passwordModalSaving}
+                className="min-h-[40px] px-4 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={passwordModalSaving}
+                className="min-h-[40px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+              >
+                {passwordModalSaving ? 'Saving...' : 'Update Password'}
+              </button>
+            </div>
+          </form>
+        </div>
+      </ModalBackdrop>
 
       {/* Payment Proof Preview Modal */}
       <PaymentProofPreviewModal
