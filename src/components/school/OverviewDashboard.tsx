@@ -525,17 +525,13 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
     Boolean(onOpenStaff || onNavigate);
   const canReadMarks = rolePermissions.canReadMarks;
   const canWriteMarks = rolePermissions.canWriteMarks;
-  const canManageBackups =
-    (rolePermissions.role === 'Owner' || rolePermissions.isPlatformAdmin) &&
-    Boolean(onOpenStaff || onNavigate);
 
   const hasAnyTopAction =
     canManageAnnouncements ||
     canRollCall ||
     canTimebook ||
     canReadMarks ||
-    canWriteMarks ||
-    canManageBackups;
+    canWriteMarks;
 
   // Executive Top Quick Actions Row (Strictly single row)
   const RoleHeaderBanner = hasAnyTopAction ? (
@@ -606,17 +602,6 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
           >
             <FileDown className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
             <span>Export Board PDF</span>
-          </button>
-        )}
-
-        {canManageBackups && (
-          <button
-            type="button"
-            onClick={() => (onOpenStaff ? onOpenStaff('backups') : onNavigate('staff'))}
-            className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors shadow-xs"
-          >
-            <Database className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
-            <span>Database Backups</span>
           </button>
         )}
       </div>
