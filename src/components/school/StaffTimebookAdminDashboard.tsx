@@ -31,6 +31,7 @@ import {
 } from 'recharts';
 import {
   buildDefaultTimebookSettings,
+  buildFilteredPeriodTimebookRows,
   DEFAULT_TIMEBOOK_DEADLINE,
   DEFAULT_TIMEBOOK_MAX_ACCURACY_METERS,
   DEFAULT_TIMEBOOK_RADIUS_METERS,
@@ -38,9 +39,13 @@ import {
   DEFAULT_TIMEBOOK_TIMEZONE,
   DEFAULT_TIMEBOOK_WINDOW_START,
   DEFAULT_TIMEBOOK_WORKDAYS,
+  formatTimebookAttendanceCsv,
   getEffectiveDeadlineHHMM,
   getZonedDateTimeParts,
   isValidHHMM,
+  resolveTimebookPeriodRange,
+  shiftIsoDate,
+  TimebookPeriodPreset,
 } from '../../school/timebookUtils';
 import {
   adminBulkMarkUnmarkedTimebook,
@@ -111,14 +116,6 @@ const TIMEZONE_OPTIONS = [
   'UTC',
 ];
 
-function csvEscape(val: unknown): string {
-  const s = String(val ?? '');
-  if (/[",\n]/.test(s)) {
-    return `"${s.replace(/"/g, '""')}"`;
-  }
-  return s;
-}
-
 export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardProps> = ({
   school,
   teachers,
@@ -138,7 +135,10 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
   );
 
   const [activeTab, setActiveTab] = useState<AdminTimebookTab>('register');
+  const [periodPreset, setPeriodPreset] = useState<TimebookPeriodPreset>('day');
   const [selectedDate, setSelectedDate] = useState(todayIso);
+  const [periodStartDate, setPeriodStartDate] = useState(() => shiftIsoDate(todayIso, -6));
+  const [periodEndDate, setPeriodEndDate] = useState(todayIso);
   const [categoryFilter, setCategoryFilter] = useState<StaffCategoryFilter>('all');
   const [roleFilter, setRoleFilter] = useState<string>('ALL');
   const [methodFilter, setMethodFilter] = useState<
@@ -161,6 +161,7 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
     teacher: Teacher;
     existingEntry: StaffTimebookEntry | null;
     correctionRequest?: TimebookCorrectionRequest;
+    targetDate?: string;
   } | null>(null);
   const [editStatus, setEditStatus] = useState<TimebookEntryStatus>('Administratively Recorded');
   const [editTimeIn, setEditTimeIn] = useState('07:55:00');
@@ -252,63 +253,44 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
     [entriesForDate, legacyPresenceForDate, teachers]
   );
 
-  const registerRows = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return teachers
-      .map((teacher) => {
-        const entry = entriesForDate.get(teacher.id) || null;
-        const legacy = entry ? null : legacyPresenceForDate.get(teacher.id) || null;
-        const derivedStatus: string =
-          entry?.status ||
-          legacy?.status ||
-          (teacher.status === 'On Leave' ? 'On Leave' : 'Not Signed In');
-        const derivedMethod = entry
-          ? entry.recordingMethod
-          : legacy
-          ? 'Admin Recorded'
-          : 'Not Signed In';
-        return { teacher, entry, legacy, derivedStatus, derivedMethod };
-      })
-      .filter(({ teacher, entry, legacy }) => {
-        if (categoryFilter === 'leadership') {
-          if (!['Head Teacher', 'Deputy Head', 'Head of Department'].includes(teacher.roleTitle)) {
-            return false;
-          }
-        } else if (categoryFilter === 'teachers') {
-          if (
-            !['Form Teacher', 'Form Master', 'Subject Teacher', 'Head of Department'].includes(
-              teacher.roleTitle
-            )
-          ) {
-            return false;
-          }
-        } else if (categoryFilter === 'support') {
-          if (!['School Librarian', 'School Bursar'].includes(teacher.roleTitle)) {
-            return false;
-          }
-        }
+  const periodRange = useMemo(
+    () =>
+      resolveTimebookPeriodRange({
+        preset: periodPreset,
+        anchorDate: selectedDate,
+        customStart: periodStartDate,
+        customEnd: periodEndDate,
+      }),
+    [periodEndDate, periodPreset, periodStartDate, selectedDate]
+  );
 
-        if (roleFilter !== 'ALL' && teacher.roleTitle !== roleFilter) return false;
-        if (methodFilter === 'GPS Auto' && entry?.recordingMethod !== 'GPS Auto') return false;
-        if (
-          methodFilter === 'Admin Recorded' &&
-          entry?.recordingMethod !== 'Admin Recorded' &&
-          !legacy
-        )
-          return false;
-        if (methodFilter === 'Not Signed In' && (entry || legacy || teacher.status === 'On Leave'))
-          return false;
-        if (q) {
-          const matches =
-            teacher.fullName.toLowerCase().includes(q) ||
-            teacher.staffCode.toLowerCase().includes(q) ||
-            teacher.roleTitle.toLowerCase().includes(q);
-          if (!matches) return false;
-        }
-        return true;
-      })
-      .sort((a, b) => a.teacher.fullName.localeCompare(b.teacher.fullName));
-  }, [categoryFilter, entriesForDate, legacyPresenceForDate, methodFilter, roleFilter, searchQuery, teachers]);
+  const isMultiDayPeriod = periodRange.dates.length > 1;
+
+  const registerRows = useMemo(
+    () =>
+      buildFilteredPeriodTimebookRows({
+        dates: periodRange.dates,
+        teachers,
+        entries,
+        staffAttendance,
+        timebookSettings,
+        categoryFilter,
+        roleFilter,
+        methodFilter,
+        searchQuery,
+      }),
+    [
+      categoryFilter,
+      entries,
+      methodFilter,
+      periodRange.dates,
+      roleFilter,
+      searchQuery,
+      staffAttendance,
+      teachers,
+      timebookSettings,
+    ]
+  );
 
   const kpis = useMemo(() => {
     const activeTeachers = teachers.filter((t) => t.status === 'Active');
@@ -415,10 +397,11 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
   const openCorrectionModal = (
     teacher: Teacher,
     existingEntry: StaffTimebookEntry | null,
-    correctionRequest?: TimebookCorrectionRequest
+    correctionRequest?: TimebookCorrectionRequest,
+    targetDate?: string
   ) => {
     setEditError('');
-    setEditModal({ teacher, existingEntry, correctionRequest });
+    setEditModal({ teacher, existingEntry, correctionRequest, targetDate });
     setEditStatus(
       correctionRequest?.requestedStatus ||
         existingEntry?.status ||
@@ -436,7 +419,7 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
     setEditError('');
     setEditBusy(true);
     try {
-      const targetDate = editModal.correctionRequest?.date || selectedDate;
+      const targetDate = editModal.correctionRequest?.date || editModal.targetDate || selectedDate;
       const deadlineHHMM = getEffectiveDeadlineHHMM(
         timebookSettings || defaults,
         editModal.teacher.roleTitle
@@ -630,55 +613,28 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
   };
 
   const handleExportCsv = () => {
-    const headers = [
-      'Date',
-      'Staff Code',
-      'Staff Name',
-      'Role',
-      'Status',
-      'Recording Method',
-      'Time In',
-      'GPS Distance (m)',
-      'GPS Accuracy (m)',
-      'Reason / Notes',
-    ];
-    const lines = [headers.map(csvEscape).join(',')];
-    for (const row of registerRows) {
-      lines.push(
-        [
-          selectedDate,
-          row.teacher.staffCode,
-          row.teacher.fullName,
-          row.teacher.roleTitle,
-          row.derivedStatus,
-          row.derivedMethod,
-          row.entry?.timeInDisplay || '—',
-          row.entry?.recordingMethod === 'GPS Auto' ? Math.round(row.entry.distanceMeters) : '',
-          row.entry?.recordingMethod === 'GPS Auto' ? Math.round(row.entry.accuracyMeters) : '',
-          row.entry?.correctionReason || row.entry?.gpsVerificationStatus || '',
-        ]
-          .map(csvEscape)
-          .join(',')
-      );
-    }
-
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const csvContent = formatTimebookAttendanceCsv(registerRows);
+    const blob = new Blob([`\uFEFF${csvContent}`], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `staff-timebook-${selectedDate}.csv`;
+    const fileRange =
+      periodRange.startDate === periodRange.endDate
+        ? periodRange.startDate
+        : `${periodRange.startDate}-to-${periodRange.endDate}`;
+    link.download = `staff-timebook-${fileRange}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   };
 
   const handleExportPdf = () => {
     const list: StaffTimebookEntry[] = registerRows.map(
-      ({ teacher, entry, derivedStatus }) =>
+      ({ date: rowDate, teacher, entry, derivedStatus }) =>
         entry || {
-          id: `${selectedDate}_${teacher.id}`,
+          id: `${rowDate}_${teacher.id}`,
           ownerId: school.ownerId,
           schoolId: school.id,
-          date: selectedDate,
+          date: rowDate,
           teacherId: teacher.id,
           staffUid: '',
           staffCode: teacher.staffCode,
@@ -705,7 +661,7 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
 
     downloadStaffTimebookPdfReport({
       school,
-      dateLabel: selectedDate,
+      dateLabel: periodRange.label,
       entries: list,
       totalStaffCount: kpis.totalStaff,
       gpsAutoCount: kpis.presentGps,
@@ -861,23 +817,94 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
                 <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                   Register Filters &amp; Official Exports
                 </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
                   <div>
-                    <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
-                      Register Date
+                    <label
+                      htmlFor="timebook-period-preset"
+                      className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
+                    >
+                      Period
                     </label>
-                    <input
-                      type="date"
-                      value={selectedDate}
-                      onChange={(e) => setSelectedDate(e.target.value || todayIso)}
+                    <select
+                      id="timebook-period-preset"
+                      value={periodPreset}
+                      onChange={(e) => {
+                        const next = e.target.value as TimebookPeriodPreset;
+                        setPeriodPreset(next);
+                        if (next === 'custom') {
+                          setPeriodStartDate((prev) => prev || shiftIsoDate(selectedDate, -6));
+                          setPeriodEndDate((prev) => prev || selectedDate);
+                        }
+                      }}
                       className="w-full min-h-[40px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#0F141B] text-sm text-slate-900 dark:text-slate-100"
-                    />
+                    >
+                      <option value="day">Single Day</option>
+                      <option value="7d">Last 7 Days</option>
+                      <option value="month">This Month</option>
+                      <option value="custom">Custom Period</option>
+                    </select>
                   </div>
+
+                  {periodPreset === 'custom' ? (
+                    <>
+                      <div>
+                        <label
+                          htmlFor="timebook-period-from"
+                          className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
+                        >
+                          From Date
+                        </label>
+                        <input
+                          id="timebook-period-from"
+                          type="date"
+                          value={periodStartDate}
+                          onChange={(e) => setPeriodStartDate(e.target.value || todayIso)}
+                          className="w-full min-h-[40px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#0F141B] text-sm font-mono tabular-nums text-slate-900 dark:text-slate-100"
+                        />
+                      </div>
+                      <div>
+                        <label
+                          htmlFor="timebook-period-to"
+                          className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
+                        >
+                          To Date
+                        </label>
+                        <input
+                          id="timebook-period-to"
+                          type="date"
+                          value={periodEndDate}
+                          onChange={(e) => setPeriodEndDate(e.target.value || todayIso)}
+                          className="w-full min-h-[40px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#0F141B] text-sm font-mono tabular-nums text-slate-900 dark:text-slate-100"
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <div>
+                      <label
+                        htmlFor="timebook-register-date"
+                        className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
+                      >
+                        {periodPreset === 'day' ? 'Register Date' : 'Period Ending Date'}
+                      </label>
+                      <input
+                        id="timebook-register-date"
+                        type="date"
+                        value={selectedDate}
+                        onChange={(e) => setSelectedDate(e.target.value || todayIso)}
+                        className="w-full min-h-[40px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#0F141B] text-sm font-mono tabular-nums text-slate-900 dark:text-slate-100"
+                      />
+                    </div>
+                  )}
+
                   <div>
-                    <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+                    <label
+                      htmlFor="timebook-recording-source"
+                      className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
+                    >
                       Recording Source
                     </label>
                     <select
+                      id="timebook-recording-source"
                       value={methodFilter}
                       onChange={(e) =>
                         setMethodFilter(
@@ -892,11 +919,16 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
                       <option value="Not Signed In">Not Signed In Yet</option>
                     </select>
                   </div>
+
                   <div>
-                    <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+                    <label
+                      htmlFor="timebook-role-filter"
+                      className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
+                    >
                       Role Filter
                     </label>
                     <select
+                      id="timebook-role-filter"
                       value={roleFilter}
                       onChange={(e) => setRoleFilter(e.target.value)}
                       className="w-full min-h-[40px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#0F141B] text-sm text-slate-900 dark:text-slate-100"
@@ -909,13 +941,18 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
                       ))}
                     </select>
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+
+                  <div className={periodPreset === 'custom' ? '' : 'sm:col-span-2 lg:col-span-1'}>
+                    <label
+                      htmlFor="timebook-staff-search"
+                      className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
+                    >
                       Search Staff
                     </label>
                     <div className="relative">
                       <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                       <input
+                        id="timebook-staff-search"
                         type="text"
                         placeholder="Name or staff code..."
                         value={searchQuery}
@@ -929,10 +966,12 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
 
               <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
                 <span className="text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
-                  Showing {registerRows.length} of {teachers.length} staff for {selectedDate}
+                  {isMultiDayPeriod
+                    ? `${registerRows.length} filtered records · ${periodRange.label}`
+                    : `Showing ${registerRows.length} of ${teachers.length} staff for ${selectedDate}`}
                 </span>
                 <div className="flex flex-wrap items-center gap-2">
-                  {canManageTimebook && unmarkedTeachersForDate.length > 0 && (
+                  {canManageTimebook && !isMultiDayPeriod && unmarkedTeachersForDate.length > 0 && (
                     <button
                       type="button"
                       onClick={() => {
@@ -948,15 +987,18 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
                   <button
                     type="button"
                     onClick={handleExportCsv}
-                    className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+                    disabled={registerRows.length === 0}
+                    title={`Download filtered CSV for ${periodRange.label}`}
+                    className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>Export CSV</span>
+                    <span>{isMultiDayPeriod ? 'Export Period CSV' : 'Export CSV'}</span>
                   </button>
                   <button
                     type="button"
                     onClick={handleExportPdf}
-                    className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+                    disabled={registerRows.length === 0}
+                    className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     <FileText className="w-3.5 h-3.5" aria-hidden="true" />
                     <span>Export PDF</span>
@@ -1001,6 +1043,7 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
               <table className="w-full text-left border-collapse text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
+                    {isMultiDayPeriod && <th className="py-2.5 pr-3 font-medium">Date</th>}
                     <th className="py-2.5 pr-3 font-medium">Staff Member</th>
                     <th className="py-2.5 pr-3 font-medium">Role</th>
                     <th className="py-2.5 pr-3 font-medium">Status</th>
@@ -1011,8 +1054,16 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
-                  {registerRows.map(({ teacher, entry, legacy, derivedStatus, derivedMethod }) => (
-                    <tr key={teacher.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30">
+                  {registerRows.map(({ date: rowDate, teacher, entry, legacy, derivedStatus, derivedMethod }) => (
+                    <tr
+                      key={`${rowDate}_${teacher.id}`}
+                      className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30"
+                    >
+                      {isMultiDayPeriod && (
+                        <td className="py-3 pr-3 font-mono tabular-nums text-xs text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                          {rowDate}
+                        </td>
+                      )}
                       <td className="py-3 pr-3">
                         <p className="font-semibold text-slate-900 dark:text-slate-100">
                           {teacher.fullName}
@@ -1064,7 +1115,7 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
                         {canManageTimebook && (
                           <button
                             type="button"
-                            onClick={() => openCorrectionModal(teacher, entry)}
+                            onClick={() => openCorrectionModal(teacher, entry, undefined, rowDate)}
                             className="inline-flex items-center gap-1 min-h-[32px] px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
                           >
                             {entry ? 'Correct' : 'Record'}
@@ -1075,8 +1126,11 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
                   ))}
                   {registerRows.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="py-8 text-center text-sm text-slate-500 dark:text-slate-400">
-                        No staff members match the active filters.
+                      <td
+                        colSpan={isMultiDayPeriod ? 8 : 7}
+                        className="py-8 text-center text-sm text-slate-500 dark:text-slate-400"
+                      >
+                        No staff members match the active filters for {periodRange.label}.
                       </td>
                     </tr>
                   )}
@@ -1631,7 +1685,7 @@ export const StaffTimebookAdminDashboard: React.FC<StaffTimebookAdminDashboardPr
                 {editModal.teacher.fullName} ({editModal.teacher.staffCode})
               </p>
               <p className="text-slate-500 dark:text-slate-400 font-mono">
-                Date: {editModal.correctionRequest?.date || selectedDate} · Original:{' '}
+                Date: {editModal.correctionRequest?.date || editModal.targetDate || selectedDate} · Original:{' '}
                 {editModal.existingEntry?.status || 'Not Signed In'}
               </p>
             </div>

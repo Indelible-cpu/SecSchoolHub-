@@ -1,4 +1,7 @@
 import type {
+  StaffAttendanceRecord,
+  StaffTimebookEntry,
+  Teacher,
   TeacherRole,
   TimebookHoliday,
   TimebookSettings,
@@ -459,4 +462,289 @@ export function resolveStaffTimebookUiState(params: {
     headline: 'Location Verified — Ready for Time In',
     detail: `Within school premises (${Math.round(params.distanceMeters)}m from campus, GPS accuracy ±${Math.round(params.accuracyMeters)}m).`,
   };
+}
+
+export type TimebookPeriodPreset = 'day' | '7d' | 'month' | 'custom';
+export type TimebookStaffCategoryFilter = 'all' | 'teachers' | 'leadership' | 'support';
+export type TimebookMethodFilter = 'ALL' | 'GPS Auto' | 'Admin Recorded' | 'Not Signed In';
+
+export function shiftIsoDate(isoDate: string, deltaDays: number): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec((isoDate || '').trim());
+  if (!match) return isoDate;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const dt = new Date(Date.UTC(year, month - 1, day + deltaDays));
+  const y = dt.getUTCFullYear();
+  const m = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(dt.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+export function getIsoWeekday(isoDate: string): number {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec((isoDate || '').trim());
+  if (!match) return 1;
+  const dt = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  return dt.getUTCDay();
+}
+
+export function enumerateIsoDateRange(
+  startDate: string,
+  endDate: string,
+  maxDays = 366
+): string[] {
+  const isoRe = /^\d{4}-\d{2}-\d{2}$/;
+  if (!isoRe.test(startDate) || !isoRe.test(endDate)) return [];
+  const start = startDate <= endDate ? startDate : endDate;
+  const end = startDate <= endDate ? endDate : startDate;
+  const dates: string[] = [];
+  let cursor = start;
+  while (cursor <= end && dates.length < maxDays) {
+    dates.push(cursor);
+    cursor = shiftIsoDate(cursor, 1);
+  }
+  return dates;
+}
+
+export interface TimebookPeriodRange {
+  preset: TimebookPeriodPreset;
+  startDate: string;
+  endDate: string;
+  dates: string[];
+  label: string;
+}
+
+export function resolveTimebookPeriodRange(params: {
+  preset: TimebookPeriodPreset;
+  anchorDate: string;
+  customStart?: string;
+  customEnd?: string;
+}): TimebookPeriodRange {
+  const isoRe = /^\d{4}-\d{2}-\d{2}$/;
+  const anchor = isoRe.test(params.anchorDate) ? params.anchorDate : new Date().toISOString().slice(0, 10);
+
+  if (params.preset === 'day') {
+    return {
+      preset: 'day',
+      startDate: anchor,
+      endDate: anchor,
+      dates: [anchor],
+      label: anchor,
+    };
+  }
+
+  let rawStart = anchor;
+  let rawEnd = anchor;
+
+  if (params.preset === '7d') {
+    rawStart = shiftIsoDate(anchor, -6);
+    rawEnd = anchor;
+  } else if (params.preset === 'month') {
+    rawStart = `${anchor.slice(0, 7)}-01`;
+    rawEnd = anchor;
+  } else {
+    const s = isoRe.test(params.customStart || '') ? (params.customStart as string) : anchor;
+    const e = isoRe.test(params.customEnd || '') ? (params.customEnd as string) : anchor;
+    rawStart = s <= e ? s : e;
+    rawEnd = s <= e ? e : s;
+  }
+
+  const dates = enumerateIsoDateRange(rawStart, rawEnd);
+  const startDate = dates[0] || rawStart;
+  const endDate = dates[dates.length - 1] || rawEnd;
+
+  return {
+    preset: params.preset,
+    startDate,
+    endDate,
+    dates,
+    label: startDate === endDate ? startDate : `${startDate} to ${endDate}`,
+  };
+}
+
+export interface FilteredPeriodTimebookRow {
+  date: string;
+  teacher: Teacher;
+  entry: StaffTimebookEntry | null;
+  legacy: StaffAttendanceRecord | null;
+  derivedStatus: string;
+  derivedMethod: 'GPS Auto' | 'Admin Recorded' | 'Not Signed In';
+}
+
+export function matchesStaffCategoryFilter(
+  roleTitle: TeacherRole | string,
+  categoryFilter: TimebookStaffCategoryFilter
+): boolean {
+  if (categoryFilter === 'leadership') {
+    return ['Head Teacher', 'Deputy Head', 'Head of Department'].includes(roleTitle);
+  }
+  if (categoryFilter === 'teachers') {
+    return ['Form Teacher', 'Form Master', 'Subject Teacher', 'Head of Department'].includes(
+      roleTitle
+    );
+  }
+  if (categoryFilter === 'support') {
+    return ['School Librarian', 'School Bursar'].includes(roleTitle);
+  }
+  return true;
+}
+
+export function buildFilteredPeriodTimebookRows(params: {
+  dates: string[];
+  teachers: Teacher[];
+  entries: StaffTimebookEntry[];
+  staffAttendance?: StaffAttendanceRecord[];
+  timebookSettings?: Pick<TimebookSettings, 'workdays' | 'holidays'> | null;
+  categoryFilter: TimebookStaffCategoryFilter;
+  roleFilter: string;
+  methodFilter: TimebookMethodFilter;
+  searchQuery: string;
+}): FilteredPeriodTimebookRow[] {
+  const {
+    dates,
+    teachers,
+    entries,
+    staffAttendance = [],
+    timebookSettings,
+    categoryFilter,
+    roleFilter,
+    methodFilter,
+    searchQuery,
+  } = params;
+
+  const q = searchQuery.trim().toLowerCase();
+  const filteredTeachers = teachers
+    .filter((teacher) => {
+      if (!matchesStaffCategoryFilter(teacher.roleTitle, categoryFilter)) return false;
+      if (roleFilter !== 'ALL' && teacher.roleTitle !== roleFilter) return false;
+      if (q) {
+        const matches =
+          teacher.fullName.toLowerCase().includes(q) ||
+          teacher.staffCode.toLowerCase().includes(q) ||
+          teacher.roleTitle.toLowerCase().includes(q);
+        if (!matches) return false;
+      }
+      return true;
+    })
+    .sort((a, b) => a.fullName.localeCompare(b.fullName));
+
+  const dateSet = new Set(dates);
+  const entryByDateTeacher = new Map<string, StaffTimebookEntry>();
+  for (const e of entries) {
+    if (dateSet.has(e.date)) {
+      entryByDateTeacher.set(`${e.date}__${e.teacherId}`, e);
+    }
+  }
+
+  const legacyByDateTeacher = new Map<string, StaffAttendanceRecord>();
+  for (const r of staffAttendance) {
+    if (dateSet.has(r.date)) {
+      legacyByDateTeacher.set(`${r.date}__${r.teacherId}`, r);
+    }
+  }
+
+  const isMultiDay = dates.length > 1;
+  const orderedDates = [...dates].sort((a, b) => b.localeCompare(a));
+  const policyDays: Pick<TimebookSettings, 'workdays' | 'holidays'> = {
+    workdays: timebookSettings?.workdays || DEFAULT_TIMEBOOK_WORKDAYS,
+    holidays: timebookSettings?.holidays || [],
+  };
+
+  const rows: FilteredPeriodTimebookRow[] = [];
+
+  for (const d of orderedDates) {
+    const nonWorking = isMultiDay
+      ? isHolidayOrWeekend(d, getIsoWeekday(d), policyDays).isNonWorkingDay
+      : false;
+
+    for (const teacher of filteredTeachers) {
+      const key = `${d}__${teacher.id}`;
+      const entry = entryByDateTeacher.get(key) || null;
+      const legacy = entry ? null : legacyByDateTeacher.get(key) || null;
+
+      if (nonWorking && !entry && !legacy) {
+        continue;
+      }
+
+      if (methodFilter === 'GPS Auto' && entry?.recordingMethod !== 'GPS Auto') continue;
+      if (
+        methodFilter === 'Admin Recorded' &&
+        entry?.recordingMethod !== 'Admin Recorded' &&
+        !legacy
+      ) {
+        continue;
+      }
+      if (methodFilter === 'Not Signed In' && (entry || legacy || teacher.status === 'On Leave')) {
+        continue;
+      }
+
+      const derivedStatus: string =
+        entry?.status ||
+        legacy?.status ||
+        (teacher.status === 'On Leave' ? 'On Leave' : 'Not Signed In');
+      const derivedMethod: 'GPS Auto' | 'Admin Recorded' | 'Not Signed In' = entry
+        ? entry.recordingMethod
+        : legacy
+        ? 'Admin Recorded'
+        : 'Not Signed In';
+
+      rows.push({
+        date: d,
+        teacher,
+        entry,
+        legacy,
+        derivedStatus,
+        derivedMethod,
+      });
+    }
+  }
+
+  return rows;
+}
+
+export function escapeTimebookCsvCell(val: unknown): string {
+  const s = String(val ?? '');
+  if (/[",\n\r]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+export function formatTimebookAttendanceCsv(rows: FilteredPeriodTimebookRow[]): string {
+  const headers = [
+    'Date',
+    'Staff Code',
+    'Staff Name',
+    'Role',
+    'Status',
+    'Recording Method',
+    'Time In',
+    'Deadline',
+    'GPS Distance (m)',
+    'GPS Accuracy (m)',
+    'Reason / Notes',
+  ];
+  const lines = [headers.map(escapeTimebookCsvCell).join(',')];
+
+  for (const row of rows) {
+    lines.push(
+      [
+        row.date,
+        row.teacher.staffCode,
+        row.teacher.fullName,
+        row.teacher.roleTitle,
+        row.derivedStatus,
+        row.derivedMethod,
+        row.entry?.timeInDisplay || '—',
+        row.entry?.deadlineHHMM || '—',
+        row.entry?.recordingMethod === 'GPS Auto' ? Math.round(row.entry.distanceMeters) : '',
+        row.entry?.recordingMethod === 'GPS Auto' ? Math.round(row.entry.accuracyMeters) : '',
+        row.entry?.correctionReason || row.legacy?.note || row.entry?.gpsVerificationStatus || '',
+      ]
+        .map(escapeTimebookCsvCell)
+        .join(',')
+    );
+  }
+
+  return lines.join('\n');
 }

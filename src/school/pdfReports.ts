@@ -1,6 +1,11 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { formatMWK, normalizeAssessmentComponents, TermReportCardSummary } from './malawi';
+import {
+  formatMWK,
+  normalizeAssessmentComponents,
+  rankAssessmentsByPerformance,
+  TermReportCardSummary,
+} from './malawi';
 import {
   buildStudentReportCardPayload,
   BuiltStudentReportCard,
@@ -221,11 +226,11 @@ export function downloadMarksPdfReport(params: {
       8: { halign: 'center', cellWidth: 11, fontStyle: 'bold' },
       9: { cellWidth: 21 },
     },
-    head: [['#', 'Student Name', 'Class', 'Subject', 'CA 1 (20%)', 'CA 2 (20%)', 'Summative (60%)', 'Total', 'Grade', 'Remark']],
-    body: assessments.map((a, idx) => {
+    head: [['Rank', 'Student Name', 'Class', 'Subject', 'CA 1 (20%)', 'CA 2 (20%)', 'Summative (60%)', 'Total', 'Grade', 'Remark']],
+    body: rankAssessmentsByPerformance(assessments).map(({ assessment: a, rank, isTied }) => {
       const b = normalizeAssessmentComponents(a);
       return [
-        String(idx + 1),
+        isTied ? `#${rank}=` : `#${rank}`,
         a.studentName,
         `Form ${a.formLevel}${a.stream}`,
         a.subject,

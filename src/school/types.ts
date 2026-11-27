@@ -73,6 +73,7 @@ export interface Student {
   emergencyNotes?: string;
   studentEmail?: string;
   registrationCode?: string;
+  photoDataUrl?: string;
   status: StudentStatus;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
@@ -127,6 +128,7 @@ export interface StudentPortalResult {
   grade: string;
   gradePoint: number;
   remark: string;
+  teacherComment?: string;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
@@ -243,6 +245,7 @@ export interface Assessment {
   grade: string;
   gradePoint: number;
   remark: string;
+  teacherComment?: string;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
@@ -811,5 +814,70 @@ export interface TimebookNotification {
   createdAt?: Timestamp;
 }
 
+export type BackupCadence = 'daily' | 'weekly';
+export type BackupStorageTarget = 'firebase-storage' | 'cloud-bucket' | 'server-vault';
+export type BackupTriggerType = 'manual' | 'automated';
+export type BackupRunStatus = 'Completed' | 'Failed';
 
+export interface BackupSettings {
+  id: string;
+  ownerId: string;
+  schoolId: string;
+  autoBackupEnabled: boolean;
+  cadence: BackupCadence;
+  preferredHourUTC: number;
+  retentionCount: number;
+  storageTarget: 'firebase-storage' | 'cloud-bucket';
+  lastBackupAtIso: string;
+  lastBackupId: string;
+  lastBackupStatus: 'Never' | BackupRunStatus;
+  nextBackupDueIso: string;
+  updatedByUid: string;
+  updatedByName: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
 
+export interface BackupSnapshotLog {
+  id: string;
+  ownerId: string;
+  schoolId: string;
+  snapshotId: string;
+  triggerType: BackupTriggerType;
+  storageTarget: BackupStorageTarget;
+  bucketName: string;
+  objectPath: string;
+  status: BackupRunStatus;
+  totalDocuments: number;
+  collectionCount: number;
+  sizeBytes: number;
+  checksumSha256: string;
+  downloadUrl: string;
+  triggeredByUid: string;
+  triggeredByName: string;
+  completedAtIso: string;
+  errorReason: string;
+  createdAt?: Timestamp;
+}
+
+export interface StudentReportRemark {
+  id: string;
+  ownerId: string;
+  schoolId: string;
+  registrationCode?: string;
+  studentId: string;
+  studentName: string;
+  formLevel: FormLevel;
+  stream: string;
+  term: TermName;
+  academicYear: string;
+  formTeacherRemark: string;
+  headTeacherRemark: string;
+  nextTermOpens: string;
+  formTeacherName?: string;
+  headTeacherName?: string;
+  updatedByName?: string;
+  updatedByRole?: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}

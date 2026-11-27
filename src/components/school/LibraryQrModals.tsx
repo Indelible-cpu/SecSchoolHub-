@@ -30,6 +30,8 @@ import {
   getLibraryDaysOverdue,
   isLibraryLoanOverdue,
   LIBRARY_RETURN_CONDITIONS,
+  matchesStudentSearchQuery,
+  sortStudentsForRegister,
 } from '../../school/malawi';
 import {
   markLibraryLoanReturned,
@@ -352,26 +354,16 @@ export const LibraryQrScannerModal: React.FC<LibraryQrScannerModalProps> = ({
 
   const activeStudents = useMemo(
     () =>
-      students
-        .filter((s) => s.status === 'Active')
-        .sort(
-          (a, b) =>
-            a.formLevel - b.formLevel ||
-            a.stream.localeCompare(b.stream) ||
-            a.fullName.localeCompare(b.fullName)
-        ),
+      sortStudentsForRegister(
+        students.filter((s) => s.status === 'Active'),
+        { groupByForm: true }
+      ),
     [students]
   );
 
   const filteredCheckoutStudents = useMemo(() => {
-    const q = studentFilter.trim().toLowerCase();
-    if (!q) return activeStudents;
-    return activeStudents.filter(
-      (s) =>
-        s.fullName.toLowerCase().includes(q) ||
-        (s.admissionNo || '').toLowerCase().includes(q) ||
-        (s.registrationCode || '').toLowerCase().includes(q) ||
-        `form ${s.formLevel}${s.stream}`.toLowerCase().includes(q)
+    return activeStudents.filter((s) =>
+      matchesStudentSearchQuery(s, studentFilter, { includeFormClass: true })
     );
   }, [activeStudents, studentFilter]);
 
@@ -1201,33 +1193,28 @@ export const LibraryQrScannerModal: React.FC<LibraryQrScannerModalProps> = ({
                   </p>
                 ) : (
                   <div className="space-y-2.5">
-                    {activeStudents.length > 8 && (
-                      <div className="relative">
-                        <Search
-                          className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-                          aria-hidden="true"
-                        />
-                        <input
-                          type="text"
-                          value={studentFilter}
-                          onChange={(e) => {
-                            setStudentFilter(e.target.value);
-                            const q = e.target.value.trim().toLowerCase();
-                            if (q) {
-                              const first = activeStudents.find(
-                                (s) =>
-                                  s.fullName.toLowerCase().includes(q) ||
-                                  (s.admissionNo || '').toLowerCase().includes(q) ||
-                                  (s.registrationCode || '').toLowerCase().includes(q)
-                              );
-                              if (first) setCheckoutStudentId(first.id);
-                            }
-                          }}
-                          placeholder="Filter borrower by name, admission #, or reg code..."
-                          className="w-full min-h-[36px] pl-8 pr-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100"
-                        />
-                      </div>
-                    )}
+                    <div className="relative">
+                      <Search
+                        className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                        aria-hidden="true"
+                      />
+                      <input
+                        type="text"
+                        value={studentFilter}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          setStudentFilter(raw);
+                          if (raw.trim()) {
+                            const first = activeStudents.find((s) =>
+                              matchesStudentSearchQuery(s, raw, { includeFormClass: true })
+                            );
+                            if (first) setCheckoutStudentId(first.id);
+                          }
+                        }}
+                        placeholder="Search borrower by surname, name, reg or adm code..."
+                        className="w-full min-h-[36px] pl-8 pr-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100"
+                      />
+                    </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
                       <div className="sm:col-span-6">

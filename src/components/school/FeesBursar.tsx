@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Banknote,
   BellRing,
@@ -33,12 +33,14 @@ import {
   TermName,
 } from '../../school/types';
 import {
+  compareStudentsRegisterOrder,
   downloadCSV,
   FORM_LEVELS,
   formatMalawiSmsPhone,
   formatMWK,
   formatSmsSenderLabel,
   isGovernmentSchool,
+  sortStudentsForRegister,
   TERMS,
 } from '../../school/malawi';
 import { formatFileSizeLabel } from '../../school/digitalMaterialParser';
@@ -53,11 +55,12 @@ import {
 } from '../../school/firestoreService';
 import {
   buildDefaultSmsConfig,
+  buildOutstandingSmsRecipients,
+  BulkSmsDispatchSummary,
   dispatchAndLogParentSms,
   fetchSmsGatewayStatus,
   saveSmsConfig,
   SmsGatewayStatusResponse,
-  wasLowBalanceAlertSentRecently,
 } from '../../school/smsService';
 import {
   buildModalDraftKey,
@@ -65,6 +68,7 @@ import {
   loadModalDraft,
   saveModalDraft,
 } from '../../school/modalDrafts';
+import { BulkSmsModal } from './BulkSmsModal';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { DraftRestoredNotice, ModalBackdrop } from './ModalBackdrop';
 import { PaymentProofPreviewModal } from './PaymentProofPreviewModal';
@@ -154,12 +158,10 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
   const [policySaving, setPolicySaving] = useState(false);
   const [policyError, setPolicyError] = useState('');
 
-  // Batch Low Balance Alert modal
-  const [batchSmsOpen, setBatchSmsOpen] = useState(false);
-  const [skipRecentAlerts, setSkipRecentAlerts] = useState(true);
-  const [batchSending, setBatchSending] = useState(false);
-  const [batchProgress, setBatchProgress] = useState('');
-  const [batchError, setBatchError] = useState('');
+  // Bulk SMS Payment Reminder modal & multi-student selection
+  const [bulkSmsOpen, setBulkSmsOpen] = useState(false);
+  const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<Set<string>>(() => new Set());
+  const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null);
 
   // Safe Delete modal
   const [confirmInvoice, setConfirmInvoice] = useState<FeeInvoice | null>(null);
@@ -285,7 +287,7 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
   }, [students]);
 
   const activeStudents = useMemo(
-    () => students.filter((s) => s.status === 'Active'),
+    () => sortStudentsForRegister(students.filter((s) => s.status === 'Active'), { groupByForm: true }),
     [students]
   );
 
@@ -296,8 +298,16 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
         if (statusFilter !== 'all' && inv.status !== statusFilter) return false;
         return true;
       })
-      .sort((a, b) => a.formLevel - b.formLevel || a.studentName.localeCompare(b.studentName));
-  }, [invoices, statusFilter, termFilter]);
+      .sort((a, b) => {
+        const stuA = studentById.get(a.studentId);
+        const stuB = studentById.get(b.studentId);
+        return compareStudentsRegisterOrder(
+          stuA || { fullName: a.studentName, formLevel: a.formLevel, stream: a.stream },
+          stuB || { fullName: b.studentName, formLevel: b.formLevel, stream: b.stream },
+          { groupByForm: true }
+        );
+      });
+  }, [invoices, statusFilter, studentById, termFilter]);
 
   const filteredPayments = useMemo(() => {
     return payments.filter((p) => p.term === termFilter);
@@ -351,37 +361,76 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
     };
   }, [invoices, termFilter]);
 
-  // Eligible unpaid/partial invoices for Low Balance Alert batch run
-  const lowBalanceCandidates = useMemo(() => {
-    return invoices
-      .filter((inv) => inv.term === termFilter)
-      .map((inv) => {
-        const balance = Math.max(0, inv.totalBilled - inv.totalPaid);
-        const student = studentById.get(inv.studentId);
-        const formattedPhone =
-          formatMalawiSmsPhone(student?.guardianPhone) ||
-          formatMalawiSmsPhone(student?.guardianSecondaryPhone);
-        const recentlySent = wasLowBalanceAlertSentRecently(smsLogs, inv.id, balance);
-        return {
-          invoice: inv,
-          student,
-          balance,
-          formattedPhone,
-          recentlySent,
-        };
-      })
-      .filter(
-        (item) =>
-          item.balance > 0 && item.balance >= effectiveSmsConfig.lowBalanceThresholdMWK
-      )
-      .sort((a, b) => b.balance - a.balance);
-  }, [effectiveSmsConfig.lowBalanceThresholdMWK, invoices, smsLogs, studentById, termFilter]);
+  // All students with outstanding balances in the current term
+  const outstandingRecipients = useMemo(
+    () =>
+      buildOutstandingSmsRecipients({
+        invoices,
+        studentById,
+        smsLogs,
+        termFilter,
+      }),
+    [invoices, smsLogs, studentById, termFilter]
+  );
 
-  const batchSendTargets = useMemo(() => {
-    return lowBalanceCandidates.filter(
-      (item) => !!item.formattedPhone && (!skipRecentAlerts || !item.recentlySent)
-    );
-  }, [lowBalanceCandidates, skipRecentAlerts]);
+  const outstandingRecipientById = useMemo(() => {
+    const map = new Map<string, (typeof outstandingRecipients)[number]>();
+    for (const item of outstandingRecipients) {
+      map.set(item.invoice.id, item);
+    }
+    return map;
+  }, [outstandingRecipients]);
+
+  const validSelectedInvoiceIds = useMemo(() => {
+    const next = new Set<string>();
+    for (const id of selectedInvoiceIds) {
+      if (outstandingRecipientById.has(id)) {
+        next.add(id);
+      }
+    }
+    return next;
+  }, [outstandingRecipientById, selectedInvoiceIds]);
+
+  const visibleOutstandingInvoices = useMemo(
+    () => filteredInvoices.filter((inv) => Math.max(0, inv.totalBilled - inv.totalPaid) > 0),
+    [filteredInvoices]
+  );
+
+  const visibleSelectedCount = useMemo(
+    () => visibleOutstandingInvoices.filter((inv) => validSelectedInvoiceIds.has(inv.id)).length,
+    [validSelectedInvoiceIds, visibleOutstandingInvoices]
+  );
+
+  const allVisibleOutstandingSelected =
+    visibleOutstandingInvoices.length > 0 &&
+    visibleSelectedCount === visibleOutstandingInvoices.length;
+  const someVisibleOutstandingSelected =
+    visibleSelectedCount > 0 && visibleSelectedCount < visibleOutstandingInvoices.length;
+
+  useEffect(() => {
+    if (selectAllCheckboxRef.current) {
+      selectAllCheckboxRef.current.indeterminate = someVisibleOutstandingSelected;
+    }
+  }, [someVisibleOutstandingSelected]);
+
+  const selectedSmsSummary = useMemo(() => {
+    let totalBalanceMWK = 0;
+    let reachableCount = 0;
+    let missingPhoneCount = 0;
+    for (const id of validSelectedInvoiceIds) {
+      const rec = outstandingRecipientById.get(id);
+      if (!rec) continue;
+      totalBalanceMWK += rec.balance;
+      if (rec.formattedPhone) reachableCount += 1;
+      else missingPhoneCount += 1;
+    }
+    return {
+      count: validSelectedInvoiceIds.size,
+      totalBalanceMWK,
+      reachableCount,
+      missingPhoneCount,
+    };
+  }, [outstandingRecipientById, validSelectedInvoiceIds]);
 
   const openBillModal = (scope: 'single' | 'form') => {
     if (!canWriteFees) return;
@@ -877,51 +926,70 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
     }
   };
 
-  const handleBatchSendLowBalanceAlerts = async () => {
-    if (!canWriteFees || batchSendTargets.length === 0) return;
-    setBatchSending(true);
-    setBatchError('');
-    let sentCount = 0;
-    let failCount = 0;
+  const toggleInvoiceSelection = (invoiceId: string) => {
+    setSelectedInvoiceIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(invoiceId)) next.delete(invoiceId);
+      else next.add(invoiceId);
+      return next;
+    });
+  };
 
-    try {
-      for (let idx = 0; idx < batchSendTargets.length; idx += 1) {
-        const item = batchSendTargets[idx];
-        setBatchProgress(`Dispatching ${idx + 1} of ${batchSendTargets.length} (${item.invoice.studentName})...`);
-        const outcome = await dispatchAndLogParentSms({
-          schoolId: school.id,
-          ownerId,
-          senderLabel: effectiveSmsConfig.senderLabel,
-          invoiceId: item.invoice.id,
-          studentId: item.invoice.studentId,
-          studentName: item.invoice.studentName,
-          guardianName: item.student?.guardianName || 'Parent/Guardian',
-          guardianPhoneRaw: item.student?.guardianPhone || item.student?.guardianSecondaryPhone || '',
-          type: 'Low Balance Alert',
-          term: item.invoice.term,
-          amountMWK: 0,
-          balanceAfterMWK: item.balance,
-          totalBilledMWK: item.invoice.totalBilled,
-        });
-        if (outcome.status === 'Sent' || outcome.status === 'Simulated') {
-          sentCount += 1;
-        } else {
-          failCount += 1;
+  const toggleAllVisibleOutstanding = () => {
+    if (visibleOutstandingInvoices.length === 0) return;
+    setSelectedInvoiceIds((prev) => {
+      const next = new Set(prev);
+      if (allVisibleOutstandingSelected) {
+        for (const inv of visibleOutstandingInvoices) {
+          next.delete(inv.id);
+        }
+      } else {
+        for (const inv of visibleOutstandingInvoices) {
+          next.add(inv.id);
         }
       }
-      setBatchSmsOpen(false);
-      setBatchProgress('');
-      setSmsBanner({
-        tone: failCount > 0 && sentCount === 0 ? 'warn' : 'success',
-        text: `Batch Low Balance Alerts finished: ${sentCount} dispatched${failCount > 0 ? `, ${failCount} failed/skipped` : ''}.`,
-      });
-      setViewMode('sms');
-    } catch (err) {
-      setBatchError(err instanceof Error ? err.message : 'Batch SMS dispatch failed.');
-    } finally {
-      setBatchSending(false);
-      setBatchProgress('');
+      return next;
+    });
+  };
+
+  const openBulkSmsModal = (useCurrentSelectionOnly = false) => {
+    if (!canWriteFees || outstandingRecipients.length === 0) return;
+    if (!useCurrentSelectionOnly && validSelectedInvoiceIds.size === 0) {
+      const thresholdReachable = outstandingRecipients.filter(
+        (r) =>
+          r.balance >= effectiveSmsConfig.lowBalanceThresholdMWK &&
+          !!r.formattedPhone &&
+          !r.recentlySent
+      );
+      const fallbackReachable = outstandingRecipients.filter(
+        (r) => !!r.formattedPhone && !r.recentlySent
+      );
+      const initialTargets =
+        thresholdReachable.length > 0
+          ? thresholdReachable
+          : fallbackReachable.length > 0
+          ? fallbackReachable
+          : outstandingRecipients;
+      setSelectedInvoiceIds(new Set(initialTargets.map((r) => r.invoice.id)));
     }
+    setBulkSmsOpen(true);
+  };
+
+  const handleBulkSmsCompleted = (summary: BulkSmsDispatchSummary) => {
+    setBulkSmsOpen(false);
+    setSelectedInvoiceIds(new Set());
+    const dispatchedCount = summary.sentCount + summary.simulatedCount;
+    const issueCount = summary.failedCount + summary.skippedCount;
+    const parts: string[] = [];
+    if (summary.sentCount > 0) parts.push(`${summary.sentCount} sent`);
+    if (summary.simulatedCount > 0) parts.push(`${summary.simulatedCount} simulated`);
+    if (summary.skippedCount > 0) parts.push(`${summary.skippedCount} skipped`);
+    if (summary.failedCount > 0) parts.push(`${summary.failedCount} failed`);
+    setSmsBanner({
+      tone: issueCount > 0 && dispatchedCount === 0 ? 'warn' : 'success',
+      text: `Bulk Payment Reminders finished (${summary.total} queued): ${parts.join(', ') || 'completed'}.`,
+    });
+    setViewMode('sms');
   };
 
   const openPolicyModal = () => {
@@ -1184,15 +1252,16 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setBatchError('');
-                    setBatchSmsOpen(true);
-                  }}
-                  disabled={lowBalanceCandidates.length === 0}
+                  onClick={() => openBulkSmsModal(false)}
+                  disabled={outstandingRecipients.length === 0}
                   className="inline-flex items-center gap-1.5 min-h-[40px] px-3 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-950/30 text-xs font-semibold text-amber-900 dark:text-amber-200 hover:bg-amber-100/70 dark:hover:bg-amber-950/50 disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
                 >
-                  <BellRing className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>Send Balance Alerts ({lowBalanceCandidates.length})</span>
+                  <Send className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>
+                    {validSelectedInvoiceIds.size > 0
+                      ? `Bulk SMS (${validSelectedInvoiceIds.size} Selected)`
+                      : `Bulk SMS (${outstandingRecipients.length})`}
+                  </span>
                 </button>
               </>
             )}
@@ -1381,113 +1450,195 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
               No {termFilter} invoices yet. Use &ldquo;Bill Form&rdquo; or &ldquo;New Invoice&rdquo; to bill students in MWK.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 text-xs text-slate-500 dark:text-slate-400">
-                    <th className="py-3 px-4 font-medium">Student &amp; Guardian Phone</th>
-                    <th className="py-3 px-4 font-medium">Class</th>
-                    <th className="py-3 px-4 font-medium text-right">Billed</th>
-                    <th className="py-3 px-4 font-medium text-right">Paid</th>
-                    <th className="py-3 px-4 font-medium text-right">Balance</th>
-                    <th className="py-3 px-4 font-medium">Status</th>
-                    {canWriteFees && (
-                      <th className="py-3 px-4 font-medium text-right">Action</th>
+            <>
+              {canWriteFees && selectedSmsSummary.count > 0 && (
+                <div className="px-4 py-3 border-b border-emerald-200 dark:border-emerald-900/70 bg-emerald-50/70 dark:bg-emerald-950/30 flex flex-wrap items-center justify-between gap-3">
+                  <div className="text-xs text-emerald-950 dark:text-emerald-100 flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="font-semibold font-mono tabular-nums">
+                      {selectedSmsSummary.count} {selectedSmsSummary.count === 1 ? 'student' : 'students'} selected
+                    </span>
+                    <span aria-hidden="true" className="text-emerald-700/60 dark:text-emerald-400/60">·</span>
+                    <span className="font-mono tabular-nums">
+                      Total outstanding: {formatMWK(selectedSmsSummary.totalBalanceMWK)}
+                    </span>
+                    <span aria-hidden="true" className="text-emerald-700/60 dark:text-emerald-400/60">·</span>
+                    <span className="text-emerald-800 dark:text-emerald-300">
+                      {selectedSmsSummary.reachableCount} reachable via SMS
+                    </span>
+                    {selectedSmsSummary.missingPhoneCount > 0 && (
+                      <>
+                        <span aria-hidden="true" className="text-emerald-700/60 dark:text-emerald-400/60">·</span>
+                        <span className="text-amber-800 dark:text-amber-300 font-medium">
+                          {selectedSmsSummary.missingPhoneCount} missing valid phone
+                        </span>
+                      </>
                     )}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
-                  {filteredInvoices.map((inv) => {
-                    const balance = Math.max(0, inv.totalBilled - inv.totalPaid);
-                    const stu = studentById.get(inv.studentId);
-                    const formattedPhone =
-                      formatMalawiSmsPhone(stu?.guardianPhone) ||
-                      formatMalawiSmsPhone(stu?.guardianSecondaryPhone);
-                    const isSendingSms = sendingInvoiceSmsId === inv.id;
-                    return (
-                      <tr key={inv.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/30">
-                        <td className="py-3 px-4">
-                          <div className="font-medium text-slate-900 dark:text-slate-100">
-                            {inv.studentName}
-                          </div>
-                          <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums mt-0.5">
-                            {stu?.guardianName || 'Guardian'} · {formattedPhone || stu?.guardianPhone || 'No phone on profile'}
-                          </div>
-                        </td>
-                        <td className="py-3 px-4 text-xs text-slate-600 dark:text-slate-400">
-                          Form {inv.formLevel}{inv.stream}
-                        </td>
-                        <td className="py-3 px-4 text-right font-mono tabular-nums">
-                          {formatMWK(inv.totalBilled)}
-                        </td>
-                        <td className="py-3 px-4 text-right font-mono tabular-nums text-emerald-700 dark:text-emerald-400">
-                          {formatMWK(inv.totalPaid)}
-                        </td>
-                        <td className="py-3 px-4 text-right font-mono tabular-nums font-semibold">
-                          {formatMWK(balance)}
-                        </td>
-                        <td className="py-3 px-4">
-                          <span
-                            className={`text-xs font-semibold ${
-                              inv.status === 'Paid'
-                                ? 'text-emerald-700 dark:text-emerald-400'
-                                : inv.status === 'Partial'
-                                ? 'text-amber-700 dark:text-amber-400'
-                                : 'text-rose-600 dark:text-rose-400'
-                            }`}
-                          >
-                            {inv.status}
-                          </span>
-                        </td>
-                        {canWriteFees && (
-                          <td className="py-3 px-4 text-right whitespace-nowrap">
-                            <div className="inline-flex items-center gap-1.5">
-                              {balance > 0 && (
-                                <>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleSendSingleLowBalanceSms(inv)}
-                                    disabled={isSendingSms}
-                                    title={
-                                      formattedPhone
-                                        ? `Send Low Balance SMS to ${formattedPhone}`
-                                        : 'Guardian phone missing — click to log skipped check'
-                                    }
-                                    className="inline-flex items-center gap-1 min-h-[36px] px-2.5 rounded-lg border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 text-xs font-medium disabled:opacity-50 cursor-pointer"
-                                  >
-                                    <BellRing className="w-3.5 h-3.5" aria-hidden="true" />
-                                    <span>{isSendingSms ? 'Sending...' : 'Alert'}</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => openPaymentModal(inv)}
-                                    className="inline-flex items-center gap-1 min-h-[36px] px-3 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer"
-                                  >
-                                    <Banknote className="w-3.5 h-3.5" aria-hidden="true" />
-                                    <span>Pay</span>
-                                  </button>
-                                </>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedInvoiceIds(new Set())}
+                      className="min-h-[36px] px-3 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openBulkSmsModal(true)}
+                      className="inline-flex items-center gap-1.5 min-h-[36px] px-3.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <Send className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>Send Payment Reminders ({selectedSmsSummary.count})</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 text-xs text-slate-500 dark:text-slate-400">
+                      {canWriteFees && (
+                        <th className="py-3 pl-4 pr-2 w-10">
+                          <input
+                            ref={selectAllCheckboxRef}
+                            type="checkbox"
+                            aria-label="Select all students with outstanding balances"
+                            checked={allVisibleOutstandingSelected}
+                            disabled={visibleOutstandingInvoices.length === 0}
+                            onChange={toggleAllVisibleOutstanding}
+                            className="rounded border-slate-300 dark:border-slate-600 disabled:opacity-40 cursor-pointer"
+                          />
+                        </th>
+                      )}
+                      <th className="py-3 px-4 font-medium">Student &amp; Guardian Phone</th>
+                      <th className="py-3 px-4 font-medium">Class</th>
+                      <th className="py-3 px-4 font-medium text-right">Billed</th>
+                      <th className="py-3 px-4 font-medium text-right">Paid</th>
+                      <th className="py-3 px-4 font-medium text-right">Balance</th>
+                      <th className="py-3 px-4 font-medium">Status</th>
+                      {canWriteFees && (
+                        <th className="py-3 px-4 font-medium text-right">Action</th>
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                    {filteredInvoices.map((inv) => {
+                      const balance = Math.max(0, inv.totalBilled - inv.totalPaid);
+                      const stu = studentById.get(inv.studentId);
+                      const formattedPhone =
+                        formatMalawiSmsPhone(stu?.guardianPhone) ||
+                        formatMalawiSmsPhone(stu?.guardianSecondaryPhone);
+                      const isSendingSms = sendingInvoiceSmsId === inv.id;
+                      const isSelected = validSelectedInvoiceIds.has(inv.id);
+                      return (
+                        <tr
+                          key={inv.id}
+                          className={
+                            isSelected
+                              ? 'bg-emerald-50/50 dark:bg-emerald-950/20 hover:bg-emerald-50/80 dark:hover:bg-emerald-950/30'
+                              : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/30'
+                          }
+                        >
+                          {canWriteFees && (
+                            <td className="py-3 pl-4 pr-2">
+                              {balance > 0 ? (
+                                <input
+                                  type="checkbox"
+                                  aria-label={`Select ${inv.studentName} for bulk payment reminder`}
+                                  checked={isSelected}
+                                  onChange={() => toggleInvoiceSelection(inv.id)}
+                                  className="rounded border-slate-300 dark:border-slate-600 cursor-pointer"
+                                />
+                              ) : (
+                                <span className="text-xs text-slate-300 dark:text-slate-700" aria-hidden="true">
+                                  —
+                                </span>
                               )}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setDeleteInvoiceError('');
-                                  setConfirmInvoice(inv);
-                                }}
-                                aria-label={`Delete invoice for ${inv.studentName}`}
-                                className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                            </td>
+                          )}
+                          <td className="py-3 px-4">
+                            <div className="font-medium text-slate-900 dark:text-slate-100">
+                              {inv.studentName}
+                            </div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums mt-0.5">
+                              {stu?.guardianName || 'Guardian'} · {formattedPhone || stu?.guardianPhone || 'No phone on profile'}
                             </div>
                           </td>
-                        )}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                          <td className="py-3 px-4 text-xs text-slate-600 dark:text-slate-400">
+                            Form {inv.formLevel}{inv.stream}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono tabular-nums">
+                            {formatMWK(inv.totalBilled)}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono tabular-nums text-emerald-700 dark:text-emerald-400">
+                            {formatMWK(inv.totalPaid)}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono tabular-nums font-semibold">
+                            {formatMWK(balance)}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span
+                              className={`text-xs font-semibold ${
+                                inv.status === 'Paid'
+                                  ? 'text-emerald-700 dark:text-emerald-400'
+                                  : inv.status === 'Partial'
+                                  ? 'text-amber-700 dark:text-amber-400'
+                                  : 'text-rose-600 dark:text-rose-400'
+                              }`}
+                            >
+                              {inv.status}
+                            </span>
+                          </td>
+                          {canWriteFees && (
+                            <td className="py-3 px-4 text-right whitespace-nowrap">
+                              <div className="inline-flex items-center gap-1.5">
+                                {balance > 0 && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSendSingleLowBalanceSms(inv)}
+                                      disabled={isSendingSms}
+                                      title={
+                                        formattedPhone
+                                          ? `Send Low Balance SMS to ${formattedPhone}`
+                                          : 'Guardian phone missing — click to log skipped check'
+                                      }
+                                      className="inline-flex items-center gap-1 min-h-[36px] px-2.5 rounded-lg border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 text-xs font-medium disabled:opacity-50 cursor-pointer"
+                                    >
+                                      <BellRing className="w-3.5 h-3.5" aria-hidden="true" />
+                                      <span>{isSendingSms ? 'Sending...' : 'Alert'}</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => openPaymentModal(inv)}
+                                      className="inline-flex items-center gap-1 min-h-[36px] px-3 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer"
+                                    >
+                                      <Banknote className="w-3.5 h-3.5" aria-hidden="true" />
+                                      <span>Pay</span>
+                                    </button>
+                                  </>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDeleteInvoiceError('');
+                                    setConfirmInvoice(inv);
+                                  }}
+                                  aria-label={`Delete invoice for ${inv.studentName}`}
+                                  className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )
         ) : viewMode === 'receipts' ? (
           filteredPayments.length === 0 ? (
@@ -1676,7 +1827,7 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
               No parent SMS notifications logged for {termFilter} yet.
             </div>
             <div className="text-xs">
-              Recording a fee payment automatically dispatches a Payment Confirmation SMS (and a Low Balance Alert if a balance remains). You can also use &ldquo;Send Balance Alerts&rdquo; above.
+              Recording a fee payment automatically dispatches a Payment Confirmation SMS (and a Low Balance Alert if a balance remains). You can also select students on the Invoices tab or click &ldquo;Bulk SMS&rdquo; above.
             </div>
           </div>
         ) : (
@@ -2026,115 +2177,21 @@ export const FeesBursar: React.FC<FeesBursarProps> = ({
         </ModalBackdrop>
       )}
 
-      {/* Batch Low Balance Alerts Confirmation Modal */}
-      {batchSmsOpen && (
-        <ModalBackdrop open={batchSmsOpen} disabled={batchSending} onClose={() => setBatchSmsOpen(false)}>
-          <div className="w-full max-w-xl rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-              <div>
-                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                  Send Low Balance Alerts ({termFilter})
-                </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Notifies parents of remaining balances ≥ {formatMWK(effectiveSmsConfig.lowBalanceThresholdMWK)} via {gatewayStatus.providerLabel}
-                </p>
-              </div>
-              <button
-                type="button"
-                disabled={batchSending}
-                onClick={() => setBatchSmsOpen(false)}
-                className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="mt-4 space-y-4">
-              {batchError && (
-                <div className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200">
-                  {batchError}
-                </div>
-              )}
-
-              <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={skipRecentAlerts}
-                  onChange={(e) => setSkipRecentAlerts(e.target.checked)}
-                  className="rounded border-slate-300"
-                />
-                <span>Skip guardians already alerted for the same balance in the last 24 hours</span>
-              </label>
-
-              <div className="max-h-64 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-xl divide-y divide-slate-100 dark:divide-slate-800">
-                {lowBalanceCandidates.map((item) => {
-                  const willSend = !!item.formattedPhone && (!skipRecentAlerts || !item.recentlySent);
-                  return (
-                    <div key={item.invoice.id} className="px-3.5 py-2.5 flex items-center justify-between gap-3 text-xs">
-                      <div className="min-w-0">
-                        <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
-                          {item.invoice.studentName} · Form {item.invoice.formLevel}{item.invoice.stream}
-                        </div>
-                        <div className="text-slate-500 dark:text-slate-400 font-mono truncate">
-                          {item.student?.guardianName || 'Guardian'} · {item.formattedPhone || 'Invalid / Missing Phone'}
-                        </div>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <div className="font-mono tabular-nums font-semibold text-amber-700 dark:text-amber-400">
-                          {formatMWK(item.balance)}
-                        </div>
-                        <div
-                          className={`text-[11px] font-medium ${
-                            willSend
-                              ? 'text-emerald-700 dark:text-emerald-400'
-                              : 'text-slate-400'
-                          }`}
-                        >
-                          {!item.formattedPhone
-                            ? 'No Phone'
-                            : item.recentlySent && skipRecentAlerts
-                            ? 'Alerted <24h'
-                            : 'Ready'}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {batchProgress && (
-                <div className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
-                  {batchProgress}
-                </div>
-              )}
-
-              <div className="pt-2 flex justify-end gap-2">
-                <button
-                  type="button"
-                  disabled={batchSending}
-                  onClick={() => setBatchSmsOpen(false)}
-                  className="min-h-[42px] px-4 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={batchSending || batchSendTargets.length === 0}
-                  onClick={handleBatchSendLowBalanceAlerts}
-                  className="inline-flex items-center gap-1.5 min-h-[42px] px-5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold disabled:opacity-50 cursor-pointer"
-                >
-                  <Send className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>
-                    {batchSending
-                      ? 'Sending Alerts...'
-                      : `Send ${batchSendTargets.length} Alert${batchSendTargets.length === 1 ? '' : 's'}`}
-                  </span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </ModalBackdrop>
-      )}
+      {/* Bulk Payment Reminder SMS Composer Modal */}
+      <BulkSmsModal
+        open={canWriteFees && bulkSmsOpen}
+        school={school}
+        ownerId={ownerId}
+        termFilter={termFilter}
+        senderLabel={effectiveSmsConfig.senderLabel}
+        lowBalanceThresholdMWK={effectiveSmsConfig.lowBalanceThresholdMWK}
+        gatewayStatus={gatewayStatus}
+        recipients={outstandingRecipients}
+        selectedInvoiceIds={validSelectedInvoiceIds}
+        onChangeSelectedIds={setSelectedInvoiceIds}
+        onClose={() => setBulkSmsOpen(false)}
+        onCompleted={handleBulkSmsCompleted}
+      />
 
       {/* SMS Policy Settings Modal */}
       {policyModalOpen && (

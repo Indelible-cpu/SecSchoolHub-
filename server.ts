@@ -11,6 +11,13 @@ import {
   normalizeIsbn,
 } from './server/libraryScanner.ts';
 import { TimebookEngine } from './server/timebookEngine.ts';
+import {
+  deleteSchoolSnapshotFromServerBucket,
+  getBackupBucketStatus,
+  isCallerAuthorizedOwner,
+  readSchoolSnapshotFromServerBucket,
+  uploadSchoolSnapshotToServerBucket,
+} from './server/backupBucket.ts';
 
 interface SmsGatewayStatus {
   configured: boolean;
@@ -147,10 +154,47 @@ async function dispatchSms(to: string, message: string) {
   };
 }
 
+function resolveServerPort(): number {
+  const envPort = Number.parseInt((process.env.PORT || '').trim(), 10);
+  if (Number.isInteger(envPort) && envPort > 0 && envPort <= 65535) {
+    return envPort;
+  }
+
+  for (let i = 0; i < process.argv.length; i += 1) {
+    const arg = process.argv[i];
+    if (arg === '--port' || arg === '-p') {
+      const cliPort = Number.parseInt(process.argv[i + 1] || '', 10);
+      if (Number.isInteger(cliPort) && cliPort > 0 && cliPort <= 65535) {
+        return cliPort;
+      }
+    } else if (arg.startsWith('--port=')) {
+      const cliPort = Number.parseInt(arg.slice('--port='.length), 10);
+      if (Number.isInteger(cliPort) && cliPort > 0 && cliPort <= 65535) {
+        return cliPort;
+      }
+    }
+  }
+
+  return 3000;
+}
+
+function resolveServerHost(): string {
+  const envHost = process.env.HOST?.trim();
+  if (envHost) {
+    return envHost;
+  }
+  return '0.0.0.0';
+}
+
 async function startServer() {
   const app = express();
   const httpServer = http.createServer(app);
-  const port = Number(process.env.PORT) || 3000;
+  const port = resolveServerPort();
+  const host = resolveServerHost();
+
+  app.get(['/healthz', '/api/health'], (_req, res) => {
+    res.status(200).json({ ok: true, port });
+  });
 
   // Parse up to 4MB specifically for camera book-cover scan photos
   app.post(
@@ -192,6 +236,61 @@ async function startServer() {
     }
   );
 
+  // Parse up to 25MB specifically for full Firestore snapshot JSON exports to the backup bucket
+  app.post(
+    '/api/backups/upload',
+    express.json({ limit: '25mb' }),
+    requireFirebaseAuth,
+    async (req: AuthenticatedRequest, res) => {
+      const body = (req.body || {}) as {
+        schoolId?: string;
+        ownerId?: string;
+        snapshotId?: string;
+        snapshotJson?: string;
+        checksumSha256?: string;
+      };
+
+      const schoolId = typeof body.schoolId === 'string' ? body.schoolId.trim() : '';
+      const ownerId = typeof body.ownerId === 'string' ? body.ownerId.trim() : '';
+      const snapshotId = typeof body.snapshotId === 'string' ? body.snapshotId.trim() : '';
+      const snapshotJson = typeof body.snapshotJson === 'string' ? body.snapshotJson : '';
+      const checksumSha256 =
+        typeof body.checksumSha256 === 'string' ? body.checksumSha256.trim() : undefined;
+
+      if (!schoolId || !ownerId || !snapshotId || !snapshotJson) {
+        res.status(400).json({
+          ok: false,
+          error: 'schoolId, ownerId, snapshotId, and snapshotJson are required.',
+        });
+        return;
+      }
+
+      if (!isCallerAuthorizedOwner(req.authUser!, ownerId)) {
+        res.status(403).json({
+          ok: false,
+          error: 'Only the verified School Owner can export database snapshots.',
+        });
+        return;
+      }
+
+      try {
+        const result = await uploadSchoolSnapshotToServerBucket({
+          caller: req.authUser!,
+          schoolId,
+          ownerId,
+          snapshotId,
+          snapshotJson,
+          expectedSha256: checksumSha256,
+        });
+        res.json({ ok: true, ...result });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Failed to store snapshot archive.';
+        const status = msg.includes('Only the verified School Owner') ? 403 : 400;
+        res.status(status).json({ ok: false, error: msg });
+      }
+    }
+  );
+
   app.use(express.json({ limit: '64kb' }));
 
   app.get('/api/library/isbn/:isbn', requireFirebaseAuth, async (req, res) => {
@@ -222,7 +321,60 @@ async function startServer() {
     res.json(getGatewayStatus());
   });
 
-  app.post('/api/sms/send', async (req, res) => {
+  app.get('/api/backups/status', requireFirebaseAuth, (_req, res) => {
+    res.json(getBackupBucketStatus());
+  });
+
+  app.get(
+    '/api/backups/download/:schoolId/:snapshotId',
+    requireFirebaseAuth,
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const { buffer, fileName } = await readSchoolSnapshotFromServerBucket({
+          caller: req.authUser!,
+          schoolId: String(req.params.schoolId || '').trim(),
+          snapshotId: String(req.params.snapshotId || '').trim(),
+        });
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        res.send(buffer);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unable to download snapshot archive.';
+        const status = msg.includes('Owner') || msg.includes('permission') ? 403 : 404;
+        res.status(status).json({ ok: false, error: msg });
+      }
+    }
+  );
+
+  app.delete('/api/backups/object', requireFirebaseAuth, async (req: AuthenticatedRequest, res) => {
+    const body = (req.body || {}) as {
+      schoolId?: string;
+      ownerId?: string;
+      snapshotId?: string;
+    };
+    const schoolId = typeof body.schoolId === 'string' ? body.schoolId.trim() : '';
+    const ownerId = typeof body.ownerId === 'string' ? body.ownerId.trim() : '';
+    const snapshotId = typeof body.snapshotId === 'string' ? body.snapshotId.trim() : '';
+    if (!schoolId || !ownerId || !snapshotId) {
+      res.status(400).json({ ok: false, error: 'schoolId, ownerId, and snapshotId are required.' });
+      return;
+    }
+    try {
+      await deleteSchoolSnapshotFromServerBucket({
+        caller: req.authUser!,
+        schoolId,
+        ownerId,
+        snapshotId,
+      });
+      res.json({ ok: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unable to prune backup archive.';
+      const status = msg.includes('Owner') ? 403 : 400;
+      res.status(status).json({ ok: false, error: msg });
+    }
+  });
+
+  app.post('/api/sms/send', requireFirebaseAuth, async (req, res) => {
     const body = (req.body || {}) as SmsSendBody;
     const to = typeof body.to === 'string' ? body.to.trim() : '';
     const message = typeof body.message === 'string' ? body.message.trim() : '';
@@ -487,7 +639,16 @@ async function startServer() {
   }, 20_000);
   reminderInterval.unref();
 
-  if (process.env.NODE_ENV !== 'production') {
+  const distDir = path.resolve(process.cwd(), 'dist');
+  const hasBuiltDist = fs.existsSync(path.join(distDir, 'index.html'));
+  const isDevLifecycle =
+    process.env.npm_lifecycle_event === 'dev' || process.env.NODE_ENV === 'development';
+  const useProductionStatic =
+    process.env.NODE_ENV === 'production' ||
+    process.env.npm_lifecycle_event === 'start' ||
+    (!isDevLifecycle && hasBuiltDist);
+
+  if (!useProductionStatic) {
     if (!process.env.DISABLE_HMR) {
       process.env.DISABLE_HMR = 'true';
     }
@@ -503,7 +664,6 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distDir = path.resolve(process.cwd(), 'dist');
     app.use(express.static(distDir));
     app.get('*', (req, res, next) => {
       if (req.path.startsWith('/api/')) {
@@ -519,9 +679,19 @@ async function startServer() {
     });
   }
 
-  httpServer.listen(port, '0.0.0.0', () => {
-    console.log(`SecSchoolHub server listening on http://0.0.0.0:${port}`);
+  httpServer.on('error', (err) => {
+    console.error(`SecSchoolHub server failed to bind on ${host}:${port}:`, err);
+    process.exit(1);
+  });
+
+  httpServer.listen(port, host, () => {
+    console.log(
+      `SecSchoolHub server listening on http://${host}:${port} (${useProductionStatic ? 'production' : 'development'})`
+    );
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error('SecSchoolHub server startup error:', err);
+  process.exit(1);
+});

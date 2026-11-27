@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertOctagon,
   AlertTriangle,
   BookOpen,
+  Camera,
   Check,
   CheckCircle2,
   ClipboardList,
@@ -12,6 +13,7 @@ import {
   Eye,
   FileText,
   KeyRound,
+  LayoutGrid,
   Pencil,
   Phone,
   Plus,
@@ -20,6 +22,7 @@ import {
   Search,
   ShieldAlert,
   Trash2,
+  Upload,
   UserPlus,
   X,
 } from 'lucide-react';
@@ -48,11 +51,14 @@ import {
   generateStudentRegistrationCode,
   getDefaultEntryYear,
   getLibraryDueReminderLabel,
+  getStudentGenderRegisterRank,
   inferStudentEntryYear,
   isLibraryLoanDueWithin48Hours,
   isLibraryLoanOverdue,
+  matchesStudentSearchQuery,
   normalizeAssessmentComponents,
   normalizeRegistrationCode,
+  sortStudentsForRegister,
   STREAMS,
   STUDENT_CASE_SEVERITIES,
   STUDENT_CASE_STATUSES,
@@ -66,7 +72,13 @@ import {
   saveStudent,
   saveStudentCase,
   StudentPayload,
+  updateStudentPhoto,
 } from '../../school/firestoreService';
+import {
+  getStudentInitials,
+  isValidStudentPhotoDataUrl,
+  processStudentPhotoFile,
+} from '../../school/studentPhotoHelper';
 import {
   buildModalDraftKey,
   clearModalDraft,
@@ -77,6 +89,8 @@ import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { DraftRestoredNotice, ModalBackdrop } from './ModalBackdrop';
 import { StudentPerformanceTrends } from './StudentPerformanceTrends';
 import { StudentAttendancePanel } from './AttendanceRegister';
+import { StudentCsvImportModal } from './StudentCsvImportModal';
+import { StudentPhotoCaptureModal } from './StudentPhotoCaptureModal';
 
 interface StudentsManagerProps {
   school: School;
@@ -95,7 +109,7 @@ interface StudentsManagerProps {
   canViewFees?: boolean;
   canViewLibrary?: boolean;
   recordedByName?: string;
-  initialTab?: 'directory' | 'attendance' | 'cases';
+  initialTab?: 'directory' | 'gallery' | 'attendance' | 'cases';
   tabRequestNonce?: number;
   onOpenLibrary?: () => void;
 }
@@ -127,7 +141,49 @@ const EMPTY_FORM: StudentPayload = {
   emergencyNotes: '',
   studentEmail: '',
   registrationCode: '',
+  photoDataUrl: '',
   status: 'Active',
+};
+
+interface StudentAvatarProps {
+  fullName: string;
+  photoDataUrl?: string;
+  sizeClass?: string;
+  textClass?: string;
+}
+
+const StudentAvatar: React.FC<StudentAvatarProps> = ({
+  fullName,
+  photoDataUrl,
+  sizeClass = 'w-9 h-9',
+  textClass = 'text-xs',
+}) => {
+  const [failedSrc, setFailedSrc] = useState('');
+  const cleanUrl =
+    photoDataUrl && isValidStudentPhotoDataUrl(photoDataUrl) && photoDataUrl !== failedSrc
+      ? photoDataUrl
+      : '';
+
+  if (cleanUrl) {
+    return (
+      <img
+        src={cleanUrl}
+        alt={fullName}
+        referrerPolicy="no-referrer"
+        onError={() => setFailedSrc(cleanUrl)}
+        className={`${sizeClass} rounded-full object-cover border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 shrink-0`}
+      />
+    );
+  }
+
+  return (
+    <div
+      aria-hidden="true"
+      className={`${sizeClass} rounded-full border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold flex items-center justify-center shrink-0 select-none ${textClass}`}
+    >
+      {getStudentInitials(fullName)}
+    </div>
+  );
 };
 
 interface StudentFormDraft {
@@ -192,12 +248,15 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
   onOpenLibrary,
 }) => {
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const [sectionTab, setSectionTab] = useState<'directory' | 'attendance' | 'cases'>(() =>
+  const [sectionTab, setSectionTab] = useState<'directory' | 'gallery' | 'attendance' | 'cases'>(() =>
     initialTab && (initialTab !== 'attendance' || canReadAttendance) ? initialTab : 'directory'
   );
   const [search, setSearch] = useState('');
   const [formFilter, setFormFilter] = useState<'all' | FormLevel>('all');
+  const [streamFilter, setStreamFilter] = useState<'all' | string>('all');
   const [boardingFilter, setBoardingFilter] = useState<'all' | BoardingStatus>('all');
+  const [photoFilter, setPhotoFilter] = useState<'all' | 'with_photo' | 'missing_photo'>('all');
+  const [registerGrouping, setRegisterGrouping] = useState<'register' | 'by_form'>('register');
 
   useEffect(() => {
     if (!tabRequestNonce || !initialTab) return;
@@ -206,6 +265,7 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
   }, [canReadAttendance, initialTab, tabRequestNonce]);
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [csvImportModalOpen, setCsvImportModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formState, setFormState] = useState<StudentPayload>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
@@ -224,6 +284,15 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
   const [codeBanner, setCodeBanner] = useState('');
   const [regCodeAuto, setRegCodeAuto] = useState(true);
   const [entryYearAuto, setEntryYearAuto] = useState(true);
+
+  // Student Camera Photo State
+  const [cameraModalTarget, setCameraModalTarget] = useState<
+    { mode: 'form' } | { mode: 'immediate'; student: Student } | null
+  >(null);
+  const [savingPhoto, setSavingPhoto] = useState(false);
+  const [photoSaveError, setPhotoSaveError] = useState('');
+  const [formPhotoProcessing, setFormPhotoProcessing] = useState(false);
+  const formPhotoInputRef = useRef<HTMLInputElement | null>(null);
 
   // Student Disciplinary Cases (Suspensions & Rustications) State
   const [caseSearch, setCaseSearch] = useState('');
@@ -264,8 +333,10 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
 
   useEffect(() => {
     if (!modalOpen) return;
+    // Omit bulky base64 thumbnail from localStorage draft to stay well within browser storage quota
+    const { photoDataUrl: _omitPhoto, ...draftFormState } = formState;
     saveModalDraft<StudentFormDraft>(studentDraftKey, {
-      formState,
+      formState: draftFormState,
       regCodeAuto,
       entryYearAuto,
     });
@@ -368,25 +439,63 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
     }
   };
 
+  const availableStreams = useMemo(() => {
+    const set = new Set<string>(STREAMS);
+    for (const s of students) {
+      if (s.stream) set.add(s.stream);
+    }
+    return Array.from(set);
+  }, [students]);
+
+  const studentsById = useMemo(() => {
+    const map = new Map<string, Student>();
+    for (const s of students) {
+      map.set(s.id, s);
+    }
+    return map;
+  }, [students]);
+
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return students
-      .filter((s) => {
-        if (formFilter !== 'all' && s.formLevel !== formFilter) return false;
-        if (boardingFilter !== 'all' && s.boardingStatus !== boardingFilter) return false;
-        if (!q) return true;
-        return (
-          s.fullName.toLowerCase().includes(q) ||
-          s.admissionNo.toLowerCase().includes(q) ||
-          s.guardianName.toLowerCase().includes(q) ||
-          (s.guardianPhone || '').toLowerCase().includes(q) ||
-          (s.guardianSecondaryPhone || '').toLowerCase().includes(q) ||
-          (s.emergencyContactName || '').toLowerCase().includes(q) ||
-          (s.registrationCode || '').toLowerCase().includes(q)
-        );
-      })
-      .sort((a, b) => a.formLevel - b.formLevel || a.fullName.localeCompare(b.fullName));
-  }, [boardingFilter, formFilter, search, students]);
+    const matched = students.filter((s) => {
+      if (formFilter !== 'all' && s.formLevel !== formFilter) return false;
+      if (streamFilter !== 'all' && s.stream !== streamFilter) return false;
+      if (boardingFilter !== 'all' && s.boardingStatus !== boardingFilter) return false;
+      return matchesStudentSearchQuery(s, search, {
+        includeGuardian: true,
+        includeFormClass: true,
+      });
+    });
+    return sortStudentsForRegister(matched, {
+      groupByForm: registerGrouping === 'by_form',
+    });
+  }, [boardingFilter, formFilter, registerGrouping, search, streamFilter, students]);
+
+  const filteredGenderCounts = useMemo(() => {
+    let boys = 0;
+    let girls = 0;
+    for (const s of filtered) {
+      const rank = getStudentGenderRegisterRank(s.gender);
+      if (rank === 0) boys += 1;
+      else if (rank === 1) girls += 1;
+    }
+    return { boys, girls };
+  }, [filtered]);
+
+  const galleryStudents = useMemo(() => {
+    return filtered.filter((s) => {
+      const hasPhoto = Boolean(s.photoDataUrl && isValidStudentPhotoDataUrl(s.photoDataUrl));
+      if (photoFilter === 'with_photo') return hasPhoto;
+      if (photoFilter === 'missing_photo') return !hasPhoto;
+      return true;
+    });
+  }, [filtered, photoFilter]);
+
+  const totalWithPhotosCount = useMemo(
+    () =>
+      students.filter((s) => Boolean(s.photoDataUrl && isValidStudentPhotoDataUrl(s.photoDataUrl)))
+        .length,
+    [students]
+  );
 
   const buildFreshCreateStudent = (): StudentFormDraft => {
     const nextNumber = String(students.length + 1).padStart(3, '0');
@@ -428,6 +537,7 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
         registrationCode: hasExistingCode
           ? student.registrationCode || ''
           : makeUniqueRegCode(student.formLevel, student.stream, inferredYear, student.id),
+        photoDataUrl: student.photoDataUrl || '',
         status: student.status,
       },
     };
@@ -441,7 +551,7 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
     if (draft?.formState) {
       setEntryYearAuto(draft.entryYearAuto);
       setRegCodeAuto(draft.regCodeAuto);
-      setFormState(draft.formState);
+      setFormState({ ...draft.formState, photoDataUrl: '' });
       setStudentDraftRestored(true);
     } else {
       setEntryYearAuto(fresh.entryYearAuto);
@@ -461,7 +571,10 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
     if (draft?.formState) {
       setEntryYearAuto(draft.entryYearAuto);
       setRegCodeAuto(draft.regCodeAuto);
-      setFormState(draft.formState);
+      setFormState({
+        ...draft.formState,
+        photoDataUrl: student.photoDataUrl || '',
+      });
       setStudentDraftRestored(true);
     } else {
       setEntryYearAuto(fresh.entryYearAuto);
@@ -748,6 +861,7 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
     downloadCSV(
       `${school.name.toLowerCase().replace(/\s+/g, '-')}-students.csv`,
       [
+        'Register #',
         'Admission No',
         'Full Name',
         'Gender',
@@ -765,7 +879,8 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
         'Registration Code',
         'Status',
       ],
-      filtered.map((s) => [
+      filtered.map((s, idx) => [
+        idx + 1,
         s.admissionNo,
         s.fullName,
         s.gender,
@@ -805,19 +920,21 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
   }, [studentCases]);
 
   const filteredCases = useMemo(() => {
-    const q = caseSearch.trim().toLowerCase();
     return studentCases.filter((c) => {
       if (caseTypeFilter !== 'all' && c.caseType !== caseTypeFilter) return false;
       if (caseStatusFilter !== 'all' && c.status !== caseStatusFilter) return false;
-      if (!q) return true;
-      return (
-        c.studentName.toLowerCase().includes(q) ||
-        c.admissionNo.toLowerCase().includes(q) ||
-        c.title.toLowerCase().includes(q) ||
-        c.description.toLowerCase().includes(q)
+      const linkedStu = studentsById.get(c.studentId);
+      return matchesStudentSearchQuery(
+        {
+          fullName: linkedStu?.fullName || c.studentName,
+          admissionNo: linkedStu?.admissionNo || c.admissionNo,
+          registrationCode: linkedStu?.registrationCode,
+          extraTerms: [c.title, c.description],
+        },
+        caseSearch
       );
     });
-  }, [caseSearch, caseStatusFilter, caseTypeFilter, studentCases]);
+  }, [caseSearch, caseStatusFilter, caseTypeFilter, studentCases, studentsById]);
 
   const detailData = useMemo(() => {
     if (!detailStudent) return null;
@@ -898,6 +1015,20 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
               >
                 Student Directory ({students.length})
               </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sectionTab === 'gallery'}
+                onClick={() => setSectionTab('gallery')}
+                className={`inline-flex items-center gap-1.5 min-h-[34px] px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                  sectionTab === 'gallery'
+                    ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                }`}
+              >
+                <LayoutGrid className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+                <span>Gallery ({totalWithPhotosCount})</span>
+              </button>
               {canReadAttendance && (
                 <button
                   type="button"
@@ -955,6 +1086,16 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                   <Download className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>Export CSV</span>
                 </button>
+                {canManageStudents && (
+                  <button
+                    type="button"
+                    onClick={() => setCsvImportModalOpen(true)}
+                    className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Import CSV</span>
+                  </button>
+                )}
                 {canManageStudentCases && (
                   <button
                     type="button"
@@ -993,7 +1134,7 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
           </div>
         </div>
 
-        {codeBanner && sectionTab === 'directory' && (
+        {codeBanner && (sectionTab === 'directory' || sectionTab === 'gallery') && (
           <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 px-3.5 py-2 text-xs text-emerald-800 dark:text-emerald-200 flex items-center justify-between gap-2">
             <span>{codeBanner}</span>
             <button
@@ -1006,8 +1147,8 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
           </div>
         )}
 
-        {sectionTab === 'directory' ? (
-          <div className="flex flex-col md:flex-row md:items-center gap-3">
+        {sectionTab === 'directory' || sectionTab === 'gallery' ? (
+          <div className="flex flex-col lg:flex-row lg:items-center gap-3">
             <div className="relative flex-1">
               <Search
                 className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2"
@@ -1017,7 +1158,7 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                 type="search"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search student, admission #, reg code, guardian, or phone..."
+                placeholder="Search surname, name, reg/adm code, guardian, or phone..."
                 className="w-full min-h-[42px] pl-10 pr-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
               />
             </div>
@@ -1039,16 +1180,57 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
               ))}
             </div>
 
-            <select
-              aria-label="Filter by boarding status"
-              value={boardingFilter}
-              onChange={(e) => setBoardingFilter(e.target.value as 'all' | BoardingStatus)}
-              className="min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200"
-            >
-              <option value="all">All Boarding</option>
-              <option value="Day Scholar">Day Scholar</option>
-              <option value="Boarder">Boarder</option>
-            </select>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                aria-label="Filter by class stream"
+                value={streamFilter}
+                onChange={(e) => setStreamFilter(e.target.value)}
+                className="min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200"
+              >
+                <option value="all">All Classes</option>
+                {availableStreams.map((st) => (
+                  <option key={st} value={st}>
+                    Stream {st}
+                  </option>
+                ))}
+              </select>
+
+              {sectionTab === 'gallery' ? (
+                <select
+                  aria-label="Filter by photo availability"
+                  value={photoFilter}
+                  onChange={(e) =>
+                    setPhotoFilter(e.target.value as 'all' | 'with_photo' | 'missing_photo')
+                  }
+                  className="min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200"
+                >
+                  <option value="all">All Students</option>
+                  <option value="with_photo">With Profile Photo</option>
+                  <option value="missing_photo">Needs Photo</option>
+                </select>
+              ) : (
+                <select
+                  aria-label="Filter by boarding status"
+                  value={boardingFilter}
+                  onChange={(e) => setBoardingFilter(e.target.value as 'all' | BoardingStatus)}
+                  className="min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200"
+                >
+                  <option value="all">All Boarding</option>
+                  <option value="Day Scholar">Day Scholar</option>
+                  <option value="Boarder">Boarder</option>
+                </select>
+              )}
+
+              <select
+                aria-label="Register order arrangement"
+                value={registerGrouping}
+                onChange={(e) => setRegisterGrouping(e.target.value as 'register' | 'by_form')}
+                className="min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200"
+              >
+                <option value="register">Register: Boys ↑ A–Z · Girls ↓ A–Z</option>
+                <option value="by_form">By Form · Boys ↑ · Girls ↓</option>
+              </select>
+            </div>
           </div>
         ) : sectionTab === 'cases' ? (
           <div className="space-y-3">
@@ -1089,7 +1271,7 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                   type="search"
                   value={caseSearch}
                   onChange={(e) => setCaseSearch(e.target.value)}
-                  placeholder="Search cases by student name, admission #, title, or notes..."
+                  placeholder="Search cases by surname, name, reg/adm code, title, or notes..."
                   className="w-full min-h-[42px] pl-10 pr-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-emerald-600"
                 />
               </div>
@@ -1293,6 +1475,89 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
             </div>
           )}
         </div>
+      ) : sectionTab === 'gallery' ? (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400 px-1">
+            <span className="font-mono tabular-nums">
+              Showing {galleryStudents.length} student{galleryStudents.length === 1 ? '' : 's'} ·{' '}
+              {galleryStudents.filter((s) => Boolean(s.photoDataUrl && isValidStudentPhotoDataUrl(s.photoDataUrl))).length} with circular photo
+            </span>
+            <span>
+              Click any student portrait to capture or update their profile photo
+            </span>
+          </div>
+
+          {galleryStudents.length === 0 ? (
+            <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl py-12 px-6 text-center space-y-3">
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                {students.length === 0
+                  ? 'No students enrolled yet.'
+                  : 'No students match your selected form, class, or photo filter.'}
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-4">
+              {galleryStudents.map((s) => {
+                const hasPhoto = Boolean(s.photoDataUrl && isValidStudentPhotoDataUrl(s.photoDataUrl));
+                return (
+                  <div
+                    key={s.id}
+                    className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 flex flex-col items-center text-center gap-3"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPhotoSaveError('');
+                        setCameraModalTarget({ mode: 'immediate', student: s });
+                      }}
+                      title={hasPhoto ? `Update profile photo for ${s.fullName}` : `Set profile photo for ${s.fullName}`}
+                      aria-label={hasPhoto ? `Update profile photo for ${s.fullName}` : `Set profile photo for ${s.fullName}`}
+                      className="relative group rounded-full cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                    >
+                      <StudentAvatar
+                        fullName={s.fullName}
+                        photoDataUrl={s.photoDataUrl}
+                        sizeClass="w-24 h-24"
+                        textClass="text-2xl"
+                      />
+                    </button>
+
+                    <div className="w-full min-w-0 space-y-0.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDetailTab('overview');
+                          setDetailStudent(s);
+                        }}
+                        className="w-full font-semibold text-sm text-slate-900 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 truncate cursor-pointer"
+                      >
+                        {s.fullName}
+                      </button>
+                      <div className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400 truncate">
+                        {s.admissionNo}
+                      </div>
+                      <div className="text-xs text-slate-600 dark:text-slate-400 truncate">
+                        Form {s.formLevel}{s.stream} · {s.boardingStatus}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPhotoSaveError('');
+                        setCameraModalTarget({ mode: 'immediate', student: s });
+                      }}
+                      className="mt-auto w-full inline-flex items-center justify-center gap-1.5 min-h-[38px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer"
+                    >
+                      <Camera className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+                      <span>{hasPhoto ? 'Update Photo' : 'Set Photo'}</span>
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       ) : (
         /* Data Table */
         <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
@@ -1304,14 +1569,24 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                 : 'No students match your current search or filter.'}
             </p>
             {students.length === 0 && canManageStudents && (
-              <button
-                type="button"
-                onClick={openCreateModal}
-                className="inline-flex items-center gap-2 min-h-[42px] px-4 rounded-xl bg-emerald-700 text-white text-xs font-semibold cursor-pointer"
-              >
-                <UserPlus className="w-4 h-4" />
-                <span>Enroll First Student</span>
-              </button>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={openCreateModal}
+                  className="inline-flex items-center gap-2 min-h-[42px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>Enroll First Student</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCsvImportModalOpen(true)}
+                  className="inline-flex items-center gap-2 min-h-[42px] px-4 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  <Upload className="w-4 h-4" />
+                  <span>Import from CSV</span>
+                </button>
+              </div>
             )}
           </div>
         ) : (
@@ -1319,6 +1594,7 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 text-xs text-slate-500 dark:text-slate-400">
+                  <th className="py-3 px-3 font-medium w-10 text-center">#</th>
                   <th className="py-3 px-4 font-medium">Admission #</th>
                   <th className="py-3 px-4 font-medium">Student Name</th>
                   <th className="py-3 px-4 font-medium">Class</th>
@@ -1329,23 +1605,79 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
-                {filtered.map((s) => {
+                {filtered.map((s, idx) => {
                   const stuLib = canViewLibrary ? libraryByStudentId.get(s.id) : undefined;
+                  const genderRank = getStudentGenderRegisterRank(s.gender);
+                  const prevGenderRank =
+                    idx > 0 ? getStudentGenderRegisterRank(filtered[idx - 1].gender) : null;
+                  const showRegisterHeader =
+                    registerGrouping === 'register' &&
+                    (idx === 0 || genderRank !== prevGenderRank);
+                  const showFormRegisterHeader =
+                    registerGrouping === 'by_form' &&
+                    (idx === 0 || filtered[idx - 1].formLevel !== s.formLevel);
                   return (
-                  <tr key={s.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/30">
+                  <React.Fragment key={s.id}>
+                    {showRegisterHeader && (
+                      <tr className="bg-slate-50/90 dark:bg-slate-900/70 border-y border-slate-200/80 dark:border-slate-800">
+                        <td
+                          colSpan={8}
+                          className="py-2 px-4 text-[11px] font-mono uppercase tracking-wider font-semibold text-slate-600 dark:text-slate-300"
+                        >
+                          {genderRank === 0
+                            ? `Boys (Upwards · A–Z) · ${filteredGenderCounts.boys}`
+                            : genderRank === 1
+                            ? `Girls (Downwards · A–Z) · ${filteredGenderCounts.girls}`
+                            : 'Other Students · A–Z'}
+                        </td>
+                      </tr>
+                    )}
+                    {showFormRegisterHeader && (
+                      <tr className="bg-slate-50/90 dark:bg-slate-900/70 border-y border-slate-200/80 dark:border-slate-800">
+                        <td
+                          colSpan={8}
+                          className="py-2 px-4 text-[11px] font-mono uppercase tracking-wider font-semibold text-slate-600 dark:text-slate-300"
+                        >
+                          Form {s.formLevel} Register · Boys ↑ A–Z · Girls ↓ A–Z
+                        </td>
+                      </tr>
+                    )}
+                  <tr className="hover:bg-slate-50/80 dark:hover:bg-slate-800/30">
+                    <td className="py-3 px-3 text-center font-mono tabular-nums text-xs text-slate-400 dark:text-slate-500">
+                      {idx + 1}
+                    </td>
                     <td className="py-3 px-4 font-mono tabular-nums text-xs text-slate-600 dark:text-slate-400 whitespace-nowrap">
                       {s.admissionNo}
                     </td>
                     <td className="py-3 px-4">
-                      <button
-                        type="button"
-                        onClick={() => setDetailStudent(s)}
-                        className="font-semibold text-slate-900 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 text-left cursor-pointer"
-                      >
-                        {s.fullName}
-                      </button>
-                      <div className="text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-1.5">
-                        <span>{s.gender}</span>
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPhotoSaveError('');
+                            setCameraModalTarget({ mode: 'immediate', student: s });
+                          }}
+                          title={`Take or update photo for ${s.fullName}`}
+                          aria-label={`Take or update photo for ${s.fullName}`}
+                          className="relative group shrink-0 rounded-full cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                        >
+                          <StudentAvatar
+                            fullName={s.fullName}
+                            photoDataUrl={s.photoDataUrl}
+                            sizeClass="w-9 h-9"
+                            textClass="text-xs"
+                          />
+                        </button>
+                        <div className="min-w-0">
+                          <button
+                            type="button"
+                            onClick={() => setDetailStudent(s)}
+                            className="font-semibold text-slate-900 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 text-left cursor-pointer"
+                          >
+                            {s.fullName}
+                          </button>
+                          <div className="text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-1.5">
+                            <span>{s.gender}</span>
                         {s.registrationCode ? (
                           <>
                             <span>·</span>
@@ -1392,6 +1724,8 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                             <span>{stuLib.overdueLoans.length} overdue</span>
                           </button>
                         )}
+                      </div>
+                        </div>
                       </div>
                     </td>
                     <td className="py-3 px-4 whitespace-nowrap text-slate-800 dark:text-slate-200 font-medium">
@@ -1450,6 +1784,18 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                             <span>Report</span>
                           </button>
                         )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPhotoSaveError('');
+                            setCameraModalTarget({ mode: 'immediate', student: s });
+                          }}
+                          title={`Take or set profile photo for ${s.fullName}`}
+                          aria-label={`Take or set profile photo for ${s.fullName}`}
+                          className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-slate-500 hover:text-emerald-700 dark:hover:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 cursor-pointer"
+                        >
+                          <Camera className="w-3.5 h-3.5" />
+                        </button>
                         {canManageStudents && (
                           <>
                             <button
@@ -1473,6 +1819,7 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                       </div>
                     </td>
                   </tr>
+                  </React.Fragment>
                   );
                 })}
               </tbody>
@@ -1487,22 +1834,41 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
         <ModalBackdrop open={Boolean(detailData)} onClose={() => setDetailStudent(null)}>
           <div className="w-full max-w-2xl rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 p-6 shadow-xl max-h-[92vh] overflow-y-auto space-y-5">
             <div className="flex items-start justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
-              <div>
-                <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-                  Student Profile &amp; Emergency Record · {school.name}
+              <div className="flex items-start gap-3.5 min-w-0">
+                <StudentAvatar
+                  fullName={detailData.student.fullName}
+                  photoDataUrl={detailData.student.photoDataUrl}
+                  sizeClass="w-16 h-16"
+                  textClass="text-lg"
+                />
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+                    Student Profile &amp; Emergency Record · {school.name}
+                  </div>
+                  <h2 className="mt-0.5 text-xl font-bold text-slate-900 dark:text-white truncate">
+                    {detailData.student.fullName}
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono tabular-nums">
+                    {detailData.student.admissionNo} · Form {detailData.student.formLevel}{detailData.student.stream} ({detailData.student.formLevel <= 2 ? 'JCE' : 'MSCE'}) · Entry {inferStudentEntryYear(detailData.student, school.academicYear)} · {detailData.student.boardingStatus} · {detailData.student.gender}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPhotoSaveError('');
+                      setCameraModalTarget({ mode: 'immediate', student: detailData.student });
+                    }}
+                    className="mt-2 inline-flex items-center gap-1.5 min-h-[32px] px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-200 cursor-pointer"
+                  >
+                    <Camera className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+                    <span>{detailData.student.photoDataUrl ? 'Update Camera Photo' : 'Take Camera Photo'}</span>
+                  </button>
                 </div>
-                <h2 className="mt-1 text-xl font-bold text-slate-900 dark:text-white">
-                  {detailData.student.fullName}
-                </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono tabular-nums">
-                  {detailData.student.admissionNo} · Form {detailData.student.formLevel}{detailData.student.stream} ({detailData.student.formLevel <= 2 ? 'JCE' : 'MSCE'}) · Entry {inferStudentEntryYear(detailData.student, school.academicYear)} · {detailData.student.boardingStatus} · {detailData.student.gender}
-                </p>
               </div>
               <button
                 type="button"
                 onClick={() => setDetailStudent(null)}
                 aria-label="Close student details"
-                className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer shrink-0"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1990,6 +2356,83 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
                   {errorMsg}
                 </div>
               )}
+
+              {/* Student Profile Photo */}
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 p-3.5 flex flex-wrap items-center gap-3.5">
+                <StudentAvatar
+                  fullName={formState.fullName || 'Student'}
+                  photoDataUrl={formState.photoDataUrl}
+                  sizeClass="w-16 h-16"
+                  textClass="text-lg"
+                />
+                <div className="flex-1 min-w-[180px] space-y-2">
+                  <div>
+                    <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                      Student Profile Photo
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Take a square portrait with the device camera or upload an image file.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={() => {
+                        setPhotoSaveError('');
+                        setCameraModalTarget({ mode: 'form' });
+                      }}
+                      className="inline-flex items-center gap-1.5 min-h-[36px] px-3 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
+                    >
+                      <Camera className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>{formState.photoDataUrl ? 'Retake Camera Photo' : 'Take Camera Photo'}</span>
+                    </button>
+                    <input
+                      ref={formPhotoInputRef}
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (!file) return;
+                        setErrorMsg('');
+                        setFormPhotoProcessing(true);
+                        try {
+                          const dataUrl = await processStudentPhotoFile(file);
+                          setFormState((prev) => ({ ...prev, photoDataUrl: dataUrl }));
+                        } catch (err) {
+                          setErrorMsg(
+                            err instanceof Error ? err.message : 'Unable to process image file.'
+                          );
+                        } finally {
+                          setFormPhotoProcessing(false);
+                        }
+                      }}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      disabled={saving || formPhotoProcessing}
+                      onClick={() => formPhotoInputRef.current?.click()}
+                      className="inline-flex items-center gap-1.5 min-h-[36px] px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-200 cursor-pointer disabled:opacity-50"
+                    >
+                      <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>{formPhotoProcessing ? 'Processing...' : 'Upload'}</span>
+                    </button>
+                    {formState.photoDataUrl && (
+                      <button
+                        type="button"
+                        disabled={saving}
+                        onClick={() => setFormState((prev) => ({ ...prev, photoDataUrl: '' }))}
+                        className="inline-flex items-center gap-1 min-h-[36px] px-2.5 rounded-lg text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer disabled:opacity-50"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>Remove</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
 
               {/* Student Identity & Academic Placement */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2804,6 +3247,68 @@ export const StudentsManager: React.FC<StudentsManagerProps> = ({
             );
           } finally {
             setDeletingCase(false);
+          }
+        }}
+      />
+      <StudentCsvImportModal
+        open={canManageStudents && csvImportModalOpen}
+        school={school}
+        ownerId={ownerId}
+        students={students}
+        onClose={() => setCsvImportModalOpen(false)}
+      />
+      <StudentPhotoCaptureModal
+        open={Boolean(cameraModalTarget) && (cameraModalTarget?.mode !== 'form' || canManageStudents)}
+        headerLabel="Student Portrait Camera"
+        saveButtonLabel={cameraModalTarget?.mode === 'form' ? 'Use Photo' : 'Save Student Photo'}
+        mode={cameraModalTarget?.mode === 'form' ? 'form' : 'immediate'}
+        studentName={
+          cameraModalTarget?.mode === 'immediate'
+            ? cameraModalTarget.student.fullName
+            : formState.fullName
+        }
+        admissionNo={
+          cameraModalTarget?.mode === 'immediate'
+            ? cameraModalTarget.student.admissionNo
+            : formState.admissionNo
+        }
+        initialPhotoUrl={
+          cameraModalTarget?.mode === 'immediate'
+            ? cameraModalTarget.student.photoDataUrl || ''
+            : formState.photoDataUrl || ''
+        }
+        saving={savingPhoto}
+        saveError={photoSaveError}
+        onClose={() => {
+          if (!savingPhoto) {
+            setCameraModalTarget(null);
+            setPhotoSaveError('');
+          }
+        }}
+        onSavePhoto={async (photoDataUrl) => {
+          if (!cameraModalTarget) return;
+          if (cameraModalTarget.mode === 'form') {
+            setFormState((prev) => ({ ...prev, photoDataUrl }));
+            setCameraModalTarget(null);
+            return;
+          }
+
+          setSavingPhoto(true);
+          setPhotoSaveError('');
+          try {
+            await updateStudentPhoto(school.id, cameraModalTarget.student.id, photoDataUrl);
+            setCodeBanner(
+              photoDataUrl
+                ? `Updated profile photo for ${cameraModalTarget.student.fullName}.`
+                : `Removed profile photo for ${cameraModalTarget.student.fullName}.`
+            );
+            setCameraModalTarget(null);
+          } catch (err) {
+            setPhotoSaveError(
+              err instanceof Error ? err.message : 'Unable to save student photo.'
+            );
+          } finally {
+            setSavingPhoto(false);
           }
         }}
       />

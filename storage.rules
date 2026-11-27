@@ -1,0 +1,38 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    match /backups/schools/{schoolId}/{snapshotFile} {
+      allow read: if request.auth != null
+        && request.auth.token.email_verified == true
+        && schoolId.matches('^[a-zA-Z0-9_\\-]{1,128}$')
+        && snapshotFile.matches('^[a-zA-Z0-9_\\-]{1,128}\\.json$')
+        && resource != null
+        && resource.metadata != null
+        && resource.metadata.ownerId == request.auth.uid;
+
+      allow create: if request.auth != null
+        && request.auth.token.email_verified == true
+        && schoolId.matches('^[a-zA-Z0-9_\\-]{1,128}$')
+        && snapshotFile.matches('^[a-zA-Z0-9_\\-]{1,128}\\.json$')
+        && request.resource != null
+        && request.resource.size > 0
+        && request.resource.size <= 50 * 1024 * 1024
+        && request.resource.contentType == 'application/json'
+        && request.resource.metadata != null
+        && request.resource.metadata.ownerId == request.auth.uid
+        && request.resource.metadata.schoolId == schoolId;
+
+      allow delete: if request.auth != null
+        && request.auth.token.email_verified == true
+        && schoolId.matches('^[a-zA-Z0-9_\\-]{1,128}$')
+        && snapshotFile.matches('^[a-zA-Z0-9_\\-]{1,128}\\.json$')
+        && resource != null
+        && resource.metadata != null
+        && resource.metadata.ownerId == request.auth.uid;
+    }
+  }
+}

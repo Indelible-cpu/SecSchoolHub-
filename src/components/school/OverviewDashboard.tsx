@@ -15,10 +15,13 @@ import {
   FileSpreadsheet,
   Settings,
   ShieldAlert,
+  Database,
 } from 'lucide-react';
 import {
   Assessment,
   AttendanceRecord,
+  BackupSettings,
+  BackupSnapshotLog,
   FeeInvoice,
   FeePayment,
   FormLevel,
@@ -47,6 +50,7 @@ import {
   LIBRARY_MATERIAL_CATEGORIES,
   MALAWI_SUBJECTS,
   normalizeAssessmentComponents,
+  sortStudentsForRegister,
 } from '../../school/malawi';
 import {
   EnrollmentGenderChart,
@@ -77,10 +81,12 @@ interface OverviewDashboardProps {
   studentCases?: StudentCase[];
   libraryLoans?: LibraryLoan[];
   announcements?: SchoolAnnouncement[];
+  backupSettings?: BackupSettings | null;
+  backupLogs?: BackupSnapshotLog[];
   authorDisplayName?: string;
   onNavigate: (section: SchoolSection) => void;
-  onOpenStudents?: (tab: 'directory' | 'attendance' | 'cases') => void;
-  onOpenStaff?: (tab: 'directory' | 'timebook') => void;
+  onOpenStudents?: (tab: 'directory' | 'gallery' | 'attendance' | 'cases') => void;
+  onOpenStaff?: (tab: 'directory' | 'timebook' | 'backups') => void;
   onOpenLibrary?: (
     tab: 'catalog' | 'reservations' | 'online',
     audience?: 'all' | 'teaching' | 'student'
@@ -102,6 +108,8 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
   studentCases = [],
   libraryLoans = [],
   announcements = [],
+  backupSettings = null,
+  backupLogs = [],
   authorDisplayName = 'School Admin',
   onNavigate,
   onOpenStudents,
@@ -283,8 +291,13 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
       .filter((row) => row.standing.subjectCount > 0)
       .sort((a, b) => {
         if (a.standing.bestSixPoints !== null && b.standing.bestSixPoints !== null) {
-          return a.standing.bestSixPoints - b.standing.bestSixPoints;
+          return (
+            a.standing.bestSixPoints - b.standing.bestSixPoints ||
+            b.standing.averageScore - a.standing.averageScore
+          );
         }
+        if (a.standing.bestSixPoints !== null) return -1;
+        if (b.standing.bestSixPoints !== null) return 1;
         return b.standing.averageScore - a.standing.averageScore;
       })
       .slice(0, 5);
@@ -343,13 +356,14 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
     const targetForm = (match ? Number(match[1]) : 4) as FormLevel;
     const targetStream = (match?.[2] || '').trim().toUpperCase();
 
-    const classStudents = activeStudents
-      .filter((s) => {
+    const classStudents = sortStudentsForRegister(
+      activeStudents.filter((s) => {
         if (s.formLevel !== targetForm) return false;
         if (targetStream && s.stream.trim().toUpperCase() !== targetStream) return false;
         return true;
-      })
-      .sort((a, b) => a.stream.localeCompare(b.stream) || a.fullName.localeCompare(b.fullName));
+      }),
+      { groupByStream: !targetStream }
+    );
 
     const rows = classStudents.map((stu) => {
       const att = attendanceStats.todayRows.find((a) => a.studentId === stu.id);
@@ -1925,6 +1939,38 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
           </button>
         </div>
       </div>
+
+      {rolePermissions.role === 'Owner' && onOpenStaff && (
+        <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+              <Database className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" aria-hidden="true" />
+              <span>Owner Database Backups &amp; Storage Bucket</span>
+            </div>
+            <div className="mt-1.5 text-sm font-semibold text-slate-900 dark:text-slate-100 font-mono tabular-nums">
+              {backupLogs.find((b) => b.status === 'Completed')?.completedAtIso
+                ? `Last snapshot: ${backupLogs
+                    .find((b) => b.status === 'Completed')!
+                    .completedAtIso.replace('T', ' ')
+                    .slice(0, 16)} UTC (${backupLogs.find((b) => b.status === 'Completed')!.totalDocuments} docs)`
+                : 'No cloud snapshot exported yet'}
+            </div>
+            <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+              {backupSettings?.autoBackupEnabled
+                ? `Automated ${backupSettings.cadence} snapshots enabled (${backupSettings.storageTarget})`
+                : 'Manual & scheduled full Firestore export to secure storage bucket'}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onOpenStaff('backups')}
+            className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <span>Database Backups</span>
+            <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+          </button>
+        </div>
+      )}
 
       {/* Term-over-Term Student Aggregate Performance Trends (Recharts) */}
       <TermPerformanceTrendChart

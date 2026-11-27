@@ -3,7 +3,6 @@ import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
 import {
   AlertTriangle,
   ArrowLeft,
-  ArrowRight,
   Award,
   Banknote,
   BookmarkCheck,
@@ -22,7 +21,6 @@ import {
   Image as ImageIcon,
   KeyRound,
   LogOut,
-  Megaphone,
   Moon,
   Printer,
   Search,
@@ -49,15 +47,19 @@ import {
 import {
   calculateTermReportSummary,
   canStudentSeeAnnouncement,
+  countStudentAssessmentsByTerm,
+  findStudentTermRemark,
   formatMWK,
   getLibraryDaysOverdue,
   getLibraryDueReminderLabel,
   isLibraryLoanDueWithin48Hours,
   isLibraryLoanOverdue,
   isTeacherOnlyDigitalCategory,
+  resolveStudentPortalTerm,
   STUDENT_DIGITAL_RESOURCE_CATEGORIES,
   TERMS,
 } from '../../school/malawi';
+import { buildStudentReportCardPayload } from '../../school/reportCardTemplates';
 import {
   getOfflineDigitalResources,
   OfflineDigitalResourceRecord,
@@ -93,6 +95,7 @@ import {
   StudentFeeSubmission,
   StudentPortal,
   StudentPortalFeeInvoice,
+  StudentReportRemark,
   TermName,
 } from '../../school/types';
 import { OfflineIndicator } from '../OfflineIndicator';
@@ -102,6 +105,7 @@ import { DraftRestoredNotice, ModalBackdrop } from './ModalBackdrop';
 import { OnlineLibraryReaderModal, ReadableDigitalResource } from './OnlineLibraryReaderModal';
 import { PaymentProofPreviewModal } from './PaymentProofPreviewModal';
 import { StudentPerformanceTrends } from './StudentPerformanceTrends';
+import { StudentPortalDashboard } from './StudentPortalDashboard';
 
 type StudentPortalTab = 'dashboard' | 'results' | 'library' | 'fees';
 
@@ -182,11 +186,18 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
     registrationCode ? readCachedJson<StudentPortal>(`malawisec_student_portal_${registrationCode}`) : null
   );
   const [selectedTerm, setSelectedTerm] = useState<TermName>('Term 2');
+  const [manualTermSelected, setManualTermSelected] = useState(false);
   const [termInitializedForCode, setTermInitializedForCode] = useState<string>('');
+  const [pdfFeedback, setPdfFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [assessments, setAssessments] = useState<Assessment[]>(() =>
     registrationCode ? readCachedJson<Assessment[]>(`malawisec_student_results_${registrationCode}`) || [] : []
   );
   const [loadingResults, setLoadingResults] = useState(true);
+  const [reportRemarks, setReportRemarks] = useState<StudentReportRemark[]>(() =>
+    registrationCode
+      ? readCachedJson<StudentReportRemark[]>(`malawisec_student_remarks_${registrationCode}`) || []
+      : []
+  );
   const [libraryLoans, setLibraryLoans] = useState<LibraryLoan[]>(() =>
     registrationCode ? readCachedJson<LibraryLoan[]>(`malawisec_student_loans_${registrationCode}`) || [] : []
   );
@@ -311,12 +322,29 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
 
   useEffect(() => {
     if (activePortal && termInitializedForCode !== activePortal.registrationCode) {
+      setManualTermSelected(false);
+      setPdfFeedback(null);
       setSelectedTerm(activePortal.currentTerm);
       setProofTerm(activePortal.currentTerm);
       setActiveTab('dashboard');
       setTermInitializedForCode(activePortal.registrationCode);
     }
   }, [activePortal, termInitializedForCode]);
+
+  useEffect(() => {
+    if (!activePortal || loadingResults || manualTermSelected || assessments.length === 0) return;
+    if (assessments.some((a) => a.term === selectedTerm)) return;
+    const resolved = resolveStudentPortalTerm(activePortal.currentTerm, assessments);
+    if (resolved !== selectedTerm) {
+      setSelectedTerm(resolved);
+    }
+  }, [activePortal, assessments, loadingResults, manualTermSelected, selectedTerm]);
+
+  const handleSelectTerm = (nextTerm: TermName) => {
+    setManualTermSelected(true);
+    setSelectedTerm(nextTerm);
+    setPdfFeedback(null);
+  };
 
   // Load Exam Results (with offline cache fallback)
   useEffect(() => {
@@ -359,6 +387,48 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
           err,
           OperationType.LIST,
           `studentPortals/${registrationCode}/results`
+        );
+      }
+    );
+
+    return () => unsub();
+  }, [activePortal, registrationCode]);
+
+  // Load Published Term Report Card Remarks (with offline cache fallback)
+  useEffect(() => {
+    if (!registrationCode || !activePortal) {
+      setReportRemarks([]);
+      return;
+    }
+
+    const cacheKey = `malawisec_student_remarks_${registrationCode}`;
+    const cachedRemarks = readCachedJson<StudentReportRemark[]>(cacheKey) || [];
+    if (cachedRemarks.length > 0) {
+      setReportRemarks(cachedRemarks);
+    }
+
+    const remarksQuery = query(
+      collection(db, 'studentPortals', registrationCode, 'reportRemarks'),
+      where('registrationCode', '==', registrationCode)
+    );
+    const unsub = onSnapshot(
+      remarksQuery,
+      (snap) => {
+        const docs = snap.docs
+          .map((d) => ({ id: d.id, ...(d.data() as Omit<StudentReportRemark, 'id'>) }))
+          .filter((r) => r.studentId === activePortal.studentId);
+        setReportRemarks(docs);
+        writeCachedJson(cacheKey, docs);
+      },
+      (err) => {
+        if (isFirestoreOfflineError(err)) {
+          if (cachedRemarks.length > 0) setReportRemarks(cachedRemarks);
+          return;
+        }
+        handleFirestoreError(
+          err,
+          OperationType.LIST,
+          `studentPortals/${registrationCode}/reportRemarks`
         );
       }
     );
@@ -876,6 +946,17 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
     });
   }, [catalogBooks, catalogFilter, catalogSearch]);
 
+  const termCounts = useMemo(
+    () => countStudentAssessmentsByTerm(assessments),
+    [assessments]
+  );
+
+  const fallbackTermWithMarks = useMemo<TermName | null>(() => {
+    if (termCounts[selectedTerm] > 0) return null;
+    const candidate = resolveStudentPortalTerm(selectedTerm, assessments);
+    return termCounts[candidate] > 0 ? candidate : null;
+  }, [assessments, selectedTerm, termCounts]);
+
   const termAssessments = useMemo(
     () => assessments.filter((a) => a.term === selectedTerm),
     [assessments, selectedTerm]
@@ -885,6 +966,59 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
     if (!activePortal) return null;
     return calculateTermReportSummary(activePortal.formLevel, termAssessments);
   }, [activePortal, termAssessments]);
+
+  const activeTermRemark = useMemo(() => {
+    if (!activePortal) return null;
+    return findStudentTermRemark(
+      reportRemarks,
+      activePortal.studentId,
+      selectedTerm,
+      activePortal.academicYear
+    );
+  }, [activePortal, reportRemarks, selectedTerm]);
+
+  const reportCardPayload = useMemo(() => {
+    if (!activePortal || !summary || summary.rows.length === 0) return null;
+    const viewSchool: School = {
+      id: activePortal.schoolId,
+      ownerId: activePortal.ownerId,
+      name: activePortal.schoolName,
+      district: activePortal.schoolDistrict,
+      schoolType: activePortal.schoolType,
+      motto: activePortal.motto,
+      academicYear: activePortal.academicYear,
+      currentTerm: activePortal.currentTerm,
+      defaultTuitionMWK: 0,
+      defaultGpfMWK: 0,
+      defaultExamFeeMWK: 0,
+      logoDataUrl: activePortal.logoDataUrl,
+    };
+    const viewStudent: Student = {
+      id: activePortal.studentId,
+      ownerId: activePortal.ownerId,
+      admissionNo: activePortal.admissionNo,
+      fullName: activePortal.studentName,
+      gender: 'Female',
+      formLevel: activePortal.formLevel,
+      stream: activePortal.stream,
+      boardingStatus: activePortal.boardingStatus,
+      guardianName: '',
+      guardianPhone: '',
+      registrationCode: activePortal.registrationCode,
+      status: activePortal.status,
+    };
+    return buildStudentReportCardPayload({
+      school: viewSchool,
+      student: viewStudent,
+      term: selectedTerm,
+      summary,
+      formTeacherRemark: activeTermRemark?.formTeacherRemark || undefined,
+      headTeacherRemark: activeTermRemark?.headTeacherRemark || undefined,
+      formTeacherName: activeTermRemark?.formTeacherName || undefined,
+      headTeacherName: activeTermRemark?.headTeacherName || undefined,
+      nextTermOpens: activeTermRemark?.nextTermOpens || undefined,
+    });
+  }, [activePortal, activeTermRemark, selectedTerm, summary]);
 
   const libraryAlerts = useMemo(() => {
     const dueSoonLoans = libraryLoans.filter((l) => isLibraryLoanDueWithin48Hours(l, todayIso));
@@ -1019,6 +1153,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
 
   const handleDownloadPdf = () => {
     if (!activePortal || !summary || summary.rows.length === 0) return;
+    setPdfFeedback(null);
     const viewSchool: School = {
       id: activePortal.schoolId,
       ownerId: activePortal.ownerId,
@@ -1047,12 +1182,26 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
       registrationCode: activePortal.registrationCode,
       status: activePortal.status,
     };
-    downloadStudentTermReportCardPdf({
-      school: viewSchool,
-      student: viewStudent,
-      term: selectedTerm,
-      summary,
-    });
+    try {
+      downloadStudentTermReportCardPdf({
+        school: viewSchool,
+        student: viewStudent,
+        term: selectedTerm,
+        summary,
+        formTeacherRemark: activeTermRemark?.formTeacherRemark || undefined,
+        headTeacherRemark: activeTermRemark?.headTeacherRemark || undefined,
+        nextTermOpens: activeTermRemark?.nextTermOpens || undefined,
+      });
+      setPdfFeedback({
+        type: 'success',
+        text: `${selectedTerm} Report Card PDF downloaded.`,
+      });
+    } catch (err) {
+      setPdfFeedback({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Unable to generate Report Card PDF right now.',
+      });
+    }
   };
 
   const handleToggleOfflineResource = async (resource: ReadableDigitalResource) => {
@@ -1461,267 +1610,45 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
               )}
             </section>
 
-            {/* SECTION 1: DASHBOARD */}
+            {/* SECTION 1: STUDENT ACADEMIC DASHBOARD */}
             {activeTab === 'dashboard' && (
-              <div className="space-y-5">
-                {/* School Announcements */}
-                <section
-                  aria-label="School announcements"
-                  className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <Megaphone className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" aria-hidden="true" />
-                      <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                        School Announcements{' '}
-                        <span className="font-mono tabular-nums text-slate-500 dark:text-slate-400">
-                          ({announcements.length})
-                        </span>
-                      </h2>
-                    </div>
-                  </div>
-                  {announcements.length === 0 ? (
-                    <div className="py-3 text-center text-xs text-slate-500 dark:text-slate-400">
-                      No school announcements at this time.
-                    </div>
-                  ) : (
-                    <div className="divide-y divide-slate-100 dark:divide-slate-800/80">
-                      {announcements.map((item) => (
-                        <article key={item.id} className="py-3 first:pt-1 last:pb-1 space-y-1">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                              {item.title}
-                            </h3>
-                            <span className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400 shrink-0">
-                              {item.publishedDate}
-                            </span>
-                          </div>
-                          <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">
-                            {item.message}
-                          </p>
-                          {item.authorName && (
-                            <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                              Posted by {item.authorName}
-                            </div>
-                          )}
-                        </article>
-                      ))}
-                    </div>
-                  )}
-                </section>
-
-                <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {/* Exam Results Card */}
-                  <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex flex-col justify-between gap-4">
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                          Exam Results · {selectedTerm}
-                        </span>
-                        <Award className="w-4 h-4 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
-                      </div>
-                      <div className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
-                        {summary.subjectCount > 0 ? `${summary.weightedAverage.toFixed(1)}%` : '—'}
-                      </div>
-                      <div className="text-xs text-slate-600 dark:text-slate-300 font-mono">
-                        {summary.subjectCount > 0
-                          ? `Grade ${summary.overallGrade} · ${summary.standing.outcome} · ${summary.subjectCount} subjects`
-                          : `No ${selectedTerm} results published yet`}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleSelectTab('results')}
-                      className="inline-flex items-center justify-between min-h-[38px] px-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200/80 dark:border-emerald-900/60 text-xs font-semibold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100/80 dark:hover:bg-emerald-950/80 cursor-pointer"
-                    >
-                      <span>Open Exam Results</span>
-                      <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
-                    </button>
-                  </div>
-
-                  {/* Library Card */}
-                  <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex flex-col justify-between gap-4">
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                          School Library
-                        </span>
-                        <BookOpen className="w-4 h-4 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
-                      </div>
-                      <div className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
-                        {activeBorrowedLoansCount} Checked Out
-                      </div>
-                      <div className="text-xs text-slate-600 dark:text-slate-300 font-mono">
-                        {offlineIds.size} saved offline ·{' '}
-                        {libraryAlerts.overdueLoans.length > 0
-                          ? `${libraryAlerts.overdueLoans.length} overdue`
-                          : libraryAlerts.dueSoonLoans.length > 0
-                          ? `${libraryAlerts.dueSoonLoans.length} due in 48h`
-                          : `${mergedDigitalResources.length} digital books`}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleSelectTab('library')}
-                      className="inline-flex items-center justify-between min-h-[38px] px-3.5 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-slate-800 cursor-pointer"
-                    >
-                      <span>Open Library</span>
-                      <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
-                    </button>
-                  </div>
-
-                  {/* Fees Card */}
-                  <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex flex-col justify-between gap-4">
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                          School Fees (MWK)
-                        </span>
-                        <Banknote className="w-4 h-4 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
-                      </div>
-                      <div
-                        className={`text-2xl font-bold font-mono tabular-nums ${
-                          feeTotals.balance > 0
-                            ? 'text-amber-700 dark:text-amber-400'
-                            : 'text-emerald-700 dark:text-emerald-400'
-                        }`}
-                      >
-                        {feeInvoices.length > 0 ? formatMWK(feeTotals.balance) : '—'}
-                      </div>
-                      <div className="text-xs text-slate-600 dark:text-slate-300 font-mono">
-                        {feeInvoices.length > 0
-                          ? `Paid ${formatMWK(feeTotals.paid)} of ${formatMWK(feeTotals.billed)}`
-                          : 'No invoices billed'}
-                        {feeTotals.pendingProofs > 0
-                          ? ` · ${feeTotals.pendingProofs} pending proof`
-                          : ''}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleSelectTab('fees')}
-                      className="inline-flex items-center justify-between min-h-[38px] px-3.5 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-slate-800 cursor-pointer"
-                    >
-                      <span>Open Fees &amp; Upload Proof</span>
-                      <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
-                    </button>
-                  </div>
-                </section>
-
-                {/* Recent Fee Submissions or Subject Summary */}
-                <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                        {selectedTerm} Subject Summary
-                      </h2>
-                      <button
-                        type="button"
-                        onClick={() => handleSelectTab('results')}
-                        className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer"
-                      >
-                        View Full Report
-                      </button>
-                    </div>
-                    {summary.rows.length === 0 ? (
-                      <div className="py-6 text-center text-xs text-slate-500 dark:text-slate-400">
-                        No graded subjects for {selectedTerm}.
-                      </div>
-                    ) : (
-                      <div className="divide-y divide-slate-100 dark:divide-slate-800/80">
-                        {summary.rows.slice(0, 6).map((r) => (
-                          <div
-                            key={r.assessment.id}
-                            className="py-2 flex items-center justify-between gap-3 text-xs"
-                          >
-                            <span className="font-medium text-slate-800 dark:text-slate-200 truncate">
-                              {r.assessment.subject}
-                            </span>
-                            <div className="flex items-center gap-3 font-mono tabular-nums shrink-0">
-                              <span className="text-slate-600 dark:text-slate-300">
-                                {r.totalScore.toFixed(1)}%
-                              </span>
-                              <span
-                                className={`font-bold ${
-                                  r.gradePoint <= 6
-                                    ? 'text-emerald-700 dark:text-emerald-400'
-                                    : r.gradePoint <= 8
-                                    ? 'text-amber-700 dark:text-amber-400'
-                                    : 'text-rose-600 dark:text-rose-400'
-                                }`}
-                              >
-                                {r.grade}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                        Recent Fee Payment Proofs
-                      </h2>
-                      <button
-                        type="button"
-                        onClick={() => handleSelectTab('fees')}
-                        className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer"
-                      >
-                        Upload Reference
-                      </button>
-                    </div>
-                    {feeSubmissions.length === 0 ? (
-                      <div className="py-6 text-center text-xs text-slate-500 dark:text-slate-400">
-                        No payment references uploaded yet.
-                      </div>
-                    ) : (
-                      <div className="divide-y divide-slate-100 dark:divide-slate-800/80">
-                        {feeSubmissions.slice(0, 5).map((sub) => (
-                          <div
-                            key={sub.id}
-                            className="py-2.5 flex items-center justify-between gap-3 text-xs"
-                          >
-                            <div className="min-w-0">
-                              <div className="font-semibold text-slate-900 dark:text-slate-100 font-mono tabular-nums">
-                                {formatMWK(sub.amount)} · {sub.method}
-                              </div>
-                              <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 truncate">
-                                {sub.term} · {sub.submittedDate}
-                                {sub.reference ? ` · ${sub.reference}` : ''}
-                              </div>
-                            </div>
-                            <span
-                              className={`font-semibold shrink-0 ${
-                                sub.status === 'Approved'
-                                  ? 'text-emerald-700 dark:text-emerald-400'
-                                  : sub.status === 'Rejected'
-                                  ? 'text-rose-600 dark:text-rose-400'
-                                  : 'text-amber-700 dark:text-amber-400'
-                              }`}
-                            >
-                              {sub.status}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </section>
-              </div>
+              <StudentPortalDashboard
+                portal={activePortal}
+                assessments={assessments}
+                summary={summary}
+                selectedTerm={selectedTerm}
+                termCounts={termCounts}
+                fallbackTermWithMarks={fallbackTermWithMarks}
+                reportCardPayload={reportCardPayload}
+                activeTermRemark={activeTermRemark}
+                announcements={announcements}
+                libraryLoans={libraryLoans}
+                libraryAlerts={libraryAlerts}
+                activeBorrowedLoansCount={activeBorrowedLoansCount}
+                readyReservationsCount={readyReservationsCount}
+                offlineSavedCount={offlineIds.size}
+                digitalResourcesCount={mergedDigitalResources.length}
+                feeInvoices={feeInvoices}
+                feeSubmissions={feeSubmissions}
+                feeTotals={feeTotals}
+                loadingResults={loadingResults}
+                pdfFeedback={pdfFeedback}
+                onSelectTerm={handleSelectTerm}
+                onDownloadPdf={handleDownloadPdf}
+                onNavigateTab={handleSelectTab}
+              />
             )}
 
-            {/* SECTION 2: EXAM RESULTS */}
+            {/* SECTION 2: CONTINUOUS ASSESSMENTS, EXAM RESULTS & REPORT CARD */}
             {activeTab === 'results' && (
               <>
-                <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3">
+                <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 print:hidden">
                   <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-900">
                     {TERMS.map((t) => (
                       <button
                         key={t}
                         type="button"
-                        onClick={() => setSelectedTerm(t)}
+                        onClick={() => handleSelectTerm(t)}
                         className={`min-h-[36px] px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${
                           selectedTerm === t
                             ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
@@ -1729,6 +1656,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                         }`}
                       >
                         {t}
+                        {termCounts[t] > 0 ? ` (${termCounts[t]})` : ''}
                       </button>
                     ))}
                   </div>
@@ -1741,7 +1669,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                       className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap shrink-0 cursor-pointer"
                     >
                       <Printer className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>Print Report</span>
+                      <span>Print Report Card</span>
                     </button>
                     <button
                       type="button"
@@ -1754,6 +1682,19 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                     </button>
                   </div>
                 </section>
+
+                {pdfFeedback && (
+                  <div
+                    role="status"
+                    className={`rounded-xl px-4 py-2.5 text-xs font-medium border print:hidden ${
+                      pdfFeedback.type === 'success'
+                        ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900/60 text-emerald-800 dark:text-emerald-300'
+                        : 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-900/60 text-rose-800 dark:text-rose-300'
+                    }`}
+                  >
+                    {pdfFeedback.text}
+                  </div>
+                )}
 
                 {/* Summary KPIs */}
                 <section className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
@@ -1851,24 +1792,47 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
               </section>
             )}
 
-            {/* Subject Results Table */}
+            {/* Official Student Term Report Card & Continuous Assessment Table */}
             <section className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
-              <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <Award className="w-4 h-4 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
-                  <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                    {selectedTerm} Examination Results
-                  </h2>
+              <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 bg-slate-50/60 dark:bg-slate-900/40">
+                <div className="flex items-center gap-2.5">
+                  <Award className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" aria-hidden="true" />
+                  <div>
+                    <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      Official {selectedTerm} Report Card &amp; Continuous Assessments
+                    </h2>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      {activePortal.schoolName} · {activePortal.academicYear} · Weights: CA 1 (20%) + CA 2 (20%) + Summative (60%)
+                    </p>
+                  </div>
                 </div>
+                {summary.rows.length > 0 && (
+                  <span className="text-xs font-mono font-semibold text-emerald-700 dark:text-emerald-400">
+                    {summary.system} Standing: {summary.standing.outcome}
+                  </span>
+                )}
               </div>
 
               {loadingResults ? (
                 <div className="py-12 text-center text-sm text-slate-500 dark:text-slate-400">
-                  Loading exam results...
+                  Loading continuous assessments and report card...
                 </div>
               ) : summary.rows.length === 0 ? (
-                <div className="py-12 px-6 text-center text-sm text-slate-500 dark:text-slate-400">
-                  No published marks for {selectedTerm} ({activePortal.academicYear}).
+                <div className="py-12 px-6 text-center space-y-3 text-sm text-slate-500 dark:text-slate-400">
+                  <div>
+                    No published marks for {selectedTerm} ({activePortal.academicYear}).
+                  </div>
+                  {fallbackTermWithMarks && (
+                    <button
+                      type="button"
+                      onClick={() => handleSelectTerm(fallbackTermWithMarks)}
+                      className="inline-flex items-center gap-1.5 min-h-[36px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer"
+                    >
+                      <span>
+                        View {fallbackTermWithMarks} Results ({termCounts[fallbackTermWithMarks]})
+                      </span>
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -1891,7 +1855,12 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                         return (
                           <tr key={a.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30">
                             <td className="py-3 px-4 font-medium text-slate-900 dark:text-slate-100">
-                              {a.subject}
+                              <div>{a.subject}</div>
+                              {a.teacherComment && (
+                                <div className="mt-0.5 text-[11px] font-normal text-slate-500 dark:text-slate-400 max-w-xs">
+                                  {a.teacherComment}
+                                </div>
+                              )}
                             </td>
                             <td className="py-3 px-3 text-right font-mono tabular-nums">
                               {r.hasCa1 ? (
@@ -1986,6 +1955,49 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                       </tr>
                     </tfoot>
                   </table>
+                </div>
+              )}
+
+              {reportCardPayload && (
+                <div className="px-5 py-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/40 space-y-2.5 text-xs">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <span className="font-semibold text-slate-700 dark:text-slate-200">
+                        Form Teacher Remark
+                        {reportCardPayload.formTeacherName
+                          ? ` (${reportCardPayload.formTeacherName})`
+                          : ''}
+                        :{' '}
+                      </span>
+                      <span className="text-slate-600 dark:text-slate-300">
+                        {reportCardPayload.formTeacherRemark}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="font-semibold text-slate-700 dark:text-slate-200">
+                        Head Teacher Remark
+                        {reportCardPayload.headTeacherName
+                          ? ` (${reportCardPayload.headTeacherName})`
+                          : ''}
+                        :{' '}
+                      </span>
+                      <span className="text-slate-600 dark:text-slate-300">
+                        {reportCardPayload.headTeacherRemark}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+                    <span>
+                      {activePortal.formLevel <= 2
+                        ? 'JCE Key: A (80–100% Distinction) · B (70–79% Very Good) · C (60–69% Credit) · D (50–59% Pass) · F (0–49% Fail)'
+                        : 'MSCE Key: 1–2 (75–100% Distinction) · 3 (70–74% Strong Credit) · 4–6 (55–69% Credit) · 7–8 (40–54% Pass) · 9 (0–39% Fail)'}
+                    </span>
+                    {reportCardPayload.nextTermOpens && (
+                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                        Next Term Opens: {reportCardPayload.nextTermOpens}
+                      </span>
+                    )}
+                  </div>
                 </div>
               )}
             </section>
@@ -3365,7 +3377,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
           <div className="w-full grid grid-cols-3 items-stretch">
             {(
               [
-                { id: 'results', label: 'Exam Results', icon: Award },
+                { id: 'results', label: 'Results & Report', icon: Award },
                 { id: 'library', label: 'Library', icon: BookOpen },
                 { id: 'fees', label: 'Fees', icon: Banknote },
               ] as const

@@ -1,7 +1,32 @@
 import { doc, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { auth, db, handleFirestoreError, OperationType } from '../firebase';
+import {
+  OutstandingSmsRecipient,
+  renderPaymentReminderMessage,
+  wasLowBalanceAlertSentRecently,
+} from './bulkSmsUtils';
 import { formatMalawiSmsPhone, formatMWK, formatSmsSenderLabel } from './malawi';
-import { PaymentMethod, SmsConfig, SmsDeliveryStatus, SmsLog, SmsNotificationType, TermName } from './types';
+import {
+  PaymentMethod,
+  SmsConfig,
+  SmsDeliveryStatus,
+  SmsNotificationType,
+  TermName,
+} from './types';
+
+export {
+  buildOutstandingSmsRecipients,
+  DEFAULT_PAYMENT_REMINDER_TEMPLATE,
+  filterOutstandingSmsRecipients,
+  renderPaymentReminderMessage,
+  SMS_REMINDER_PRESETS,
+  SMS_TEMPLATE_TOKENS,
+  wasLowBalanceAlertSentRecently,
+  type OutstandingSmsRecipient,
+  type RenderedSmsPreview,
+  type RenderPaymentReminderParams,
+  type SmsReminderPreset,
+} from './bulkSmsUtils';
 
 export interface SmsGatewayStatusResponse {
   configured: boolean;
@@ -23,7 +48,10 @@ export async function fetchSmsGatewayStatus(): Promise<SmsGatewayStatusResponse>
   }
 }
 
-export function buildDefaultSmsConfig(schoolName: string, ownerId: string): Omit<SmsConfig, 'id' | 'createdAt' | 'updatedAt'> {
+export function buildDefaultSmsConfig(
+  schoolName: string,
+  ownerId: string
+): Omit<SmsConfig, 'id' | 'createdAt' | 'updatedAt'> {
   return {
     ownerId,
     autoPaymentSms: true,
@@ -45,7 +73,10 @@ export async function saveSmsConfig(
   existsInDb: boolean
 ): Promise<void> {
   const path = `schools/${schoolId}/smsSettings/default`;
-  const cleanThreshold = Math.min(100000000, Math.max(0, Math.round(Number(input.lowBalanceThresholdMWK) || 0)));
+  const cleanThreshold = Math.min(
+    100000000,
+    Math.max(0, Math.round(Number(input.lowBalanceThresholdMWK) || 0))
+  );
   const cleanLabel = (input.senderLabel || 'SecSchoolHub').trim().slice(0, 40) || 'SecSchoolHub';
 
   try {
@@ -119,6 +150,7 @@ export interface DispatchSmsParams {
   totalBilledMWK: number;
   method?: PaymentMethod;
   receiptNo?: string;
+  customMessage?: string;
 }
 
 export interface DispatchSmsOutcome {
@@ -130,15 +162,20 @@ export interface DispatchSmsOutcome {
   errorReason: string;
 }
 
-export async function dispatchAndLogParentSms(params: DispatchSmsParams): Promise<DispatchSmsOutcome> {
+export async function dispatchAndLogParentSms(
+  params: DispatchSmsParams
+): Promise<DispatchSmsOutcome> {
   const smsId = `sms_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
   const path = `schools/${params.schoolId}/smsLogs/${smsId}`;
   const cleanSender = (params.senderLabel || 'SecSchoolHub').trim().slice(0, 40) || 'SecSchoolHub';
   const cleanStudentName = params.studentName.trim().slice(0, 120) || 'Student';
   const cleanGuardianName = params.guardianName.trim().slice(0, 120) || 'Parent/Guardian';
+  const customCleaned = (params.customMessage || '').replace(/\s+/g, ' ').trim().slice(0, 320);
 
   const message =
-    params.type === 'Payment Confirmation'
+    customCleaned.length > 0
+      ? customCleaned
+      : params.type === 'Payment Confirmation'
       ? buildPaymentConfirmationSms({
           senderLabel: cleanSender,
           studentName: cleanStudentName,
@@ -169,9 +206,15 @@ export async function dispatchAndLogParentSms(params: DispatchSmsParams): Promis
     errorReason = 'Guardian phone missing or invalid (+265 format required).';
   } else {
     try {
+      const idToken = await auth.currentUser?.getIdToken().catch(() => undefined);
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (idToken) {
+        headers.Authorization = `Bearer ${idToken}`;
+      }
+
       const response = await fetch('/api/sms/send', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           to: normalizedPhone,
           message,
@@ -185,15 +228,22 @@ export async function dispatchAndLogParentSms(params: DispatchSmsParams): Promis
         provider?: string;
         providerRef?: string;
         errorReason?: string;
+        error?: string;
       };
       status = result.status || (response.ok ? 'Simulated' : 'Failed');
-      provider = String(result.provider || 'Gateway').slice(0, 40);
+      provider = String(result.provider || (response.status === 401 ? 'Auth Required' : 'Gateway')).slice(
+        0,
+        40
+      );
       providerRef = String(result.providerRef || '').slice(0, 100);
-      errorReason = String(result.errorReason || '').slice(0, 160);
+      errorReason = String(
+        result.errorReason || result.error || (response.ok ? '' : `HTTP ${response.status}`)
+      ).slice(0, 160);
     } catch (err) {
       status = 'Failed';
       provider = 'Network Error';
-      errorReason = err instanceof Error ? err.message.slice(0, 150) : 'Unable to reach SMS gateway.';
+      errorReason =
+        err instanceof Error ? err.message.slice(0, 150) : 'Unable to reach SMS gateway.';
     }
   }
 
@@ -232,20 +282,85 @@ export async function dispatchAndLogParentSms(params: DispatchSmsParams): Promis
   };
 }
 
-export function wasLowBalanceAlertSentRecently(
-  smsLogs: SmsLog[],
-  invoiceId: string,
-  balanceMWK: number
-): boolean {
-  const nowMs = Date.now();
-  const oneDayMs = 24 * 60 * 60 * 1000;
-  return smsLogs.some((log) => {
-    if (log.invoiceId !== invoiceId) return false;
-    if (log.type !== 'Low Balance Alert') return false;
-    if (log.status !== 'Sent' && log.status !== 'Simulated') return false;
-    if (Math.round(log.balanceAfterMWK) !== Math.round(balanceMWK)) return false;
-    const createdMs = log.createdAt?.toMillis?.();
-    if (!createdMs) return true; // Optimistic guard for just-written pending timestamps
-    return nowMs - createdMs < oneDayMs;
-  });
+export interface BulkSmsDispatchSummary {
+  total: number;
+  sentCount: number;
+  simulatedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  outcomes: Array<{
+    studentName: string;
+    guardianPhone: string;
+    status: SmsDeliveryStatus;
+    errorReason: string;
+  }>;
+}
+
+export async function dispatchBulkPaymentReminders(params: {
+  schoolId: string;
+  ownerId: string;
+  senderLabel: string;
+  targets: OutstandingSmsRecipient[];
+  template: string;
+  onProgress?: (completed: number, total: number, currentStudentName: string) => void;
+}): Promise<BulkSmsDispatchSummary> {
+  const { schoolId, ownerId, senderLabel, targets, template, onProgress } = params;
+  const summary: BulkSmsDispatchSummary = {
+    total: targets.length,
+    sentCount: 0,
+    simulatedCount: 0,
+    skippedCount: 0,
+    failedCount: 0,
+    outcomes: [],
+  };
+
+  for (let idx = 0; idx < targets.length; idx += 1) {
+    const item = targets[idx];
+    onProgress?.(idx + 1, targets.length, item.studentName);
+
+    const rendered = renderPaymentReminderMessage(template, {
+      senderLabel,
+      guardianName: item.guardianName,
+      studentName: item.studentName,
+      formClass: item.formClass,
+      term: item.invoice.term,
+      balanceMWK: item.balance,
+      totalBilledMWK: item.invoice.totalBilled,
+      totalPaidMWK: item.invoice.totalPaid,
+    });
+
+    const outcome = await dispatchAndLogParentSms({
+      schoolId,
+      ownerId,
+      senderLabel,
+      invoiceId: item.invoice.id,
+      studentId: item.invoice.studentId,
+      studentName: item.studentName,
+      guardianName: item.guardianName,
+      guardianPhoneRaw: item.rawPhone,
+      type: 'Low Balance Alert',
+      term: item.invoice.term,
+      amountMWK: 0,
+      balanceAfterMWK: item.balance,
+      totalBilledMWK: item.invoice.totalBilled,
+      customMessage: rendered.message,
+    });
+
+    if (outcome.status === 'Sent') summary.sentCount += 1;
+    else if (outcome.status === 'Simulated') summary.simulatedCount += 1;
+    else if (outcome.status === 'Skipped') summary.skippedCount += 1;
+    else summary.failedCount += 1;
+
+    summary.outcomes.push({
+      studentName: item.studentName,
+      guardianPhone: outcome.guardianPhone,
+      status: outcome.status,
+      errorReason: outcome.errorReason,
+    });
+  }
+
+  // Keep reference to helper explicit if tree-shaken checks look at imports
+  void wasLowBalanceAlertSentRecently;
+
+  return summary;
 }

@@ -13,6 +13,7 @@ import {
   Sun,
   ShieldAlert,
   Clock,
+  Camera,
 } from 'lucide-react';
 import {
   auth,
@@ -26,6 +27,8 @@ import {
 import {
   Assessment,
   AttendanceRecord,
+  BackupSettings,
+  BackupSnapshotLog,
   DigitalLibraryResource,
   FeeInvoice,
   FeePayment,
@@ -45,6 +48,7 @@ import {
   Student,
   StudentCase,
   StudentFeeSubmission,
+  StudentReportRemark,
   Teacher,
   TimebookAuditLog,
   TimebookCorrectionRequest,
@@ -52,8 +56,20 @@ import {
   TimebookSuspiciousLog,
   WorkspaceRole,
 } from './school/types';
-import { getRolePermissions, normalizeRegistrationCode } from './school/malawi';
-import { syncMissingPortalFeeInvoices, upsertUserProfile } from './school/firestoreService';
+import {
+  getRolePermissions,
+  normalizeRegistrationCode,
+  sortStudentsForRegister,
+} from './school/malawi';
+import {
+  syncMissingPortalFeeInvoices,
+  syncMissingPortalResults,
+  updateOwnUserProfilePhoto,
+  upsertUserProfile,
+} from './school/firestoreService';
+import { getStudentInitials, isValidStudentPhotoDataUrl } from './school/studentPhotoHelper';
+import { isScheduledBackupDue } from './school/backupSnapshotUtils';
+import { runFullSchoolBackup } from './school/backupService';
 import { buildDefaultTimebookSettings } from './school/timebookUtils';
 import { syncTimebookPolicyToServer } from './school/timebookApi';
 import { SchoolOnboarding } from './components/school/SchoolOnboarding';
@@ -65,6 +81,7 @@ import { SchoolLibrary } from './components/school/SchoolLibrary';
 import { StaffAndSettings } from './components/school/StaffAndSettings';
 import { StaffTimebookStaffView } from './components/school/StaffTimebookStaffView';
 import { StudentResultsPortal } from './components/school/StudentResultsPortal';
+import { StudentPhotoCaptureModal } from './components/school/StudentPhotoCaptureModal';
 import { LandingPage } from './components/school/LandingPage';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
@@ -123,12 +140,18 @@ export default function App() {
     }
     return 'overview';
   });
+  const [userPhotoDataUrl, setUserPhotoDataUrl] = useState('');
+  const [userPhotoFailed, setUserPhotoFailed] = useState(false);
+  const [userPhotoModalOpen, setUserPhotoModalOpen] = useState(false);
+  const [savingUserPhoto, setSavingUserPhoto] = useState(false);
+  const [userPhotoError, setUserPhotoError] = useState('');
+
   const [studentsLaunch, setStudentsLaunch] = useState<{
-    tab: 'directory' | 'attendance' | 'cases';
+    tab: 'directory' | 'gallery' | 'attendance' | 'cases';
     nonce: number;
   } | null>(null);
   const [staffLaunch, setStaffLaunch] = useState<{
-    tab: 'directory' | 'timebook';
+    tab: 'directory' | 'timebook' | 'backups';
     nonce: number;
   } | null>(null);
   const [libraryLaunch, setLibraryLaunch] = useState<{
@@ -166,6 +189,7 @@ export default function App() {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [schoolSubjects, setSchoolSubjects] = useState<SchoolSubject[]>([]);
   const [assessments, setAssessments] = useState<Assessment[]>([]);
+  const [reportRemarks, setReportRemarks] = useState<StudentReportRemark[]>([]);
   const [invoices, setInvoices] = useState<FeeInvoice[]>([]);
   const [payments, setPayments] = useState<FeePayment[]>([]);
   const [feeSubmissions, setFeeSubmissions] = useState<StudentFeeSubmission[]>([]);
@@ -189,7 +213,12 @@ export default function App() {
   const [timebookSuspiciousLogs, setTimebookSuspiciousLogs] = useState<TimebookSuspiciousLog[]>(
     []
   );
+  const [backupSettings, setBackupSettings] = useState<BackupSettings | null>(null);
+  const [backupLogs, setBackupLogs] = useState<BackupSnapshotLog[]>([]);
+  const [autoBackupInFlight, setAutoBackupInFlight] = useState(false);
+  const autoBackupRunningRef = useRef(false);
   const syncedFeeMirrorRef = useRef<Set<string>>(new Set());
+  const syncedResultMirrorRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     testConnection();
@@ -244,6 +273,10 @@ export default function App() {
         setTimebookCorrectionRequests([]);
         setTimebookAuditLogs([]);
         setTimebookSuspiciousLogs([]);
+        setBackupSettings(null);
+        setBackupLogs([]);
+        setUserPhotoDataUrl('');
+        setUserPhotoFailed(false);
         return;
       }
 
@@ -255,10 +288,18 @@ export default function App() {
         ]);
         setIsAdminDoc(Boolean(adminSnap?.exists()));
         if (profileSnap.exists()) {
-          const data = profileSnap.data() as { activeSchoolId?: string };
+          const data = profileSnap.data() as { activeSchoolId?: string; photoDataUrl?: string };
           if (data.activeSchoolId) {
             setActiveSchoolId(data.activeSchoolId);
           }
+          setUserPhotoDataUrl(
+            data.photoDataUrl && isValidStudentPhotoDataUrl(data.photoDataUrl)
+              ? data.photoDataUrl
+              : ''
+          );
+          setUserPhotoFailed(false);
+        } else {
+          setUserPhotoDataUrl('');
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message.toLowerCase() : '';
@@ -470,6 +511,7 @@ export default function App() {
       setTeachers([]);
       setSchoolSubjects([]);
       setAssessments([]);
+      setReportRemarks([]);
       setInvoices([]);
       setPayments([]);
       setSmsLogs([]);
@@ -523,7 +565,11 @@ export default function App() {
       onSnapshot(
         query(collection(db, 'schools', schoolId, 'students'), where('ownerId', '==', schoolOwnerId)),
         (snap) => {
-          setStudents(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Student, 'id'>) })));
+          const list = snap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<Student, 'id'>),
+          }));
+          setStudents(sortStudentsForRegister(list));
         },
         (err) => handleFirestoreError(err, OperationType.LIST, `schools/${schoolId}/students`)
       )
@@ -572,8 +618,20 @@ export default function App() {
           (err) => handleFirestoreError(err, OperationType.LIST, `schools/${schoolId}/assessments`)
         )
       );
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'schools', schoolId, 'reportRemarks'), where('ownerId', '==', schoolOwnerId)),
+          (snap) => {
+            setReportRemarks(
+              snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<StudentReportRemark, 'id'>) }))
+            );
+          },
+          (err) => handleFirestoreError(err, OperationType.LIST, `schools/${schoolId}/reportRemarks`)
+        )
+      );
     } else {
       setAssessments([]);
+      setReportRemarks([]);
     }
 
     if (rolePermissions.canReadFees) {
@@ -881,6 +939,43 @@ export default function App() {
       setDigitalLibraryResources([]);
     }
 
+    if (isTrueOwner && rolePermissions.role === 'Owner') {
+      unsubs.push(
+        onSnapshot(
+          doc(db, 'schools', schoolId, 'backupSettings', 'default'),
+          (snap) => {
+            if (snap.exists()) {
+              setBackupSettings({
+                id: snap.id,
+                ...(snap.data() as Omit<BackupSettings, 'id'>),
+              });
+            } else {
+              setBackupSettings(null);
+            }
+          },
+          (err) =>
+            handleFirestoreError(err, OperationType.GET, `schools/${schoolId}/backupSettings/default`)
+        )
+      );
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, 'schools', schoolId, 'backupLogs'), where('ownerId', '==', schoolOwnerId)),
+          (snap) => {
+            const list = snap.docs.map((d) => ({
+              id: d.id,
+              ...(d.data() as Omit<BackupSnapshotLog, 'id'>),
+            }));
+            list.sort((a, b) => (b.completedAtIso || '').localeCompare(a.completedAtIso || ''));
+            setBackupLogs(list);
+          },
+          (err) => handleFirestoreError(err, OperationType.LIST, `schools/${schoolId}/backupLogs`)
+        )
+      );
+    } else {
+      setBackupSettings(null);
+      setBackupLogs([]);
+    }
+
     return () => {
       for (const unsub of unsubs) {
         unsub();
@@ -891,6 +986,7 @@ export default function App() {
     authReady,
     canReadSubjects,
     effectivePortalMode,
+    isTrueOwner,
     rolePermissions.canReadAttendance,
     rolePermissions.canReadFees,
     rolePermissions.canReadLibrary,
@@ -898,6 +994,7 @@ export default function App() {
     rolePermissions.canReadStaffAttendance,
     rolePermissions.canManageTimebook,
     rolePermissions.canReadTeachers,
+    rolePermissions.role,
     user,
   ]);
 
@@ -914,6 +1011,55 @@ export default function App() {
       teachers,
     }).catch(() => undefined);
   }, [activeSchool, rolePermissions.canManageTimebook, teachers, timebookSettings, user]);
+
+  // Automated Firestore database backup scheduler for verified School Owners
+  useEffect(() => {
+    if (!activeSchool || !user || !isTrueOwner || rolePermissions.role !== 'Owner') return;
+    if (!backupSettings?.autoBackupEnabled) return;
+
+    const cooldownKey = `secschoolhub_autobackup_attempt_${activeSchool.id}`;
+
+    const maybeTriggerScheduledBackup = async () => {
+      if (autoBackupRunningRef.current) return;
+      if (!isScheduledBackupDue(backupSettings, Date.now())) return;
+      try {
+        const lastAttempt = Number(window.sessionStorage.getItem(cooldownKey) || '0');
+        if (Number.isFinite(lastAttempt) && Date.now() - lastAttempt < 15 * 60 * 1000) {
+          return;
+        }
+        window.sessionStorage.setItem(cooldownKey, String(Date.now()));
+      } catch {
+        // Ignore sessionStorage errors
+      }
+
+      autoBackupRunningRef.current = true;
+      setAutoBackupInFlight(true);
+      try {
+        await runFullSchoolBackup({
+          school: activeSchool,
+          triggerType: 'automated',
+          preferredTarget: backupSettings.storageTarget,
+          existingSettings: backupSettings,
+          existingLogs: backupLogs,
+          triggeredByName: user.displayName || user.email || 'School Owner',
+        });
+      } catch {
+        // Recorded in backupLogs as Failed; cooldown prevents retry loops
+      } finally {
+        autoBackupRunningRef.current = false;
+        setAutoBackupInFlight(false);
+      }
+    };
+
+    void maybeTriggerScheduledBackup();
+    const interval = window.setInterval(() => {
+      void maybeTriggerScheduledBackup();
+    }, 15 * 60 * 1000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [activeSchool, backupLogs, backupSettings, isTrueOwner, rolePermissions.role, user]);
 
   const matchedTimebookTeacher: Teacher | null = useMemo(() => {
     if (activeStaffLink) {
@@ -955,6 +1101,31 @@ export default function App() {
       () => undefined
     );
   }, [activeSchool, invoices, rolePermissions.canWriteFees, students]);
+
+  // Backfill any missing or out-of-sync CA / exam marks onto student portal mirrors
+  useEffect(() => {
+    if (
+      !activeSchool ||
+      (!rolePermissions.canWriteMarks && !rolePermissions.canManageStudents) ||
+      students.length === 0 ||
+      assessments.length === 0
+    ) {
+      return;
+    }
+    const codedCount = students.filter((s) => (s.registrationCode || '').trim().length >= 6).length;
+    const syncKey = `${activeSchool.id}_${students.length}_${codedCount}_${assessments.length}`;
+    if (syncedResultMirrorRef.current.has(syncKey)) return;
+    syncedResultMirrorRef.current.add(syncKey);
+    syncMissingPortalResults(activeSchool, activeSchool.ownerId, students, assessments, {
+      canCreatePortal: rolePermissions.canManageStudents,
+    }).catch(() => undefined);
+  }, [
+    activeSchool,
+    assessments,
+    rolePermissions.canManageStudents,
+    rolePermissions.canWriteMarks,
+    students,
+  ]);
 
   const handleGoogleSignIn = async () => {
     setAuthError('');
@@ -1311,15 +1482,52 @@ export default function App() {
               </select>
             </div>
           )}
-          <div className="text-xs">
-            <div className="font-semibold text-emerald-700 dark:text-emerald-400 truncate">
-              {rolePermissions.roleLabel}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setUserPhotoError('');
+                setUserPhotoModalOpen(true);
+              }}
+              title="Set or update your profile photo"
+              aria-label="Set or update your profile photo"
+              className="relative shrink-0 w-10 h-10 rounded-full border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 overflow-hidden flex items-center justify-center cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-600"
+            >
+              {userPhotoDataUrl && !userPhotoFailed ? (
+                <img
+                  src={userPhotoDataUrl}
+                  alt={activeStaffLink?.staffName || user.displayName || 'User profile'}
+                  referrerPolicy="no-referrer"
+                  onError={() => setUserPhotoFailed(true)}
+                  className="w-full h-full object-cover rounded-full"
+                />
+              ) : (
+                <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                  {getStudentInitials(activeStaffLink?.staffName || user.displayName || user.email || 'U')}
+                </span>
+              )}
+            </button>
+            <div className="text-xs min-w-0 flex-1">
+              <div className="font-semibold text-emerald-700 dark:text-emerald-400 truncate">
+                {rolePermissions.roleLabel}
+              </div>
+              <div className="font-semibold text-slate-900 dark:text-slate-100 truncate mt-0.5">
+                {activeStaffLink?.staffName || user.displayName || 'Administrator'}
+              </div>
+              <div className="text-slate-500 dark:text-slate-400 truncate">{user.email}</div>
             </div>
-            <div className="font-semibold text-slate-900 dark:text-slate-100 truncate mt-0.5">
-              {activeStaffLink?.staffName || user.displayName || 'Administrator'}
-            </div>
-            <div className="text-slate-500 dark:text-slate-400 truncate">{user.email}</div>
           </div>
+          <button
+            type="button"
+            onClick={() => {
+              setUserPhotoError('');
+              setUserPhotoModalOpen(true);
+            }}
+            className="w-full min-h-[36px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+          >
+            <Camera className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+            <span>{userPhotoDataUrl ? 'Change Profile Photo' : 'Set Profile Photo'}</span>
+          </button>
           <button
             type="button"
             onClick={() => signOutUser()}
@@ -1401,6 +1609,30 @@ export default function App() {
               <PWAInstallButton variant="header" />
               <button
                 type="button"
+                onClick={() => {
+                  setUserPhotoError('');
+                  setUserPhotoModalOpen(true);
+                }}
+                title="Set or update your profile photo"
+                aria-label="Set or update your profile photo"
+                className="lg:hidden min-h-[38px] min-w-[38px] w-[38px] h-[38px] rounded-full border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 overflow-hidden flex items-center justify-center cursor-pointer"
+              >
+                {userPhotoDataUrl && !userPhotoFailed ? (
+                  <img
+                    src={userPhotoDataUrl}
+                    alt={activeStaffLink?.staffName || user.displayName || 'User profile'}
+                    referrerPolicy="no-referrer"
+                    onError={() => setUserPhotoFailed(true)}
+                    className="w-full h-full object-cover rounded-full"
+                  />
+                ) : (
+                  <span className="text-[11px] font-bold text-slate-700 dark:text-slate-200">
+                    {getStudentInitials(activeStaffLink?.staffName || user.displayName || user.email || 'U')}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
                 onClick={() => signOutUser()}
                 aria-label="Sign out"
                 className="lg:hidden min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 cursor-pointer"
@@ -1429,6 +1661,8 @@ export default function App() {
               studentCases={studentCases}
               libraryLoans={libraryLoans}
               announcements={announcements}
+              backupSettings={isTrueOwner && rolePermissions.role === 'Owner' ? backupSettings : null}
+              backupLogs={isTrueOwner && rolePermissions.role === 'Owner' ? backupLogs : []}
               authorDisplayName={activeStaffLink?.staffName || user.displayName || 'School Admin'}
               onNavigate={setActiveSection}
               onOpenStudents={(tab) => {
@@ -1478,9 +1712,12 @@ export default function App() {
               ownerId={activeSchool.ownerId}
               students={students}
               assessments={assessments}
+              reportRemarks={reportRemarks}
               attendance={rolePermissions.canReadAttendance ? attendance : []}
               schoolSubjects={schoolSubjects}
               canWriteMarks={rolePermissions.canWriteMarks}
+              currentStaffName={activeStaffLink?.staffName || user.displayName || 'Administrator'}
+              currentStaffRole={rolePermissions.roleLabel}
               onOpenStaffSettings={
                 rolePermissions.allowedSections.includes('staff')
                   ? () => setActiveSection('staff')
@@ -1546,6 +1783,10 @@ export default function App() {
               timebookCorrectionRequests={timebookCorrectionRequests}
               timebookAuditLogs={timebookAuditLogs}
               timebookSuspiciousLogs={timebookSuspiciousLogs}
+              backupSettings={isTrueOwner && rolePermissions.role === 'Owner' ? backupSettings : null}
+              backupLogs={isTrueOwner && rolePermissions.role === 'Owner' ? backupLogs : []}
+              autoBackupInFlight={autoBackupInFlight}
+              isSchoolOwner={isTrueOwner && rolePermissions.role === 'Owner'}
               canManageStaffAndSettings={rolePermissions.canManageStaff}
               canReadStaffAttendance={rolePermissions.canReadStaffAttendance}
               canManageTimebook={rolePermissions.canManageTimebook}
@@ -1593,6 +1834,47 @@ export default function App() {
           })}
         </div>
       </nav>
+
+      <StudentPhotoCaptureModal
+        open={userPhotoModalOpen}
+        mode="immediate"
+        headerLabel="My Profile Photo"
+        saveButtonLabel="Save My Profile Photo"
+        studentName={activeStaffLink?.staffName || user.displayName || 'School Staff'}
+        admissionNo={rolePermissions.roleLabel}
+        initialPhotoUrl={userPhotoDataUrl}
+        saving={savingUserPhoto}
+        saveError={userPhotoError}
+        onClose={() => {
+          if (!savingUserPhoto) {
+            setUserPhotoModalOpen(false);
+            setUserPhotoError('');
+          }
+        }}
+        onSavePhoto={async (photoDataUrl) => {
+          if (!user || !activeSchool) return;
+          setSavingUserPhoto(true);
+          setUserPhotoError('');
+          try {
+            await updateOwnUserProfilePhoto({
+              uid: user.uid,
+              displayName: activeStaffLink?.staffName || user.displayName || 'School Staff',
+              email: user.email || '',
+              activeSchoolId: activeSchool.id,
+              photoDataUrl,
+            });
+            setUserPhotoDataUrl(photoDataUrl);
+            setUserPhotoFailed(false);
+            setUserPhotoModalOpen(false);
+          } catch (err) {
+            setUserPhotoError(
+              err instanceof Error ? err.message : 'Unable to save profile photo.'
+            );
+          } finally {
+            setSavingUserPhoto(false);
+          }
+        }}
+      />
 
       <OfflineIndicator />
     </div>

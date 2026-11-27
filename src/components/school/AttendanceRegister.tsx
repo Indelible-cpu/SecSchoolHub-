@@ -7,7 +7,12 @@ import {
   School,
   Student,
 } from '../../school/types';
-import { FORM_LEVELS } from '../../school/malawi';
+import {
+  FORM_LEVELS,
+  getStudentGenderRegisterRank,
+  matchesStudentSearchQuery,
+  sortStudentsForRegister,
+} from '../../school/malawi';
 import { saveAttendanceEntry } from '../../school/firestoreService';
 
 const STUDENT_STATUS_OPTIONS: AttendanceStatus[] = ['Present', 'Absent', 'Late', 'Excused'];
@@ -36,15 +41,7 @@ export const StudentAttendancePanel: React.FC<StudentAttendancePanelProps> = ({
   const [actionError, setActionError] = useState('');
 
   const activeStudents = useMemo(
-    () =>
-      students
-        .filter((s) => s.status === 'Active')
-        .sort(
-          (a, b) =>
-            a.formLevel - b.formLevel ||
-            a.stream.localeCompare(b.stream) ||
-            a.fullName.localeCompare(b.fullName)
-        ),
+    () => sortStudentsForRegister(students.filter((s) => s.status === 'Active')),
     [students]
   );
 
@@ -64,19 +61,11 @@ export const StudentAttendancePanel: React.FC<StudentAttendancePanelProps> = ({
   }, [activeStudents, formFilter]);
 
   const filteredStudents = useMemo(() => {
-    const q = studentSearch.trim().toLowerCase();
     return formScopedStudents.filter((s) => {
       const rec = recordsByStudent.get(s.id);
       const statusLabel = rec?.status || 'Unmarked';
       if (studentStatusFilter !== 'all' && statusLabel !== studentStatusFilter) return false;
-      if (q) {
-        return (
-          s.fullName.toLowerCase().includes(q) ||
-          s.admissionNo.toLowerCase().includes(q) ||
-          `form ${s.formLevel}${s.stream}`.toLowerCase().includes(q)
-        );
-      }
-      return true;
+      return matchesStudentSearchQuery(s, studentSearch, { includeFormClass: true });
     });
   }, [formScopedStudents, recordsByStudent, studentSearch, studentStatusFilter]);
 
@@ -257,7 +246,7 @@ export const StudentAttendancePanel: React.FC<StudentAttendancePanelProps> = ({
                 type="search"
                 value={studentSearch}
                 onChange={(e) => setStudentSearch(e.target.value)}
-                placeholder="Search student or adm no..."
+                placeholder="Search surname, name, reg or adm code..."
                 className="w-full min-h-[38px] pl-8 pr-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs"
               />
             </div>
@@ -276,23 +265,37 @@ export const StudentAttendancePanel: React.FC<StudentAttendancePanelProps> = ({
           </div>
         ) : (
           <div className="divide-y divide-slate-100 dark:divide-slate-800/80">
-            {filteredStudents.map((s) => {
+            {filteredStudents.map((s, idx) => {
               const rec = recordsByStudent.get(s.id);
               const busy = savingStudentId === s.id;
+              const genderRank = getStudentGenderRegisterRank(s.gender);
+              const prevRank =
+                idx > 0 ? getStudentGenderRegisterRank(filteredStudents[idx - 1].gender) : null;
+              const showGroupHeader = idx === 0 || genderRank !== prevRank;
               return (
-                <div
-                  key={s.id}
-                  className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                >
-                  <div>
-                    <div className="font-semibold text-sm text-slate-900 dark:text-slate-100">
-                      {s.fullName}
+                <React.Fragment key={s.id}>
+                  {showGroupHeader && (
+                    <div className="px-4 py-2 bg-slate-50/90 dark:bg-slate-900/70 text-[11px] font-mono uppercase tracking-wider font-semibold text-slate-600 dark:text-slate-300">
+                      {genderRank === 0
+                        ? 'Boys (Upwards · A–Z)'
+                        : genderRank === 1
+                        ? 'Girls (Downwards · A–Z)'
+                        : 'Other'}
                     </div>
-                    <div className="text-xs text-slate-500 dark:text-slate-400 font-mono">
-                      {s.admissionNo} · Form {s.formLevel}{s.stream}
-                      {rec?.note ? ` · ${rec.note}` : ''}
+                  )}
+                  <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <div className="font-semibold text-sm text-slate-900 dark:text-slate-100">
+                        <span className="font-mono tabular-nums text-xs text-slate-400 mr-2">
+                          {idx + 1}.
+                        </span>
+                        {s.fullName}
+                      </div>
+                      <div className="text-xs text-slate-500 dark:text-slate-400 font-mono">
+                        {s.admissionNo} · {s.gender} · Form {s.formLevel}{s.stream}
+                        {rec?.note ? ` · ${rec.note}` : ''}
+                      </div>
                     </div>
-                  </div>
 
                   {canWriteAttendance ? (
                     <div className="grid grid-cols-4 gap-1.5 sm:w-auto w-full">
@@ -337,6 +340,7 @@ export const StudentAttendancePanel: React.FC<StudentAttendancePanelProps> = ({
                     </div>
                   )}
                 </div>
+                </React.Fragment>
               );
             })}
           </div>

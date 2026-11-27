@@ -9,6 +9,11 @@
         "displayName": { "type": "string", "maxLength": 120 },
         "email": { "type": "string", "maxLength": 160 },
         "activeSchoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "photoDataUrl": {
+          "type": "string",
+          "maxLength": 160000,
+          "description": "Bounded circular user profile avatar encoded as base64 JPEG/PNG/WebP data URL."
+        },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -82,6 +87,11 @@
         "emergencyNotes": { "type": "string", "maxLength": 240 },
         "studentEmail": { "type": "string", "maxLength": 160 },
         "registrationCode": { "type": "string", "maxLength": 32, "pattern": "^[A-Z0-9_\\-]*$" },
+        "photoDataUrl": {
+          "type": "string",
+          "maxLength": 160000,
+          "description": "Bounded square student portrait thumbnail encoded as base64 JPEG/PNG/WebP data URL."
+        },
         "status": {
           "type": "string",
           "enum": ["Active", "Transferred", "Suspended", "Rusticated", "Graduated"],
@@ -178,6 +188,7 @@
         "grade": { "type": "string", "maxLength": 10 },
         "gradePoint": { "type": "number" },
         "remark": { "type": "string", "maxLength": 40 },
+        "teacherComment": { "type": "string", "maxLength": 240 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -650,6 +661,7 @@
         "grade": { "type": "string", "maxLength": 10 },
         "gradePoint": { "type": "number" },
         "remark": { "type": "string", "maxLength": 40 },
+        "teacherComment": { "type": "string", "maxLength": 240 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -1603,6 +1615,130 @@
         "serverTimeIso",
         "createdAt"
       ]
+    },
+    "BackupSettings": {
+      "title": "BackupSettings",
+      "description": "Automated Firestore snapshot backup schedule, retention policy, and destination storage bucket target per school.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "schoolId": { "type": "string", "maxLength": 128 },
+        "autoBackupEnabled": { "type": "boolean" },
+        "cadence": { "type": "string", "enum": ["daily", "weekly"], "maxLength": 16 },
+        "preferredHourUTC": { "type": "number" },
+        "retentionCount": { "type": "number" },
+        "storageTarget": { "type": "string", "enum": ["firebase-storage", "cloud-bucket"], "maxLength": 32 },
+        "lastBackupAtIso": { "type": "string", "maxLength": 40 },
+        "lastBackupId": { "type": "string", "maxLength": 128 },
+        "lastBackupStatus": { "type": "string", "enum": ["Never", "Completed", "Failed"], "maxLength": 20 },
+        "nextBackupDueIso": { "type": "string", "maxLength": 40 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "updatedByName": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "autoBackupEnabled",
+        "cadence",
+        "preferredHourUTC",
+        "retentionCount",
+        "storageTarget",
+        "lastBackupAtIso",
+        "lastBackupId",
+        "lastBackupStatus",
+        "nextBackupDueIso",
+        "updatedByUid",
+        "updatedByName",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "BackupSnapshotLog": {
+      "title": "BackupSnapshotLog",
+      "description": "Immutable audit record of full Firestore snapshot exports to a secure storage bucket.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "schoolId": { "type": "string", "maxLength": 128 },
+        "snapshotId": { "type": "string", "maxLength": 128 },
+        "triggerType": { "type": "string", "enum": ["manual", "automated"], "maxLength": 20 },
+        "storageTarget": { "type": "string", "enum": ["firebase-storage", "cloud-bucket", "server-vault"], "maxLength": 32 },
+        "bucketName": { "type": "string", "maxLength": 160 },
+        "objectPath": { "type": "string", "maxLength": 320 },
+        "status": { "type": "string", "enum": ["Completed", "Failed"], "maxLength": 20 },
+        "totalDocuments": { "type": "number" },
+        "collectionCount": { "type": "number" },
+        "sizeBytes": { "type": "number" },
+        "checksumSha256": { "type": "string", "maxLength": 128 },
+        "downloadUrl": { "type": "string", "maxLength": 1024 },
+        "triggeredByUid": { "type": "string", "maxLength": 128 },
+        "triggeredByName": { "type": "string", "maxLength": 120 },
+        "completedAtIso": { "type": "string", "maxLength": 40 },
+        "errorReason": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "snapshotId",
+        "triggerType",
+        "storageTarget",
+        "bucketName",
+        "objectPath",
+        "status",
+        "totalDocuments",
+        "collectionCount",
+        "sizeBytes",
+        "checksumSha256",
+        "downloadUrl",
+        "triggeredByUid",
+        "triggeredByName",
+        "completedAtIso",
+        "errorReason",
+        "createdAt"
+      ]
+    },
+    "StudentReportRemark": {
+      "title": "Student Term Report Card Remarks",
+      "description": "Published Form Teacher & Head Teacher term remarks and next-term opening notice synced between school records and the student registration-code portal.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "registrationCode": { "type": "string", "maxLength": 32, "pattern": "^[A-Z0-9_\\-]*$" },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "formLevel": { "type": "number" },
+        "stream": { "type": "string", "maxLength": 20 },
+        "term": { "type": "string", "enum": ["Term 1", "Term 2", "Term 3"], "maxLength": 20 },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "formTeacherRemark": { "type": "string", "maxLength": 500 },
+        "headTeacherRemark": { "type": "string", "maxLength": 500 },
+        "nextTermOpens": { "type": "string", "maxLength": 80 },
+        "formTeacherName": { "type": "string", "maxLength": 120 },
+        "headTeacherName": { "type": "string", "maxLength": 120 },
+        "updatedByName": { "type": "string", "maxLength": 120 },
+        "updatedByRole": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "schoolId",
+        "studentId",
+        "studentName",
+        "formLevel",
+        "stream",
+        "term",
+        "academicYear",
+        "formTeacherRemark",
+        "headTeacherRemark",
+        "nextTermOpens",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -1621,6 +1757,10 @@
     "/studentPortals/{registrationCode}/results/{assessmentId}": {
       "schema": { "$ref": "#/entities/StudentPortalResult" },
       "description": "Student exam results readable only via their administrator-issued registration code."
+    },
+    "/studentPortals/{registrationCode}/reportRemarks/{remarkId}": {
+      "schema": { "$ref": "#/entities/StudentReportRemark" },
+      "description": "Published term-level teacher and head teacher comments readable via the student registration code."
     },
     "/studentPortals/{registrationCode}/libraryLoans/{loanId}": {
       "schema": { "$ref": "#/entities/StudentPortalLibraryLoan" },
@@ -1689,6 +1829,10 @@
     "/schools/{schoolId}/assessments/{assessmentId}": {
       "schema": { "$ref": "#/entities/Assessment" },
       "description": "MANEB JCE/MSCE subject marks and grades."
+    },
+    "/schools/{schoolId}/reportRemarks/{remarkId}": {
+      "schema": { "$ref": "#/entities/StudentReportRemark" },
+      "description": "Published Form Teacher & Head Teacher term remarks and next-term opening notice per student and term."
     },
     "/schools/{schoolId}/feeInvoices/{invoiceId}": {
       "schema": { "$ref": "#/entities/FeeInvoice" },
@@ -1769,6 +1913,14 @@
     "/schools/{schoolId}/timebookSuspiciousLogs/{logId}": {
       "schema": { "$ref": "#/entities/TimebookSuspiciousLog" },
       "description": "Immutable security log of GPS spoofing, clock tampering, or unauthorized date attempts."
+    },
+    "/schools/{schoolId}/backupSettings/{configId}": {
+      "schema": { "$ref": "#/entities/BackupSettings" },
+      "description": "Owner-only automated Firestore database backup schedule and retention settings."
+    },
+    "/schools/{schoolId}/backupLogs/{backupId}": {
+      "schema": { "$ref": "#/entities/BackupSnapshotLog" },
+      "description": "Owner-only immutable log of completed and failed Firestore snapshot exports."
     }
   }
 }

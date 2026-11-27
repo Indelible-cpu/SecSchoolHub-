@@ -4,6 +4,7 @@ import {
   DigitalResourceCategory,
   DigitalResourceFormLevel,
   FormLevel,
+  Gender,
   LibraryItemCondition,
   LibraryLoan,
   LibraryMaterialCategory,
@@ -11,9 +12,11 @@ import {
   SchoolSubject,
   SchoolType,
   StaffAttendanceStatus,
+  Student,
   StudentCaseSeverity,
   StudentCaseStatus,
   StudentCaseType,
+  StudentReportRemark,
   StudentStatus,
   TermName,
   WorkspaceRole,
@@ -1257,3 +1260,411 @@ export function canRoleSeeAnnouncement(
   return list.includes('Teachers') || forStudents;
 }
 
+export function countStudentAssessmentsByTerm(
+  assessments: Pick<Assessment, 'term'>[]
+): Record<TermName, number> {
+  const counts: Record<TermName, number> = {
+    'Term 1': 0,
+    'Term 2': 0,
+    'Term 3': 0,
+  };
+  for (const a of assessments) {
+    if (a.term === 'Term 1' || a.term === 'Term 2' || a.term === 'Term 3') {
+      counts[a.term] += 1;
+    }
+  }
+  return counts;
+}
+
+export function resolveStudentPortalTerm(
+  preferredTerm: TermName,
+  assessments: Pick<Assessment, 'term'>[]
+): TermName {
+  if (assessments.some((a) => a.term === preferredTerm)) {
+    return preferredTerm;
+  }
+  const fallbackOrder: TermName[] = ['Term 3', 'Term 2', 'Term 1'];
+  for (const term of fallbackOrder) {
+    if (assessments.some((a) => a.term === term)) {
+      return term;
+    }
+  }
+  return preferredTerm;
+}
+
+export function makeReportRemarkId(
+  studentId: string,
+  term: TermName,
+  academicYear: string
+): string {
+  const safeStu = String(studentId || 'stu').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const safeTerm = String(term || 'Term_1').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const safeYear = String(academicYear || 'year').replace(/[^a-zA-Z0-9_-]/g, '_');
+  return `rmk_${safeStu}_${safeTerm}_${safeYear}`.slice(0, 128);
+}
+
+export function findStudentTermRemark(
+  remarks: StudentReportRemark[],
+  studentId: string,
+  term: TermName,
+  academicYear?: string
+): StudentReportRemark | null {
+  const matching = remarks.filter((r) => r.studentId === studentId && r.term === term);
+  if (matching.length === 0) return null;
+  const cleanYear = (academicYear || '').trim();
+  if (cleanYear) {
+    const exact = matching.find((r) => (r.academicYear || '').trim() === cleanYear);
+    if (exact) return exact;
+  }
+  const sorted = [...matching].sort(
+    (a, b) => (b.updatedAt?.toMillis?.() || 0) - (a.updatedAt?.toMillis?.() || 0)
+  );
+  return sorted[0] || null;
+}
+
+export function arePortalResultFieldsSynced(
+  portalDoc: Partial<Assessment>,
+  schoolAssessment: Assessment,
+  expectedStudentName: string
+): boolean {
+  const norm = normalizeAssessmentComponents(schoolAssessment);
+  const cleanName = expectedStudentName.trim().slice(0, 120);
+  const cleanStream = (schoolAssessment.stream || 'A').trim().slice(0, 20);
+  const cleanSubject = (schoolAssessment.subject || '').trim().slice(0, 60);
+  const cleanYear = (schoolAssessment.academicYear || '').trim().slice(0, 20);
+  const cleanComment = (schoolAssessment.teacherComment || '').trim().slice(0, 240);
+
+  return (
+    (portalDoc.studentName || '') === cleanName &&
+    portalDoc.formLevel === Math.round(schoolAssessment.formLevel) &&
+    (portalDoc.stream || '') === cleanStream &&
+    portalDoc.term === schoolAssessment.term &&
+    (portalDoc.academicYear || '') === cleanYear &&
+    (portalDoc.subject || '') === cleanSubject &&
+    portalDoc.ca1Raw === norm.ca1Raw &&
+    portalDoc.ca1Max === norm.ca1Max &&
+    portalDoc.ca1Score === norm.ca1Score &&
+    portalDoc.ca2Raw === norm.ca2Raw &&
+    portalDoc.ca2Max === norm.ca2Max &&
+    portalDoc.ca2Score === norm.ca2Score &&
+    portalDoc.caScore === norm.caScore &&
+    portalDoc.examRaw === norm.examRaw &&
+    portalDoc.examMax === norm.examMax &&
+    portalDoc.examScore === norm.examScore &&
+    portalDoc.totalScore === Number(schoolAssessment.totalScore) &&
+    portalDoc.grade === schoolAssessment.grade &&
+    portalDoc.gradePoint === Math.round(Number(schoolAssessment.gradePoint) || 9) &&
+    portalDoc.remark === schoolAssessment.remark &&
+    (portalDoc.teacherComment || '') === cleanComment
+  );
+}
+
+export interface RegisterSortableStudent {
+  id?: string;
+  fullName: string;
+  gender?: Gender | string;
+  formLevel?: FormLevel | number;
+  stream?: string;
+  admissionNo?: string;
+}
+
+export interface StudentRegisterSortOptions {
+  groupByForm?: boolean;
+  groupByStream?: boolean;
+}
+
+/**
+ * Canonical school register ordering:
+ * Boys ('Male') upwards (rank 0), Girls ('Female') downwards (rank 1).
+ */
+export function getStudentGenderRegisterRank(gender?: string): number {
+  const norm = String(gender ?? '').trim().toLowerCase();
+  if (norm === 'male' || norm === 'm' || norm === 'boy' || norm === 'boys') {
+    return 0;
+  }
+  if (norm === 'female' || norm === 'f' || norm === 'girl' || norm === 'girls') {
+    return 1;
+  }
+  return 2;
+}
+
+/**
+ * Compares two students using standard school register ordering:
+ * Boys upwards A–Z, followed by Girls downwards A–Z.
+ */
+export function compareStudentsRegisterOrder(
+  a: RegisterSortableStudent,
+  b: RegisterSortableStudent,
+  options: StudentRegisterSortOptions = {}
+): number {
+  if (options.groupByForm) {
+    const formCmp = (Number(a.formLevel) || 0) - (Number(b.formLevel) || 0);
+    if (formCmp !== 0) return formCmp;
+  }
+  if (options.groupByStream) {
+    const streamCmp = (a.stream || '')
+      .trim()
+      .localeCompare((b.stream || '').trim(), undefined, { sensitivity: 'base' });
+    if (streamCmp !== 0) return streamCmp;
+  }
+
+  const genderCmp =
+    getStudentGenderRegisterRank(a.gender) - getStudentGenderRegisterRank(b.gender);
+  if (genderCmp !== 0) return genderCmp;
+
+  const nameCmp = (a.fullName || '')
+    .trim()
+    .localeCompare((b.fullName || '').trim(), undefined, { sensitivity: 'base' });
+  if (nameCmp !== 0) return nameCmp;
+
+  const formTie = (Number(a.formLevel) || 0) - (Number(b.formLevel) || 0);
+  if (formTie !== 0) return formTie;
+
+  const streamTie = (a.stream || '')
+    .trim()
+    .localeCompare((b.stream || '').trim(), undefined, { sensitivity: 'base' });
+  if (streamTie !== 0) return streamTie;
+
+  const admTie = (a.admissionNo || '')
+    .trim()
+    .localeCompare((b.admissionNo || '').trim(), undefined, {
+      numeric: true,
+      sensitivity: 'base',
+    });
+  if (admTie !== 0) return admTie;
+
+  return (a.id || '').localeCompare(b.id || '');
+}
+
+export function sortStudentsForRegister<T extends RegisterSortableStudent>(
+  students: readonly T[],
+  options: StudentRegisterSortOptions = {}
+): T[] {
+  return [...students].sort((a, b) => compareStudentsRegisterOrder(a, b, options));
+}
+
+export function formatOrdinalRank(rank: number): string {
+  const n = Math.max(1, Math.round(rank));
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1:
+      return `${n}st`;
+    case 2:
+      return `${n}nd`;
+    case 3:
+      return `${n}rd`;
+    default:
+      return `${n}th`;
+  }
+}
+
+export type RankableAssessment = Pick<
+  Assessment,
+  | 'id'
+  | 'studentId'
+  | 'studentName'
+  | 'formLevel'
+  | 'stream'
+  | 'subject'
+  | 'totalScore'
+  | 'examScore'
+  | 'gradePoint'
+>;
+
+export interface RankedAssessmentEntry<T extends RankableAssessment> {
+  assessment: T;
+  rank: number;
+  ordinal: string;
+  totalEntries: number;
+  isTied: boolean;
+}
+
+/**
+ * Auto-ranks assessments from highest to lowest totalScore using standard
+ * competition ranking (1, 1, 3) for ties.
+ */
+export function rankAssessmentsByPerformance<T extends RankableAssessment>(
+  assessments: readonly T[],
+  studentsById?: ReadonlyMap<string, Pick<Student, 'gender' | 'fullName' | 'admissionNo' | 'formLevel' | 'stream' | 'id'>>
+): RankedAssessmentEntry<T>[] {
+  if (assessments.length === 0) return [];
+
+  const sorted = [...assessments].sort((a, b) => {
+    const scoreDiff = (Number(b.totalScore) || 0) - (Number(a.totalScore) || 0);
+    if (Math.abs(scoreDiff) >= 0.05) return scoreDiff;
+
+    const examDiff = (Number(b.examScore) || 0) - (Number(a.examScore) || 0);
+    if (Math.abs(examDiff) >= 0.05) return examDiff;
+
+    const gpDiff = (Number(a.gradePoint) || 9) - (Number(b.gradePoint) || 9);
+    if (gpDiff !== 0) return gpDiff;
+
+    const stuA = studentsById?.get(a.studentId);
+    const stuB = studentsById?.get(b.studentId);
+    if (stuA && stuB) {
+      const regCmp = compareStudentsRegisterOrder(stuA, stuB);
+      if (regCmp !== 0) return regCmp;
+    }
+
+    const nameCmp = (a.studentName || '')
+      .trim()
+      .localeCompare((b.studentName || '').trim(), undefined, { sensitivity: 'base' });
+    if (nameCmp !== 0) return nameCmp;
+
+    return (a.subject || '').localeCompare(b.subject || '', undefined, { sensitivity: 'base' }) ||
+      (a.id || '').localeCompare(b.id || '');
+  });
+
+  const totalEntries = sorted.length;
+  const ranks: number[] = new Array(totalEntries);
+  let currentRank = 1;
+  for (let i = 0; i < totalEntries; i += 1) {
+    if (i > 0) {
+      const prev = sorted[i - 1];
+      const curr = sorted[i];
+      const isSameScore =
+        Math.abs((Number(prev.totalScore) || 0) - (Number(curr.totalScore) || 0)) < 0.05;
+      if (!isSameScore) {
+        currentRank = i + 1;
+      }
+    }
+    ranks[i] = currentRank;
+  }
+
+  return sorted.map((assessment, i) => {
+    const rank = ranks[i];
+    const isTied =
+      (i > 0 && ranks[i - 1] === rank) ||
+      (i + 1 < totalEntries && ranks[i + 1] === rank);
+    return {
+      assessment,
+      rank,
+      ordinal: formatOrdinalRank(rank),
+      totalEntries,
+      isTied,
+    };
+  });
+}
+
+export interface StudentSearchTarget {
+  fullName?: string;
+  admissionNo?: string;
+  registrationCode?: string;
+  formLevel?: FormLevel | number;
+  stream?: string;
+  guardianName?: string;
+  guardianPhone?: string;
+  guardianSecondaryPhone?: string;
+  emergencyContactName?: string;
+  extraTerms?: Array<string | undefined | null>;
+}
+
+export interface StudentSearchOptions {
+  includeGuardian?: boolean;
+  includeFormClass?: boolean;
+}
+
+function compactSearchCode(val?: string | null): string {
+  return String(val ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s\-_]+/g, '');
+}
+
+function extractStudentNameTokens(fullName: string): string[] {
+  const cleaned = fullName
+    .trim()
+    .toLowerCase()
+    .replace(/[,]+/g, ' ')
+    .replace(/\s+/g, ' ');
+  if (!cleaned) return [];
+  return cleaned.split(' ').filter(Boolean);
+}
+
+/**
+ * Matches a student record against a search query by surname, any name part,
+ * full name, registration code, admission number, or optional form/guardian fields.
+ * Supports multi-word queries in any order (e.g. "Banda Chifundo" matches "Chifundo Banda").
+ */
+export function matchesStudentSearchQuery(
+  target: StudentSearchTarget,
+  rawQuery: string,
+  options: StudentSearchOptions = {}
+): boolean {
+  const trimmed = String(rawQuery ?? '').trim().toLowerCase();
+  if (!trimmed) return true;
+
+  const fullName = String(target.fullName ?? '').trim().toLowerCase();
+  const admissionNo = String(target.admissionNo ?? '').trim().toLowerCase();
+  const regCode = String(target.registrationCode ?? '').trim().toLowerCase();
+  const compactAdm = compactSearchCode(target.admissionNo);
+  const compactReg = compactSearchCode(target.registrationCode);
+  const nameTokens = extractStudentNameTokens(fullName);
+
+  const formStr =
+    target.formLevel !== undefined
+      ? `form ${target.formLevel}${target.stream || ''} f${target.formLevel}${target.stream || ''}`.toLowerCase()
+      : '';
+
+  const guardianBlob = options.includeGuardian
+    ? [
+        target.guardianName,
+        target.guardianPhone,
+        target.guardianSecondaryPhone,
+        target.emergencyContactName,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+    : '';
+
+  const extraBlob = (target.extraTerms || [])
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  const searchableStrings = [
+    fullName,
+    admissionNo,
+    regCode,
+    ...(options.includeFormClass && formStr ? [formStr] : []),
+    ...(guardianBlob ? [guardianBlob] : []),
+    ...(extraBlob ? [extraBlob] : []),
+  ].filter(Boolean);
+
+  if (searchableStrings.some((field) => field.includes(trimmed))) {
+    return true;
+  }
+
+  const compactQuery = compactSearchCode(trimmed);
+  if (
+    compactQuery &&
+    ((compactReg && compactReg.includes(compactQuery)) ||
+      (compactAdm && compactAdm.includes(compactQuery)))
+  ) {
+    return true;
+  }
+
+  // Token-by-token check: supports surname-first ("Banda Chifundo") or surname + code ("Banda F1A")
+  const queryTokens = trimmed
+    .replace(/[,]+/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (queryTokens.length === 0) return true;
+
+  return queryTokens.every((token) => {
+    const compactTok = compactSearchCode(token);
+    if (nameTokens.some((nt) => nt.includes(token))) return true;
+    if (searchableStrings.some((field) => field.includes(token))) return true;
+    if (
+      compactTok &&
+      ((compactReg && compactReg.includes(compactTok)) ||
+        (compactAdm && compactAdm.includes(compactTok)))
+    ) {
+      return true;
+    }
+    return false;
+  });
+}

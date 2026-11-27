@@ -15,13 +15,18 @@ import {
   FormLevel,
   School,
   Student,
+  StudentReportRemark,
   TermName,
 } from '../../school/types';
 import {
   calculateTermReportSummary,
+  findStudentTermRemark,
   FORM_LEVELS,
+  matchesStudentSearchQuery,
+  sortStudentsForRegister,
   TERMS,
 } from '../../school/malawi';
+import { saveStudentReportRemark } from '../../school/firestoreService';
 import {
   ACADEMIC_REPORT_TEMPLATES,
   buildStudentReportCardPayload,
@@ -46,9 +51,12 @@ interface ReportCardExportModalProps {
   school: School;
   students: Student[];
   assessments: Assessment[];
+  reportRemarks?: StudentReportRemark[];
   attendance?: AttendanceRecord[];
   initialStudentId?: string;
   initialTerm: TermName;
+  currentStaffName?: string;
+  currentStaffRole?: string;
 }
 
 type ExportScopeMode = 'single' | 'batch';
@@ -59,9 +67,12 @@ export const ReportCardExportModal: React.FC<ReportCardExportModalProps> = ({
   school,
   students,
   assessments,
+  reportRemarks = [],
   attendance = [],
   initialStudentId,
   initialTerm,
+  currentStaffName,
+  currentStaffRole,
 }) => {
   const [scopeMode, setScopeMode] = useState<ExportScopeMode>('single');
   const [templateId, setTemplateId] = useState<ReportCardTemplateId>('classic-maneb');
@@ -83,14 +94,15 @@ export const ReportCardExportModal: React.FC<ReportCardExportModalProps> = ({
   const [customHeadRemark, setCustomHeadRemark] = useState('');
   const [remarksDirty, setRemarksDirty] = useState(false);
   const [nextTermOpens, setNextTermOpens] = useState('');
+  const [savingRemarks, setSavingRemarks] = useState(false);
+  const [remarkSaveFeedback, setRemarkSaveFeedback] = useState<{ ok: boolean; msg: string } | null>(
+    null
+  );
 
   const [exportStatus, setExportStatus] = useState('');
 
   const sortedStudents = useMemo(
-    () =>
-      [...students].sort(
-        (a, b) => a.formLevel - b.formLevel || a.fullName.localeCompare(b.fullName)
-      ),
+    () => sortStudentsForRegister(students, { groupByForm: true }),
     [students]
   );
 
@@ -138,13 +150,8 @@ export const ReportCardExportModal: React.FC<ReportCardExportModalProps> = ({
   }, [assessments, reportTerm, school.academicYear]);
 
   const filteredSingleStudents = useMemo(() => {
-    const q = studentQuery.trim().toLowerCase();
-    if (!q) return sortedStudents;
-    return sortedStudents.filter(
-      (s) =>
-        s.fullName.toLowerCase().includes(q) ||
-        s.admissionNo.toLowerCase().includes(q) ||
-        `form ${s.formLevel}${s.stream}`.toLowerCase().includes(q)
+    return sortedStudents.filter((s) =>
+      matchesStudentSearchQuery(s, studentQuery, { includeFormClass: true })
     );
   }, [sortedStudents, studentQuery]);
 
@@ -181,6 +188,12 @@ export const ReportCardExportModal: React.FC<ReportCardExportModalProps> = ({
         const summary = calculateTermReportSummary(stu.formLevel, stuAssessments);
         const classRank = rankings.get(stu.id) || null;
         const attendanceStats = computeStudentAttendanceStats(attendance, stu.id);
+        const savedRemark = findStudentTermRemark(
+          reportRemarks,
+          stu.id,
+          reportTerm,
+          school.academicYear
+        );
         return buildStudentReportCardPayload({
           school,
           student: stu,
@@ -188,7 +201,9 @@ export const ReportCardExportModal: React.FC<ReportCardExportModalProps> = ({
           summary,
           classRank,
           attendanceStats,
-          nextTermOpens,
+          formTeacherRemark: savedRemark?.formTeacherRemark || undefined,
+          headTeacherRemark: savedRemark?.headTeacherRemark || undefined,
+          nextTermOpens: nextTermOpens.trim() || savedRemark?.nextTermOpens || '',
         });
       })
       .filter((item): item is NonNullable<typeof item> => item !== null);
@@ -200,6 +215,7 @@ export const ReportCardExportModal: React.FC<ReportCardExportModalProps> = ({
     nextTermOpens,
     onlyWithMarks,
     rankings,
+    reportRemarks,
     reportTerm,
     school,
     sortedStudents,
@@ -218,14 +234,71 @@ export const ReportCardExportModal: React.FC<ReportCardExportModalProps> = ({
   const singleAttendance = singleStudent
     ? computeStudentAttendanceStats(attendance, singleStudent.id)
     : null;
+  const singlePublishedRemark = useMemo(() => {
+    if (!singleStudent) return null;
+    return findStudentTermRemark(
+      reportRemarks,
+      singleStudent.id,
+      reportTerm,
+      school.academicYear
+    );
+  }, [reportRemarks, reportTerm, school.academicYear, singleStudent]);
 
   useEffect(() => {
     if (!singleStudent || !singleSummary) return;
     const autoRemarks = generateDefaultTeacherRemarks(singleSummary, singleStudent, singleRank);
-    setCustomFormRemark(autoRemarks.formTeacherRemark);
-    setCustomHeadRemark(autoRemarks.headTeacherRemark);
+    setCustomFormRemark(
+      singlePublishedRemark?.formTeacherRemark?.trim() || autoRemarks.formTeacherRemark
+    );
+    setCustomHeadRemark(
+      singlePublishedRemark?.headTeacherRemark?.trim() || autoRemarks.headTeacherRemark
+    );
+    if (singlePublishedRemark?.nextTermOpens !== undefined) {
+      setNextTermOpens(singlePublishedRemark.nextTermOpens);
+    }
     setRemarksDirty(false);
-  }, [singleRank, singleStudent, singleSummary]);
+    setRemarkSaveFeedback(null);
+  }, [singlePublishedRemark, singleRank, singleStudent, singleSummary]);
+
+  const handlePublishRemarksToPortal = async () => {
+    if (!singleStudent) return;
+    setSavingRemarks(true);
+    setRemarkSaveFeedback(null);
+    try {
+      const normalizedRole = (currentStaffRole || '').toLowerCase();
+      const isHeadAuthor =
+        normalizedRole.includes('head') || normalizedRole.includes('owner') || normalizedRole.includes('admin');
+      await saveStudentReportRemark(school, singleStudent, {
+        term: reportTerm,
+        academicYear: school.academicYear,
+        formTeacherRemark: customFormRemark.trim(),
+        headTeacherRemark: customHeadRemark.trim(),
+        nextTermOpens: nextTermOpens.trim(),
+        formTeacherName: !isHeadAuthor
+          ? currentStaffName || singlePublishedRemark?.formTeacherName || ''
+          : singlePublishedRemark?.formTeacherName || '',
+        headTeacherName: isHeadAuthor
+          ? currentStaffName || singlePublishedRemark?.headTeacherName || ''
+          : singlePublishedRemark?.headTeacherName || '',
+        updatedByName: currentStaffName || '',
+        updatedByRole: currentStaffRole || '',
+      });
+      setRemarksDirty(false);
+      setRemarkSaveFeedback({
+        ok: true,
+        msg: singleStudent.registrationCode
+          ? `Saved & synced to ${singleStudent.fullName}'s Student Portal (${singleStudent.registrationCode}).`
+          : 'Saved to school report records. Issue a registration code so the student can view it online.',
+      });
+    } catch (err) {
+      setRemarkSaveFeedback({
+        ok: false,
+        msg: err instanceof Error ? err.message : 'Unable to save report card remarks.',
+      });
+    } finally {
+      setSavingRemarks(false);
+    }
+  };
 
   const previewCard = useMemo(() => {
     if (scopeMode === 'batch') {
@@ -488,7 +561,7 @@ export const ReportCardExportModal: React.FC<ReportCardExportModalProps> = ({
                         type="text"
                         value={studentQuery}
                         onChange={(e) => setStudentQuery(e.target.value)}
-                        placeholder="Search by name, admission #, or form..."
+                        placeholder="Search by surname, name, reg/adm code, or form..."
                         className="w-full min-h-[38px] pl-8 pr-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs"
                       />
                     </div>
@@ -674,6 +747,7 @@ export const ReportCardExportModal: React.FC<ReportCardExportModalProps> = ({
                   </label>
                   <textarea
                     rows={2}
+                    maxLength={500}
                     value={customHeadRemark}
                     onChange={(e) => {
                       setCustomHeadRemark(e.target.value);
@@ -681,6 +755,39 @@ export const ReportCardExportModal: React.FC<ReportCardExportModalProps> = ({
                     }}
                     className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs"
                   />
+                </div>
+                <div className="pt-1 space-y-1.5">
+                  <button
+                    type="button"
+                    disabled={savingRemarks}
+                    onClick={handlePublishRemarksToPortal}
+                    className="w-full min-h-[38px] px-3 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-emerald-700 dark:hover:bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                  >
+                    {savingRemarks
+                      ? 'Saving Remarks...'
+                      : singlePublishedRemark
+                      ? 'Update Published Portal Remarks'
+                      : 'Save Remarks to Student Portal'}
+                  </button>
+                  {singlePublishedRemark && !remarkSaveFeedback && (
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Published to Student Portal
+                      {singlePublishedRemark.updatedByName
+                        ? ` · Last edited by ${singlePublishedRemark.updatedByName}`
+                        : ''}
+                    </p>
+                  )}
+                  {remarkSaveFeedback && (
+                    <p
+                      className={`text-[11px] font-medium ${
+                        remarkSaveFeedback.ok
+                          ? 'text-emerald-700 dark:text-emerald-400'
+                          : 'text-rose-600 dark:text-rose-400'
+                      }`}
+                    >
+                      {remarkSaveFeedback.msg}
+                    </p>
+                  )}
                 </div>
               </div>
             )}

@@ -10,6 +10,7 @@ import {
   Sparkles,
   Trash2,
   TrendingDown,
+  Trophy,
   X,
 } from 'lucide-react';
 import {
@@ -20,19 +21,28 @@ import {
   School,
   SchoolSubject,
   Student,
+  StudentReportRemark,
   TermName,
 } from '../../school/types';
 import {
   calculateManebGrade,
   calculateWeightedComponent,
+  compareStudentsRegisterOrder,
   detectCaDownwardAlerts,
   detectNextAssessmentStage,
   downloadCSV,
   getSubjectsForForm,
   MALAWI_SUBJECTS,
   normalizeAssessmentComponents,
+  rankAssessmentsByPerformance,
+  RankedAssessmentEntry,
+  sortStudentsForRegister,
   TERMS,
 } from '../../school/malawi';
+import {
+  buildLiveCohortMeritStandings,
+  formatOrdinalPosition,
+} from '../../school/reportCardTemplates';
 import { downloadMarksPdfReport } from '../../school/pdfReports';
 import { removeAssessment, saveAssessment } from '../../school/firestoreService';
 import { buildModalDraftKey, clearModalDraft, loadModalDraft, saveModalDraft } from '../../school/modalDrafts';
@@ -50,9 +60,12 @@ interface MarksGradebookProps {
   ownerId: string;
   students: Student[];
   assessments: Assessment[];
+  reportRemarks?: StudentReportRemark[];
   attendance?: AttendanceRecord[];
   schoolSubjects?: SchoolSubject[];
   canWriteMarks?: boolean;
+  currentStaffName?: string;
+  currentStaffRole?: string;
   onOpenStaffSettings?: () => void;
 }
 
@@ -64,15 +77,20 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
   ownerId,
   students,
   assessments,
+  reportRemarks = [],
   attendance = [],
   schoolSubjects = [],
   canWriteMarks = true,
+  currentStaffName,
+  currentStaffRole,
   onOpenStaffSettings,
 }) => {
   const [formFilter, setFormFilter] = useState<'all' | FormLevel>('all');
   const [termFilter, setTermFilter] = useState<TermName>(school.currentTerm);
   const [subjectFilter, setSubjectFilter] = useState<string>('all');
   const [atRiskOnly, setAtRiskOnly] = useState(false);
+  const [gradebookView, setGradebookView] = useState<'entries' | 'merit'>('entries');
+  const [entriesSortOrder, setEntriesSortOrder] = useState<'ranked' | 'register'>('ranked');
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -90,6 +108,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
   const [ca2MaxStr, setCa2MaxStr] = useState('20');
   const [examRawStr, setExamRawStr] = useState('');
   const [examMaxStr, setExamMaxStr] = useState('100');
+  const [teacherCommentStr, setTeacherCommentStr] = useState('');
 
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -118,6 +137,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
       ca2MaxStr,
       examRawStr,
       examMaxStr,
+      teacherCommentStr,
     });
   }, [
     ca1MaxStr,
@@ -131,6 +151,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
     modalOpen,
     studentId,
     subject,
+    teacherCommentStr,
     term,
   ]);
 
@@ -144,34 +165,95 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
   const [deletingAssessment, setDeletingAssessment] = useState(false);
   const [deleteAssessmentError, setDeleteAssessmentError] = useState('');
 
+  const studentsById = useMemo(() => {
+    const map = new Map<string, Student>();
+    for (const s of students) {
+      map.set(s.id, s);
+    }
+    return map;
+  }, [students]);
+
   const activeStudents = useMemo(
     () =>
-      students
-        .filter((s) => s.status === 'Active')
-        .sort((a, b) => a.formLevel - b.formLevel || a.fullName.localeCompare(b.fullName)),
+      sortStudentsForRegister(
+        students.filter((s) => s.status === 'Active'),
+        { groupByForm: true }
+      ),
     [students]
   );
 
   const baseFiltered = useMemo(() => {
-    return assessments
-      .filter((a) => {
-        if (a.term !== termFilter) return false;
-        if (formFilter !== 'all' && a.formLevel !== formFilter) return false;
-        if (subjectFilter !== 'all' && a.subject !== subjectFilter) return false;
-        return true;
-      })
-      .sort((a, b) => a.formLevel - b.formLevel || a.studentName.localeCompare(b.studentName));
+    return assessments.filter((a) => {
+      if (a.term !== termFilter) return false;
+      if (formFilter !== 'all' && a.formLevel !== formFilter) return false;
+      if (subjectFilter !== 'all' && a.subject !== subjectFilter) return false;
+      return true;
+    });
   }, [assessments, formFilter, subjectFilter, termFilter]);
+
+  const rankedEntries = useMemo(
+    () => rankAssessmentsByPerformance(baseFiltered, studentsById),
+    [baseFiltered, studentsById]
+  );
+
+  const rankByAssessmentId = useMemo(() => {
+    const map = new Map<string, RankedAssessmentEntry<Assessment>>();
+    for (const entry of rankedEntries) {
+      map.set(entry.assessment.id, entry);
+    }
+    return map;
+  }, [rankedEntries]);
 
   const caDropAnalysis = useMemo(
     () => detectCaDownwardAlerts(baseFiltered, 10),
     [baseFiltered]
   );
 
-  const filtered = useMemo(() => {
-    if (!atRiskOnly) return baseFiltered;
-    return baseFiltered.filter((a) => caDropAnalysis.byAssessmentId.has(a.id));
-  }, [atRiskOnly, baseFiltered, caDropAnalysis.byAssessmentId]);
+  const displayedRankedEntries = useMemo(() => {
+    const scoped = atRiskOnly
+      ? rankedEntries.filter((e) => caDropAnalysis.byAssessmentId.has(e.assessment.id))
+      : rankedEntries;
+
+    if (entriesSortOrder === 'register') {
+      return [...scoped].sort((a, b) => {
+        const stuA = studentsById.get(a.assessment.studentId);
+        const stuB = studentsById.get(b.assessment.studentId);
+        return (
+          compareStudentsRegisterOrder(
+            stuA || {
+              fullName: a.assessment.studentName,
+              formLevel: a.assessment.formLevel,
+              stream: a.assessment.stream,
+            },
+            stuB || {
+              fullName: b.assessment.studentName,
+              formLevel: b.assessment.formLevel,
+              stream: b.assessment.stream,
+            },
+            { groupByForm: true }
+          ) || a.assessment.subject.localeCompare(b.assessment.subject)
+        );
+      });
+    }
+    return scoped;
+  }, [atRiskOnly, caDropAnalysis.byAssessmentId, entriesSortOrder, rankedEntries, studentsById]);
+
+  const filtered = useMemo(
+    () => displayedRankedEntries.map((e) => e.assessment),
+    [displayedRankedEntries]
+  );
+
+  const meritStandings = useMemo(
+    () =>
+      buildLiveCohortMeritStandings({
+        students,
+        assessments,
+        term: termFilter,
+        academicYear: school.academicYear,
+        formFilter,
+      }),
+    [assessments, formFilter, school.academicYear, students, termFilter]
+  );
 
   const matchedAssessment = useMemo(() => {
     if (editingId && lockedStudentSubject) {
@@ -278,6 +360,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
           ? preserveMaxForBatch.examMax
           : '100'
       );
+      setTeacherCommentStr(existing.teacherComment || '');
     } else {
       setCa1RawStr('');
       setCa1MaxStr(preserveMaxForBatch ? preserveMaxForBatch.ca1Max : '20');
@@ -285,6 +368,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
       setCa2MaxStr(preserveMaxForBatch ? preserveMaxForBatch.ca2Max : '20');
       setExamRawStr('');
       setExamMaxStr(preserveMaxForBatch ? preserveMaxForBatch.examMax : '100');
+      setTeacherCommentStr('');
     }
     setErrorMsg('');
   };
@@ -313,11 +397,12 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
       ca2MaxStr?: string;
       examRawStr?: string;
       examMaxStr?: string;
+      teacherCommentStr?: string;
     }>(key);
 
     if (
       saved &&
-      (saved.ca1RawStr || saved.ca2RawStr || saved.examRawStr) &&
+      (saved.ca1RawStr || saved.ca2RawStr || saved.examRawStr || saved.teacherCommentStr) &&
       saved.studentId &&
       activeStudents.some((s) => s.id === saved.studentId)
     ) {
@@ -331,6 +416,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
       setCa2MaxStr(saved.ca2MaxStr || '20');
       setExamRawStr(saved.examRawStr || '');
       setExamMaxStr(saved.examMaxStr || '100');
+      setTeacherCommentStr(saved.teacherCommentStr || '');
       setMarkDraftRestored(true);
       setErrorMsg('');
     } else {
@@ -362,16 +448,19 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
       ca2MaxStr?: string;
       examRawStr?: string;
       examMaxStr?: string;
+      teacherCommentStr?: string;
     }>(key);
 
     const baseCa1 = b.hasCa1 ? String(b.ca1Raw) : '';
     const baseCa2 = b.hasCa2 ? String(b.ca2Raw) : '';
     const baseExam = b.hasExam ? String(b.examRaw) : '';
+    const baseComment = row.teacherComment || '';
     if (
       saved &&
       ((saved.ca1RawStr ?? '') !== baseCa1 ||
         (saved.ca2RawStr ?? '') !== baseCa2 ||
-        (saved.examRawStr ?? '') !== baseExam)
+        (saved.examRawStr ?? '') !== baseExam ||
+        (saved.teacherCommentStr ?? baseComment) !== baseComment)
     ) {
       setEntryMode(saved.entryMode || (!b.hasCa1 ? 'ca1' : !b.hasCa2 ? 'ca2' : !b.hasExam ? 'exam' : 'ca1'));
       setCa1RawStr(saved.ca1RawStr ?? baseCa1);
@@ -380,6 +469,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
       setCa2MaxStr(saved.ca2MaxStr || (b.hasCa2 ? String(b.ca2Max) : '20'));
       setExamRawStr(saved.examRawStr ?? baseExam);
       setExamMaxStr(saved.examMaxStr || (b.hasExam ? String(b.examMax) : '100'));
+      setTeacherCommentStr(saved.teacherCommentStr ?? baseComment);
       setMarkDraftRestored(true);
     } else {
       setEntryMode(!b.hasCa1 ? 'ca1' : !b.hasCa2 ? 'ca2' : !b.hasExam ? 'exam' : 'ca1');
@@ -389,6 +479,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
       setCa2MaxStr(b.hasCa2 ? String(b.ca2Max) : '20');
       setExamRawStr(baseExam);
       setExamMaxStr(b.hasExam ? String(b.examMax) : '100');
+      setTeacherCommentStr(baseComment);
       setMarkDraftRestored(false);
     }
     setErrorMsg('');
@@ -408,6 +499,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
         setCa2MaxStr(b.hasCa2 ? String(b.ca2Max) : '20');
         setExamRawStr(b.hasExam ? String(b.examRaw) : '');
         setExamMaxStr(b.hasExam ? String(b.examMax) : '100');
+        setTeacherCommentStr(existing.teacherComment || '');
       }
     } else {
       syncContextForSelection(studentId, subject, term);
@@ -466,6 +558,72 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
     examRawStr,
     matchedAssessment,
     selectedStudent,
+  ]);
+
+  const liveProjectedRank = useMemo(() => {
+    if (!modalOpen || !studentId || !subject) return null;
+    const stu = studentsById.get(studentId);
+    const targetForm: FormLevel = stu?.formLevel || matchedAssessment?.formLevel || 1;
+    const hasAnyInput =
+      ca1RawStr.trim() !== '' || ca2RawStr.trim() !== '' || examRawStr.trim() !== '';
+    if (!hasAnyInput && !matchedAssessment) return null;
+
+    const peerAssessments = assessments.filter(
+      (a) =>
+        a.term === term &&
+        a.formLevel === targetForm &&
+        a.subject === subject &&
+        a.studentId !== studentId &&
+        (!a.academicYear || a.academicYear === school.academicYear)
+    );
+
+    const candidate: Assessment = {
+      id: matchedAssessment?.id || '__live_preview__',
+      ownerId,
+      studentId,
+      studentName: stu?.fullName || matchedAssessment?.studentName || 'Current Student',
+      formLevel: targetForm,
+      stream: stu?.stream || matchedAssessment?.stream || 'A',
+      term,
+      academicYear: school.academicYear,
+      subject,
+      caScore: liveCalc.caTotal,
+      examScore: liveCalc.examScore,
+      totalScore: liveCalc.maneb.totalScore,
+      grade: liveCalc.maneb.grade,
+      gradePoint: liveCalc.maneb.gradePoint,
+      remark: liveCalc.maneb.remark,
+    };
+
+    const ranked = rankAssessmentsByPerformance([...peerAssessments, candidate], studentsById);
+    const match = ranked.find((r) => r.assessment.studentId === studentId);
+    if (!match) return null;
+    return {
+      rank: match.rank,
+      ordinal: match.ordinal,
+      totalEntries: match.totalEntries,
+      isTied: match.isTied,
+      formLevel: targetForm,
+    };
+  }, [
+    assessments,
+    ca1RawStr,
+    ca2RawStr,
+    examRawStr,
+    liveCalc.caTotal,
+    liveCalc.examScore,
+    liveCalc.maneb.grade,
+    liveCalc.maneb.gradePoint,
+    liveCalc.maneb.remark,
+    liveCalc.maneb.totalScore,
+    matchedAssessment,
+    modalOpen,
+    ownerId,
+    school.academicYear,
+    studentId,
+    studentsById,
+    subject,
+    term,
   ]);
 
   const validateAndBuildPayload = () => {
@@ -531,6 +689,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
         ca2Max: r2.max,
         examRaw: r3.raw,
         examMax: r3.max,
+        teacherComment: teacherCommentStr.trim(),
       },
     } as const;
   };
@@ -583,6 +742,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
     downloadCSV(
       `${school.name.toLowerCase().replace(/\s+/g, '-')}-marks-${termFilter}.csv`,
       [
+        'Rank',
         'Student',
         'Form',
         'Term',
@@ -600,9 +760,10 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
         'Exam Grade',
         'Remark',
       ],
-      filtered.map((a) => {
+      displayedRankedEntries.map(({ assessment: a, rank, isTied }) => {
         const b = normalizeAssessmentComponents(a);
         return [
+          isTied ? `#${rank}=` : `#${rank}`,
           a.studentName,
           `Form ${a.formLevel}${a.stream}`,
           a.term,
@@ -692,10 +853,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
     !!matchedBreakdown?.hasCa1 && !!matchedBreakdown?.hasCa2 && !!matchedBreakdown?.hasExam;
 
   const sortedReportStudents = useMemo(
-    () =>
-      [...students].sort(
-        (a, b) => a.formLevel - b.formLevel || a.fullName.localeCompare(b.fullName)
-      ),
+    () => sortStudentsForRegister(students, { groupByForm: true }),
     [students]
   );
 
@@ -828,6 +986,40 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
             <TrendingDown className="w-3.5 h-3.5" aria-hidden="true" />
             <span>At-Risk CA Drops ({caDropAnalysis.alerts.length})</span>
           </button>
+
+          <div
+            role="tablist"
+            aria-label="Gradebook view mode"
+            className="inline-flex items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-900 ml-auto"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={gradebookView === 'entries'}
+              onClick={() => setGradebookView('entries')}
+              className={`min-h-[34px] px-3 rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer ${
+                gradebookView === 'entries'
+                  ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400'
+              }`}
+            >
+              Marks Ledger ({filtered.length})
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={gradebookView === 'merit'}
+              onClick={() => setGradebookView('merit')}
+              className={`inline-flex items-center gap-1.5 min-h-[34px] px-3 rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer ${
+                gradebookView === 'merit'
+                  ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400'
+              }`}
+            >
+              <Trophy className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+              <span>Class Merit Ranking ({meritStandings.length})</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -873,170 +1065,375 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
         </div>
       )}
 
-      {/* Marks Table */}
-      <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
-        {filtered.length === 0 ? (
-          <div className="py-12 px-6 text-center text-sm text-slate-500 dark:text-slate-400">
-            No marks recorded for {termFilter}. Click &ldquo;Record Score&rdquo; to enter CA 1 (20%), CA 2 (20%), or Summative (60%) marks.
+      {gradebookView === 'merit' ? (
+        /* Live Class Merit Ranking Leaderboard */
+        <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
+          <div className="px-4 sm:px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Live Performance Merit Ranking · {termFilter}
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {formFilter === 'all'
+                  ? 'Auto-ranked by overall weighted term average across Forms 1–4 (tie-broken by MSCE Best-6 points & subjects passed).'
+                  : `Auto-ranked for Form ${formFilter} by overall weighted term average (updates immediately as marks are entered).`}
+              </p>
+            </div>
+            <div className="text-xs font-mono tabular-nums text-slate-600 dark:text-slate-300">
+              {meritStandings.length} student{meritStandings.length === 1 ? '' : 's'} ranked
+            </div>
           </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 text-xs text-slate-500 dark:text-slate-400">
-                  <th className="py-3 px-4 font-medium">Student</th>
-                  <th className="py-3 px-3 font-medium">Class</th>
-                  <th className="py-3 px-3 font-medium">Subject</th>
-                  <th className="py-3 px-3 font-medium text-right">CA 1 (20%)</th>
-                  <th className="py-3 px-3 font-medium text-right">CA 2 (20%)</th>
-                  <th className="py-3 px-3 font-medium text-right">Summative (60%)</th>
-                  <th className="py-3 px-3 font-medium text-right">Total</th>
-                  <th className="py-3 px-3 font-medium text-right">Grade</th>
-                  <th className="py-3 px-3 font-medium">Remark</th>
-                  {canWriteMarks && (
-                    <th className="py-3 px-4 font-medium text-right">Actions</th>
-                  )}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
-                {filtered.map((a) => {
-                  const b = normalizeAssessmentComponents(a);
-                  const dropAlert = caDropAnalysis.byAssessmentId.get(a.id);
-                  return (
-                    <tr
-                      key={a.id}
-                      className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/30 ${
-                        dropAlert?.severity === 'critical'
-                          ? 'bg-rose-50/40 dark:bg-rose-950/15'
-                          : dropAlert
-                          ? 'bg-amber-50/35 dark:bg-amber-950/10'
-                          : ''
-                      }`}
-                    >
-                      <td className="py-3 px-4 font-medium text-slate-900 dark:text-slate-100">
-                        <div className="flex items-center gap-1.5">
+
+          {meritStandings.length === 0 ? (
+            <div className="py-12 px-6 text-center text-sm text-slate-500 dark:text-slate-400">
+              No graded students found for {termFilter}
+              {formFilter !== 'all' ? ` in Form ${formFilter}` : ''}. Record subject marks to generate live merit rankings.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/40 text-xs text-slate-500 dark:text-slate-400">
+                    <th className="py-3 px-4 font-medium">Rank</th>
+                    <th className="py-3 px-4 font-medium">Student</th>
+                    <th className="py-3 px-3 font-medium">Class</th>
+                    <th className="py-3 px-3 font-medium text-right">Subjects</th>
+                    <th className="py-3 px-3 font-medium text-right">CA Mean (40%)</th>
+                    <th className="py-3 px-3 font-medium text-right">Exam Mean (60%)</th>
+                    <th className="py-3 px-3 font-medium text-right">Term Avg</th>
+                    <th className="py-3 px-3 font-medium text-right">Best-6 / Credits</th>
+                    <th className="py-3 px-3 font-medium">Standing</th>
+                    <th className="py-3 px-4 font-medium text-right">Report</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                  {meritStandings.map((row) => {
+                    const { student: stu, formRank, overallRank, overallOrdinal, summary } = row;
+                    const displayPos =
+                      formFilter === 'all'
+                        ? overallOrdinal
+                        : formatOrdinalPosition(formRank.rank);
+                    const isTopThree =
+                      (formFilter === 'all' ? overallRank : formRank.rank) <= 3;
+                    return (
+                      <tr
+                        key={stu.id}
+                        className="hover:bg-slate-50/80 dark:hover:bg-slate-800/30"
+                      >
+                        <td className="py-3 px-4 whitespace-nowrap font-mono tabular-nums">
+                          <div
+                            className={`text-sm font-bold ${
+                              isTopThree
+                                ? 'text-emerald-700 dark:text-emerald-400'
+                                : 'text-slate-800 dark:text-slate-200'
+                            }`}
+                          >
+                            {displayPos}
+                          </div>
+                          {formFilter === 'all' && (
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                              {formatOrdinalPosition(formRank.rank)}/{formRank.totalRanked} in F{stu.formLevel}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-4">
                           <button
                             type="button"
-                            onClick={() => openTermReportCard(a.studentId)}
-                            className="text-left hover:text-emerald-700 dark:hover:text-emerald-400 hover:underline cursor-pointer"
-                            title={`Open ${a.studentName}'s Term Report Card`}
+                            onClick={() => openTermReportCard(stu.id)}
+                            className="font-semibold text-slate-900 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 hover:underline text-left cursor-pointer"
                           >
-                            {a.studentName}
+                            {stu.fullName}
                           </button>
-                          {dropAlert && (
-                            <span
-                              className={`inline-flex items-center gap-0.5 text-[10px] font-semibold font-mono ${
-                                dropAlert.severity === 'critical'
-                                  ? 'text-rose-600 dark:text-rose-400'
-                                  : 'text-amber-700 dark:text-amber-400'
-                              }`}
-                              title={`CA dropped ${dropAlert.dropPct}% (${dropAlert.ca1Pct}% → ${dropAlert.ca2Pct}%)`}
-                            >
-                              <AlertTriangle className="w-3 h-3 shrink-0" aria-hidden="true" />
-                              {dropAlert.severity === 'critical' ? 'High Risk' : 'Watch'}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="py-3 px-3 text-xs text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                        Form {a.formLevel}{a.stream}
-                      </td>
-                      <td className="py-3 px-3 text-slate-800 dark:text-slate-200">{a.subject}</td>
-                      <td className="py-3 px-3 text-right font-mono tabular-nums">
-                        {b.hasCa1 ? (
-                          <div>
-                            <div className="text-slate-900 dark:text-slate-100">{b.ca1Score.toFixed(1)}</div>
-                            <div className="text-[10px] text-slate-400">
-                              {b.ca1Raw}/{b.ca1Max}
-                            </div>
+                          <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+                            {stu.admissionNo} · {stu.gender}
                           </div>
-                        ) : (
-                          <span className="text-xs text-slate-400">—</span>
-                        )}
-                      </td>
-                      <td className="py-3 px-3 text-right font-mono tabular-nums">
-                        {b.hasCa2 ? (
-                          <div>
-                            <div className="text-slate-900 dark:text-slate-100">{b.ca2Score.toFixed(1)}</div>
-                            <div className="text-[10px] text-slate-400">
-                              {b.ca2Raw}/{b.ca2Max}
-                            </div>
-                            {dropAlert && (
-                              <div
-                                className={`text-[10px] font-semibold ${
-                                  dropAlert.severity === 'critical'
-                                    ? 'text-rose-600 dark:text-rose-400'
-                                    : 'text-amber-700 dark:text-amber-400'
-                                }`}
-                              >
-                                ↓ -{dropAlert.dropPct.toFixed(0)}%
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-xs text-slate-400">—</span>
-                        )}
-                      </td>
-                      <td className="py-3 px-3 text-right font-mono tabular-nums">
-                        {b.hasExam ? (
-                          <div>
-                            <div className="text-slate-900 dark:text-slate-100">{b.examScore.toFixed(1)}</div>
-                            <div className="text-[10px] text-slate-400">
-                              {b.examRaw}/{b.examMax}
-                            </div>
-                          </div>
-                        ) : (
-                          <span className="text-xs text-slate-400">—</span>
-                        )}
-                      </td>
-                      <td className="py-3 px-3 text-right font-mono tabular-nums font-semibold">
-                        {a.totalScore}%
-                      </td>
-                      <td
-                        className={`py-3 px-3 text-right font-mono font-bold ${
-                          a.gradePoint <= 6
-                            ? 'text-emerald-700 dark:text-emerald-400'
-                            : a.gradePoint <= 8
-                            ? 'text-amber-700 dark:text-amber-400'
-                            : 'text-rose-600 dark:text-rose-400'
-                        }`}
-                      >
-                        {a.grade}
-                      </td>
-                      <td className="py-3 px-3 text-xs text-slate-600 dark:text-slate-400">
-                        {a.remark}
-                      </td>
-                      {canWriteMarks && (
+                        </td>
+                        <td className="py-3 px-3 text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                          Form {stu.formLevel}{stu.stream}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono tabular-nums text-xs text-slate-700 dark:text-slate-300">
+                          {summary.subjectCount} ({summary.passedSubjectCount} pass)
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono tabular-nums text-xs text-slate-700 dark:text-slate-300">
+                          {summary.caAverage.toFixed(1)}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono tabular-nums text-xs text-slate-700 dark:text-slate-300">
+                          {summary.summativeAverage.toFixed(1)}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono tabular-nums font-bold text-slate-900 dark:text-white">
+                          {summary.weightedAverage.toFixed(1)}%
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono tabular-nums text-xs text-slate-700 dark:text-slate-300">
+                          {stu.formLevel >= 3
+                            ? summary.standing.bestSixPoints !== null
+                              ? `${summary.standing.bestSixPoints} pts`
+                              : `${summary.creditSubjectCount} cr`
+                            : `${summary.creditSubjectCount} credits`}
+                        </td>
+                        <td className="py-3 px-3 whitespace-nowrap text-xs">
+                          <span
+                            className={`font-semibold ${
+                              summary.standing.outcome === 'Pass'
+                                ? 'text-emerald-700 dark:text-emerald-400'
+                                : summary.standing.outcome === 'Fail'
+                                ? 'text-rose-600 dark:text-rose-400'
+                                : 'text-amber-700 dark:text-amber-400'
+                            }`}
+                          >
+                            {summary.overallGrade} · {summary.standing.outcome}
+                          </span>
+                        </td>
                         <td className="py-3 px-4 text-right whitespace-nowrap">
                           <button
                             type="button"
-                            onClick={() => openEditMark(a)}
-                            aria-label={`Edit ${a.studentName} ${a.subject} score`}
-                            className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                            onClick={() => openTermReportCard(stu.id)}
+                            className="inline-flex items-center gap-1 min-h-[34px] px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-200 cursor-pointer"
                           >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setDeleteAssessmentError('');
-                              setConfirmAssessment(a);
-                            }}
-                            aria-label={`Delete ${a.studentName} ${a.subject} score`}
-                            className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <FileText className="w-3.5 h-3.5" aria-hidden="true" />
+                            <span>Report</span>
                           </button>
                         </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : (
+        /* Marks Table (Auto-Ranked by Performance) */
+        <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
+          {filtered.length === 0 ? (
+            <div className="py-12 px-6 text-center text-sm text-slate-500 dark:text-slate-400">
+              No marks recorded for {termFilter}. Click &ldquo;Record Score&rdquo; to enter CA 1 (20%), CA 2 (20%), or Summative (60%) marks.
+            </div>
+          ) : (
+            <>
+              <div className="px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="text-slate-600 dark:text-slate-300">
+                  {rankedEntries[0] && (
+                    <span>
+                      <strong className="text-emerald-700 dark:text-emerald-400 font-mono">
+                        #1 Top Performance:
+                      </strong>{' '}
+                      <span className="font-semibold text-slate-900 dark:text-white">
+                        {rankedEntries[0].assessment.studentName}
+                      </span>{' '}
+                      ({rankedEntries[0].assessment.subject} ·{' '}
+                      <span className="font-mono font-semibold tabular-nums">
+                        {rankedEntries[0].assessment.totalScore}%
+                      </span>
+                      )
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <label htmlFor="marks-sort-mode" className="text-slate-500 dark:text-slate-400">
+                    Order:
+                  </label>
+                  <select
+                    id="marks-sort-mode"
+                    value={entriesSortOrder}
+                    onChange={(e) => setEntriesSortOrder(e.target.value as 'ranked' | 'register')}
+                    className="min-h-[34px] px-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200"
+                  >
+                    <option value="ranked">Auto-Ranked by Performance (Highest First)</option>
+                    <option value="register">Register Order (Boys ↑ A–Z · Girls ↓ A–Z)</option>
+                  </select>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 text-xs text-slate-500 dark:text-slate-400">
+                      <th className="py-3 px-3 font-medium text-center w-14">Rank</th>
+                      <th className="py-3 px-4 font-medium">Student</th>
+                      <th className="py-3 px-3 font-medium">Class</th>
+                      <th className="py-3 px-3 font-medium">Subject</th>
+                      <th className="py-3 px-3 font-medium text-right">CA 1 (20%)</th>
+                      <th className="py-3 px-3 font-medium text-right">CA 2 (20%)</th>
+                      <th className="py-3 px-3 font-medium text-right">Summative (60%)</th>
+                      <th className="py-3 px-3 font-medium text-right">Total</th>
+                      <th className="py-3 px-3 font-medium text-right">Grade</th>
+                      <th className="py-3 px-3 font-medium">Remark</th>
+                      {canWriteMarks && (
+                        <th className="py-3 px-4 font-medium text-right">Actions</th>
                       )}
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                    {displayedRankedEntries.map((entry) => {
+                      const a = entry.assessment;
+                      const b = normalizeAssessmentComponents(a);
+                      const dropAlert = caDropAnalysis.byAssessmentId.get(a.id);
+                      const rankMeta = rankByAssessmentId.get(a.id) || entry;
+                      return (
+                        <tr
+                          key={a.id}
+                          className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/30 ${
+                            dropAlert?.severity === 'critical'
+                              ? 'bg-rose-50/40 dark:bg-rose-950/15'
+                              : dropAlert
+                              ? 'bg-amber-50/35 dark:bg-amber-950/10'
+                              : ''
+                          }`}
+                        >
+                          <td className="py-3 px-3 text-center font-mono tabular-nums whitespace-nowrap">
+                            <span
+                              className={`text-xs font-bold ${
+                                rankMeta.rank === 1
+                                  ? 'text-emerald-700 dark:text-emerald-400'
+                                  : rankMeta.rank <= 3
+                                  ? 'text-slate-900 dark:text-white'
+                                  : 'text-slate-500 dark:text-slate-400'
+                              }`}
+                              title={
+                                rankMeta.isTied
+                                  ? `Tied for ${rankMeta.ordinal} place out of ${rankMeta.totalEntries}`
+                                  : `${rankMeta.ordinal} out of ${rankMeta.totalEntries}`
+                              }
+                            >
+                              {rankMeta.ordinal}
+                              {rankMeta.isTied ? '=' : ''}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 font-medium text-slate-900 dark:text-slate-100">
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => openTermReportCard(a.studentId)}
+                                className="text-left hover:text-emerald-700 dark:hover:text-emerald-400 hover:underline cursor-pointer"
+                                title={`Open ${a.studentName}'s Term Report Card`}
+                              >
+                                {a.studentName}
+                              </button>
+                              {dropAlert && (
+                                <span
+                                  className={`inline-flex items-center gap-0.5 text-[10px] font-semibold font-mono ${
+                                    dropAlert.severity === 'critical'
+                                      ? 'text-rose-600 dark:text-rose-400'
+                                      : 'text-amber-700 dark:text-amber-400'
+                                  }`}
+                                  title={`CA dropped ${dropAlert.dropPct}% (${dropAlert.ca1Pct}% → ${dropAlert.ca2Pct}%)`}
+                                >
+                                  <AlertTriangle className="w-3 h-3 shrink-0" aria-hidden="true" />
+                                  {dropAlert.severity === 'critical' ? 'High Risk' : 'Watch'}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-3 px-3 text-xs text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                            Form {a.formLevel}{a.stream}
+                          </td>
+                          <td className="py-3 px-3 text-slate-800 dark:text-slate-200">
+                            <div>{a.subject}</div>
+                            {a.teacherComment && (
+                              <div
+                                className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2 max-w-[230px]"
+                                title={a.teacherComment}
+                              >
+                                {a.teacherComment}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 text-right font-mono tabular-nums">
+                            {b.hasCa1 ? (
+                              <div>
+                                <div className="text-slate-900 dark:text-slate-100">{b.ca1Score.toFixed(1)}</div>
+                                <div className="text-[10px] text-slate-400">
+                                  {b.ca1Raw}/{b.ca1Max}
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-slate-400">—</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 text-right font-mono tabular-nums">
+                            {b.hasCa2 ? (
+                              <div>
+                                <div className="text-slate-900 dark:text-slate-100">{b.ca2Score.toFixed(1)}</div>
+                                <div className="text-[10px] text-slate-400">
+                                  {b.ca2Raw}/{b.ca2Max}
+                                </div>
+                                {dropAlert && (
+                                  <div
+                                    className={`text-[10px] font-semibold ${
+                                      dropAlert.severity === 'critical'
+                                        ? 'text-rose-600 dark:text-rose-400'
+                                        : 'text-amber-700 dark:text-amber-400'
+                                    }`}
+                                  >
+                                    ↓ -{dropAlert.dropPct.toFixed(0)}%
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-xs text-slate-400">—</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 text-right font-mono tabular-nums">
+                            {b.hasExam ? (
+                              <div>
+                                <div className="text-slate-900 dark:text-slate-100">{b.examScore.toFixed(1)}</div>
+                                <div className="text-[10px] text-slate-400">
+                                  {b.examRaw}/{b.examMax}
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-slate-400">—</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 text-right font-mono tabular-nums font-semibold">
+                            {a.totalScore}%
+                          </td>
+                          <td
+                            className={`py-3 px-3 text-right font-mono font-bold ${
+                              a.gradePoint <= 6
+                                ? 'text-emerald-700 dark:text-emerald-400'
+                                : a.gradePoint <= 8
+                                ? 'text-amber-700 dark:text-amber-400'
+                                : 'text-rose-600 dark:text-rose-400'
+                            }`}
+                          >
+                            {a.grade}
+                          </td>
+                          <td className="py-3 px-3 text-xs text-slate-600 dark:text-slate-400">
+                            {a.remark}
+                          </td>
+                          {canWriteMarks && (
+                            <td className="py-3 px-4 text-right whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => openEditMark(a)}
+                                aria-label={`Edit ${a.studentName} ${a.subject} score`}
+                                className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDeleteAssessmentError('');
+                                  setConfirmAssessment(a);
+                                }}
+                                aria-label={`Delete ${a.studentName} ${a.subject} score`}
+                                className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Record / Edit Mark Modal */}
       {modalOpen && (
@@ -1363,7 +1760,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
                     </div>
                   </div>
                 </div>
-                <div className="flex items-center justify-between pt-0.5">
+                <div className="flex items-center justify-between pt-0.5 gap-3">
                   <div>
                     <div className="text-xs text-slate-500 dark:text-slate-400">
                       {liveCalc.maneb.system} Combined Standing (100%)
@@ -1371,6 +1768,12 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
                     <div className="text-sm font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
                       {liveCalc.maneb.totalScore}% · {liveCalc.maneb.remark}
                     </div>
+                    {liveProjectedRank && (
+                      <div className="text-[11px] font-mono tabular-nums text-emerald-700 dark:text-emerald-400 mt-0.5">
+                        Live Subject Rank: {liveProjectedRank.ordinal}
+                        {liveProjectedRank.isTied ? ' (tied)' : ''} of {liveProjectedRank.totalEntries} in Form {liveProjectedRank.formLevel}
+                      </div>
+                    )}
                   </div>
                   <div className="text-2xl font-bold font-mono text-emerald-700 dark:text-emerald-400">
                     {liveCalc.maneb.grade}
@@ -1388,6 +1791,28 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
                     </span>
                   </div>
                 )}
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                    Subject Teacher Comment (Optional)
+                  </label>
+                  <span className="text-[10px] font-mono text-slate-400">
+                    {teacherCommentStr.length}/240
+                  </span>
+                </div>
+                <input
+                  type="text"
+                  maxLength={240}
+                  placeholder="e.g. Strong grasp of algebraic equations; practice essay structure."
+                  value={teacherCommentStr}
+                  onChange={(e) => setTeacherCommentStr(e.target.value)}
+                  className="w-full min-h-[40px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs"
+                />
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                  Shown to the student on their verified report card dashboard.
+                </p>
               </div>
 
               <div className="pt-2 flex flex-wrap justify-end gap-2">
@@ -1428,9 +1853,12 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
         school={school}
         students={students}
         assessments={assessments}
+        reportRemarks={reportRemarks}
         attendance={attendance}
         initialStudentId={reportStudentId}
         initialTerm={reportTerm}
+        currentStaffName={currentStaffName}
+        currentStaffRole={currentStaffRole}
       />
 
       {/* Safe Delete Assessment Modal */}

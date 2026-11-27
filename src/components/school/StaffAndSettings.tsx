@@ -12,6 +12,8 @@ import {
   Upload,
 } from 'lucide-react';
 import {
+  BackupSettings,
+  BackupSnapshotLog,
   FormLevel,
   School,
   SchoolSubject,
@@ -51,6 +53,7 @@ import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { DraftRestoredNotice, ModalBackdrop } from './ModalBackdrop';
 import { StaffTimebookAdminDashboard } from './StaffTimebookAdminDashboard';
 import { TimebookConfigCard } from './TimebookConfigCard';
+import { DatabaseBackupCard } from './DatabaseBackupCard';
 import { DEFAULT_TIMEBOOK_TIMEZONE, getZonedDateTimeParts } from '../../school/timebookUtils';
 
 interface StaffAndSettingsProps {
@@ -65,11 +68,15 @@ interface StaffAndSettingsProps {
   timebookCorrectionRequests?: TimebookCorrectionRequest[];
   timebookAuditLogs?: TimebookAuditLog[];
   timebookSuspiciousLogs?: TimebookSuspiciousLog[];
+  backupSettings?: BackupSettings | null;
+  backupLogs?: BackupSnapshotLog[];
+  autoBackupInFlight?: boolean;
+  isSchoolOwner?: boolean;
   canManageStaffAndSettings?: boolean;
   canReadStaffAttendance?: boolean;
   canManageTimebook?: boolean;
   recordedByName?: string;
-  initialTab?: 'directory' | 'timebook';
+  initialTab?: 'directory' | 'timebook' | 'backups';
   tabRequestNonce?: number;
   onSwitchSchool: (schoolId: string) => void;
   onAddNewSchool?: () => void;
@@ -114,6 +121,10 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
   timebookCorrectionRequests = [],
   timebookAuditLogs = [],
   timebookSuspiciousLogs = [],
+  backupSettings = null,
+  backupLogs = [],
+  autoBackupInFlight = false,
+  isSchoolOwner = false,
   canManageStaffAndSettings = true,
   canReadStaffAttendance = false,
   canManageTimebook = false,
@@ -123,15 +134,24 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
   onSwitchSchool,
   onAddNewSchool,
 }) => {
-  const [staffSectionTab, setStaffSectionTab] = useState<'directory' | 'timebook'>(() =>
-    initialTab === 'timebook' && canReadStaffAttendance ? 'timebook' : 'directory'
-  );
+  const [staffSectionTab, setStaffSectionTab] = useState<'directory' | 'timebook' | 'backups'>(() => {
+    if (initialTab === 'backups' && isSchoolOwner) return 'backups';
+    if (initialTab === 'timebook' && canReadStaffAttendance) return 'timebook';
+    return 'directory';
+  });
 
   useEffect(() => {
     if (!tabRequestNonce || !initialTab) return;
     if (initialTab === 'timebook' && !canReadStaffAttendance) return;
+    if (initialTab === 'backups' && !isSchoolOwner) return;
     setStaffSectionTab(initialTab);
-  }, [canReadStaffAttendance, initialTab, tabRequestNonce]);
+  }, [canReadStaffAttendance, initialTab, isSchoolOwner, tabRequestNonce]);
+
+  useEffect(() => {
+    if (staffSectionTab === 'backups' && !isSchoolOwner) {
+      setStaffSectionTab('directory');
+    }
+  }, [isSchoolOwner, staffSectionTab]);
 
   const todayIso = useMemo(
     () =>
@@ -655,7 +675,7 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
 
   return (
     <div className="space-y-5">
-      {canReadStaffAttendance && (
+      {(canReadStaffAttendance || isSchoolOwner) && (
         <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
@@ -686,24 +706,49 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
             >
               All Staff &amp; Settings
             </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={staffSectionTab === 'timebook'}
-              onClick={() => setStaffSectionTab('timebook')}
-              className={`min-h-[34px] px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
-                staffSectionTab === 'timebook'
-                  ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-              }`}
-            >
-              Staff Timebook &amp; Turnout
-            </button>
+            {canReadStaffAttendance && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={staffSectionTab === 'timebook'}
+                onClick={() => setStaffSectionTab('timebook')}
+                className={`min-h-[34px] px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                  staffSectionTab === 'timebook'
+                    ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                }`}
+              >
+                Staff Timebook &amp; Turnout
+              </button>
+            )}
+            {isSchoolOwner && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={staffSectionTab === 'backups'}
+                onClick={() => setStaffSectionTab('backups')}
+                className={`min-h-[34px] px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                  staffSectionTab === 'backups'
+                    ? 'bg-white dark:bg-[#1E2530] text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                }`}
+              >
+                Database Backups
+              </button>
+            )}
           </div>
         </div>
       )}
 
-      {staffSectionTab === 'timebook' && canReadStaffAttendance ? (
+      {staffSectionTab === 'backups' && isSchoolOwner ? (
+        <DatabaseBackupCard
+          school={school}
+          ownerDisplayName={recordedByName}
+          backupSettings={backupSettings}
+          backupLogs={backupLogs}
+          autoBackupInFlight={autoBackupInFlight}
+        />
+      ) : staffSectionTab === 'timebook' && canReadStaffAttendance ? (
         <StaffTimebookAdminDashboard
           school={school}
           teachers={teachers}

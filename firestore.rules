@@ -149,12 +149,13 @@ service cloud.firestore {
     // --- Validation Blueprints ---
     function isValidUserProfile(data) {
       return data.keys().hasAll(['uid', 'displayName', 'email', 'activeSchoolId', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'displayName', 'email', 'activeSchoolId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'activeSchoolId', 'photoDataUrl', 'createdAt', 'updatedAt'])
         && isValidId(data.uid)
         && data.uid == request.auth.uid
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
         && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
         && isValidId(data.activeSchoolId)
+        && (!('photoDataUrl' in data) || isValidLogoDataUrl(data.photoDataUrl))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -202,7 +203,7 @@ service cloud.firestore {
           'ownerId', 'admissionNo', 'fullName', 'gender', 'formLevel', 'stream',
           'entryYear', 'boardingStatus', 'guardianName', 'guardianPhone', 'guardianSecondaryPhone',
           'guardianRelationship', 'emergencyContactName', 'emergencyContactPhone',
-          'emergencyNotes', 'studentEmail', 'registrationCode', 'status', 'createdAt', 'updatedAt'
+          'emergencyNotes', 'studentEmail', 'registrationCode', 'photoDataUrl', 'status', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerId)
         && data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 40
@@ -221,6 +222,7 @@ service cloud.firestore {
         && (!('emergencyNotes' in data) || (data.emergencyNotes is string && data.emergencyNotes.size() <= 240))
         && data.studentEmail is string && data.studentEmail.size() <= 160
         && (!('registrationCode' in data) || (data.registrationCode is string && data.registrationCode.size() <= 32))
+        && (!('photoDataUrl' in data) || isValidLogoDataUrl(data.photoDataUrl))
         && data.status in ['Active', 'Transferred', 'Suspended', 'Rusticated', 'Graduated']
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -328,7 +330,7 @@ service cloud.firestore {
           'ca2Raw', 'ca2Max', 'ca2Score',
           'caScore',
           'examRaw', 'examMax', 'examScore',
-          'totalScore', 'grade', 'gradePoint', 'remark', 'createdAt', 'updatedAt'
+          'totalScore', 'grade', 'gradePoint', 'remark', 'teacherComment', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerId)
         && isValidId(data.studentId)
@@ -353,6 +355,7 @@ service cloud.firestore {
         && data.grade is string && data.grade.size() >= 1 && data.grade.size() <= 10
         && data.gradePoint is int && data.gradePoint >= 1 && data.gradePoint <= 9
         && data.remark is string && data.remark.size() >= 1 && data.remark.size() <= 40
+        && (!('teacherComment' in data) || (data.teacherComment is string && data.teacherComment.size() <= 240))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -441,7 +444,7 @@ service cloud.firestore {
           'ca2Raw', 'ca2Max', 'ca2Score',
           'caScore',
           'examRaw', 'examMax', 'examScore',
-          'totalScore', 'grade', 'gradePoint', 'remark', 'createdAt', 'updatedAt'
+          'totalScore', 'grade', 'gradePoint', 'remark', 'teacherComment', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerId)
         && isValidId(data.schoolId)
@@ -467,6 +470,45 @@ service cloud.firestore {
         && data.grade is string && data.grade.size() >= 1 && data.grade.size() <= 10
         && data.gradePoint is int && data.gradePoint >= 1 && data.gradePoint <= 9
         && data.remark is string && data.remark.size() >= 1 && data.remark.size() <= 40
+        && (!('teacherComment' in data) || (data.teacherComment is string && data.teacherComment.size() <= 240))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStudentReportRemark(data, requireRegCode) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'studentId', 'studentName',
+          'formLevel', 'stream', 'term', 'academicYear',
+          'formTeacherRemark', 'headTeacherRemark', 'nextTermOpens',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'registrationCode', 'studentId', 'studentName',
+          'formLevel', 'stream', 'term', 'academicYear',
+          'formTeacherRemark', 'headTeacherRemark', 'nextTermOpens',
+          'formTeacherName', 'headTeacherName', 'updatedByName', 'updatedByRole',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && (
+          requireRegCode
+            ? ('registrationCode' in data && isValidRegCode(data.registrationCode))
+            : (!('registrationCode' in data) || data.registrationCode == '' || isValidRegCode(data.registrationCode))
+        )
+        && isValidId(data.studentId)
+        && data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 120
+        && data.formLevel is int && data.formLevel >= 1 && data.formLevel <= 4
+        && data.stream is string && data.stream.size() >= 1 && data.stream.size() <= 20
+        && data.term in ['Term 1', 'Term 2', 'Term 3']
+        && data.academicYear is string && data.academicYear.size() >= 4 && data.academicYear.size() <= 20
+        && data.formTeacherRemark is string && data.formTeacherRemark.size() <= 500
+        && data.headTeacherRemark is string && data.headTeacherRemark.size() <= 500
+        && data.nextTermOpens is string && data.nextTermOpens.size() <= 80
+        && (!('formTeacherName' in data) || (data.formTeacherName is string && data.formTeacherName.size() <= 120))
+        && (!('headTeacherName' in data) || (data.headTeacherName is string && data.headTeacherName.size() <= 120))
+        && (!('updatedByName' in data) || (data.updatedByName is string && data.updatedByName.size() <= 120))
+        && (!('updatedByRole' in data) || (data.updatedByRole is string && data.updatedByRole.size() <= 40))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -1249,6 +1291,69 @@ service cloud.firestore {
         && data.createdAt is timestamp;
     }
 
+    function isValidBackupSettings(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'autoBackupEnabled', 'cadence', 'preferredHourUTC',
+          'retentionCount', 'storageTarget', 'lastBackupAtIso', 'lastBackupId',
+          'lastBackupStatus', 'nextBackupDueIso', 'updatedByUid', 'updatedByName',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'autoBackupEnabled', 'cadence', 'preferredHourUTC',
+          'retentionCount', 'storageTarget', 'lastBackupAtIso', 'lastBackupId',
+          'lastBackupStatus', 'nextBackupDueIso', 'updatedByUid', 'updatedByName',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && data.autoBackupEnabled is bool
+        && data.cadence in ['daily', 'weekly']
+        && data.preferredHourUTC is int && data.preferredHourUTC >= 0 && data.preferredHourUTC <= 23
+        && data.retentionCount is int && data.retentionCount >= 1 && data.retentionCount <= 60
+        && data.storageTarget in ['firebase-storage', 'cloud-bucket']
+        && data.lastBackupAtIso is string && data.lastBackupAtIso.size() <= 40
+        && data.lastBackupId is string && data.lastBackupId.size() <= 128
+        && data.lastBackupStatus in ['Never', 'Completed', 'Failed']
+        && data.nextBackupDueIso is string && data.nextBackupDueIso.size() <= 40
+        && isValidId(data.updatedByUid)
+        && data.updatedByName is string && data.updatedByName.size() >= 1 && data.updatedByName.size() <= 120
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBackupSnapshotLog(data) {
+      return data.keys().hasAll([
+          'ownerId', 'schoolId', 'snapshotId', 'triggerType', 'storageTarget',
+          'bucketName', 'objectPath', 'status', 'totalDocuments', 'collectionCount',
+          'sizeBytes', 'checksumSha256', 'downloadUrl', 'triggeredByUid',
+          'triggeredByName', 'completedAtIso', 'errorReason', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'schoolId', 'snapshotId', 'triggerType', 'storageTarget',
+          'bucketName', 'objectPath', 'status', 'totalDocuments', 'collectionCount',
+          'sizeBytes', 'checksumSha256', 'downloadUrl', 'triggeredByUid',
+          'triggeredByName', 'completedAtIso', 'errorReason', 'createdAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.schoolId)
+        && isValidId(data.snapshotId)
+        && data.triggerType in ['manual', 'automated']
+        && data.storageTarget in ['firebase-storage', 'cloud-bucket', 'server-vault']
+        && data.bucketName is string && data.bucketName.size() >= 1 && data.bucketName.size() <= 160
+        && data.objectPath is string && data.objectPath.size() >= 1 && data.objectPath.size() <= 320
+        && data.status in ['Completed', 'Failed']
+        && data.totalDocuments is int && data.totalDocuments >= 0 && data.totalDocuments <= 10000000
+        && data.collectionCount is int && data.collectionCount >= 0 && data.collectionCount <= 200
+        && data.sizeBytes is int && data.sizeBytes >= 0 && data.sizeBytes <= 500000000
+        && data.checksumSha256 is string && data.checksumSha256.size() <= 128
+        && data.downloadUrl is string && data.downloadUrl.size() <= 1024
+        && isValidId(data.triggeredByUid)
+        && data.triggeredByName is string && data.triggeredByName.size() >= 1 && data.triggeredByName.size() <= 120
+        && data.completedAtIso is string && data.completedAtIso.size() <= 40
+        && data.errorReason is string && data.errorReason.size() <= 400
+        && data.createdAt is timestamp;
+    }
+
     // --- Collection Rules ---
 
     // Admins collection: read-only self or admin, no client writes
@@ -1272,7 +1377,7 @@ service cloud.firestore {
         && incoming().uid == existing().uid
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'activeSchoolId', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'activeSchoolId', 'photoDataUrl', 'updatedAt']);
       allow delete: if isVerified() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
     }
 
@@ -1343,10 +1448,47 @@ service cloud.firestore {
               'ca2Raw', 'ca2Max', 'ca2Score',
               'caScore',
               'examRaw', 'examMax', 'examScore',
-              'totalScore', 'grade', 'gradePoint', 'remark', 'updatedAt'
+              'totalScore', 'grade', 'gradePoint', 'remark', 'teacherComment', 'updatedAt'
             ])
           );
         allow delete: if isVerified() && isValidRegCode(registrationCode) && isValidId(assessmentId) && (
+          existing().ownerId == request.auth.uid ||
+          isAdmin() ||
+          isAcademicStaff(existing().schoolId)
+        );
+      }
+
+      match /reportRemarks/{remarkId} {
+        allow get: if isValidRegCode(registrationCode) && isValidId(remarkId);
+        allow list: if isValidRegCode(registrationCode)
+          && existing().registrationCode == registrationCode;
+        allow create: if isVerified() && isValidRegCode(registrationCode) && isValidId(remarkId)
+          && isValidStudentReportRemark(incoming(), true)
+          && incoming().registrationCode == registrationCode
+          && isAcademicStaff(incoming().schoolId)
+          && incoming().ownerId == schoolOwnerId(incoming().schoolId)
+          && exists(/databases/$(database)/documents/schools/$(incoming().schoolId)/students/$(incoming().studentId))
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerified() && isValidRegCode(registrationCode) && isValidId(remarkId)
+          && isValidStudentReportRemark(incoming(), true)
+          && isAcademicStaff(existing().schoolId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().registrationCode == existing().registrationCode
+          && incoming().studentId == existing().studentId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'studentName', 'formLevel', 'stream', 'term', 'academicYear',
+              'formTeacherRemark', 'headTeacherRemark', 'nextTermOpens',
+              'formTeacherName', 'headTeacherName', 'updatedByName', 'updatedByRole',
+              'updatedAt'
+            ])
+          );
+        allow delete: if isVerified() && isValidRegCode(registrationCode) && isValidId(remarkId) && (
           existing().ownerId == request.auth.uid ||
           isAdmin() ||
           isAcademicStaff(existing().schoolId)
@@ -1840,19 +1982,25 @@ service cloud.firestore {
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time;
         allow update: if isValidId(schoolId) && isValidId(studentId)
-          && isSchoolHead(schoolId)
           && isValidStudent(incoming())
           && incoming().ownerId == existing().ownerId
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && (
             isAdmin() ||
-            incoming().diff(existing()).affectedKeys().hasOnly([
-              'admissionNo', 'fullName', 'gender', 'formLevel', 'stream', 'entryYear',
-              'boardingStatus', 'guardianName', 'guardianPhone', 'guardianSecondaryPhone',
-              'guardianRelationship', 'emergencyContactName', 'emergencyContactPhone',
-              'emergencyNotes', 'studentEmail', 'registrationCode', 'status', 'updatedAt'
-            ])
+            (
+              isSchoolHead(schoolId) &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'admissionNo', 'fullName', 'gender', 'formLevel', 'stream', 'entryYear',
+                'boardingStatus', 'guardianName', 'guardianPhone', 'guardianSecondaryPhone',
+                'guardianRelationship', 'emergencyContactName', 'emergencyContactPhone',
+                'emergencyNotes', 'studentEmail', 'registrationCode', 'photoDataUrl', 'status', 'updatedAt'
+              ])
+            ) ||
+            (
+              isAnySchoolStaff(schoolId) &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['photoDataUrl', 'updatedAt'])
+            )
           );
         allow delete: if isValidId(schoolId) && isValidId(studentId) && isSchoolHead(schoolId);
       }
@@ -1931,10 +2079,45 @@ service cloud.firestore {
               'ca2Raw', 'ca2Max', 'ca2Score',
               'caScore',
               'examRaw', 'examMax', 'examScore',
-              'totalScore', 'grade', 'gradePoint', 'remark', 'updatedAt'
+              'totalScore', 'grade', 'gradePoint', 'remark', 'teacherComment', 'updatedAt'
             ])
           );
         allow delete: if isValidId(schoolId) && isValidId(assessmentId) && isAcademicStaff(schoolId);
+      }
+
+      // Published Report Card Remarks: Academic staff CRUD
+      match /reportRemarks/{remarkId} {
+        allow get: if isValidId(schoolId) && isValidId(remarkId) && isAcademicStaff(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isAcademicStaff(schoolId)
+        );
+        allow create: if isValidId(schoolId) && isValidId(remarkId)
+          && isAcademicStaff(schoolId)
+          && isValidStudentReportRemark(incoming(), false)
+          && incoming().schoolId == schoolId
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(incoming().studentId))
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && isValidId(remarkId)
+          && isAcademicStaff(schoolId)
+          && isValidStudentReportRemark(incoming(), false)
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().studentId == existing().studentId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'registrationCode', 'studentName', 'formLevel', 'stream', 'term', 'academicYear',
+              'formTeacherRemark', 'headTeacherRemark', 'nextTermOpens',
+              'formTeacherName', 'headTeacherName', 'updatedByName', 'updatedByRole',
+              'updatedAt'
+            ])
+          );
+        allow delete: if isValidId(schoolId) && isValidId(remarkId) && isAcademicStaff(schoolId);
       }
 
       // Fee Invoices (MWK): Bursar & Head Teacher / Owner only
@@ -2561,6 +2744,59 @@ service cloud.firestore {
           && incoming().staffUid == request.auth.uid
           && incoming().createdAt == request.time;
         allow update, delete: if false;
+      }
+
+      // Owner-Only Automated Firestore Database Backup Settings
+      match /backupSettings/{configId} {
+        allow get: if isValidId(schoolId) && configId == 'default' && isSchoolOwner(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isAdmin()
+        );
+        allow create: if isValidId(schoolId) && configId == 'default'
+          && isSchoolOwner(schoolId)
+          && isValidBackupSettings(incoming())
+          && incoming().schoolId == schoolId
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && incoming().updatedByUid == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(schoolId) && configId == 'default'
+          && isSchoolOwner(schoolId)
+          && isValidBackupSettings(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().schoolId == existing().schoolId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedByUid == request.auth.uid
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'autoBackupEnabled', 'cadence', 'preferredHourUTC', 'retentionCount',
+              'storageTarget', 'lastBackupAtIso', 'lastBackupId', 'lastBackupStatus',
+              'nextBackupDueIso', 'updatedByUid', 'updatedByName', 'updatedAt'
+            ])
+          );
+        allow delete: if false;
+      }
+
+      // Owner-Only Immutable Firestore Snapshot Backup History Logs
+      match /backupLogs/{backupId} {
+        allow get: if isValidId(schoolId) && isValidId(backupId) && isSchoolOwner(schoolId);
+        allow list: if isVerified() && (
+          existing().ownerId == request.auth.uid ||
+          isAdmin()
+        );
+        allow create: if isValidId(schoolId) && isValidId(backupId)
+          && isSchoolOwner(schoolId)
+          && isValidBackupSnapshotLog(incoming())
+          && incoming().schoolId == schoolId
+          && incoming().ownerId == schoolOwnerId(schoolId)
+          && incoming().snapshotId == backupId
+          && incoming().triggeredByUid == request.auth.uid
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if isValidId(schoolId) && isValidId(backupId) && isSchoolOwner(schoolId);
       }
     }
   }

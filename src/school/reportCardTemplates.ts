@@ -1,5 +1,6 @@
 import {
   calculateTermReportSummary,
+  compareStudentsRegisterOrder,
   TermReportCardSummary,
   TermReportSubjectRow,
 } from './malawi';
@@ -135,6 +136,8 @@ export interface BuiltStudentReportCard {
   attendanceStats: StudentReportAttendanceStats | null;
   formTeacherRemark: string;
   headTeacherRemark: string;
+  formTeacherName?: string;
+  headTeacherName?: string;
   nextTermOpens: string;
 }
 
@@ -173,7 +176,7 @@ export function computeFormRankings(params: {
 
   const byForm = new Map<
     FormLevel,
-    Array<{ studentId: string; avg: number; bestSix: number; passedCount: number }>
+    Array<{ student: Student; avg: number; bestSix: number; passedCount: number }>
   >();
 
   for (const stu of students) {
@@ -182,7 +185,7 @@ export function computeFormRankings(params: {
     const summary = calculateTermReportSummary(stu.formLevel, stuAssessments);
     const bucket = byForm.get(stu.formLevel) || [];
     bucket.push({
-      studentId: stu.id,
+      student: stu,
       avg: summary.weightedAverage,
       bestSix: summary.standing.bestSixPoints ?? 999,
       passedCount: summary.passedSubjectCount,
@@ -196,7 +199,7 @@ export function computeFormRankings(params: {
         b.avg - a.avg ||
         a.bestSix - b.bestSix ||
         b.passedCount - a.passedCount ||
-        a.studentId.localeCompare(b.studentId)
+        compareStudentsRegisterOrder(a.student, b.student)
     );
 
     const totalRanked = cohort.length;
@@ -212,7 +215,7 @@ export function computeFormRankings(params: {
           currentRank = index + 1;
         }
       }
-      rankMap.set(entry.studentId, {
+      rankMap.set(entry.student.id, {
         rank: currentRank,
         totalRanked,
         formLabel: `Form ${formLevel}`,
@@ -236,6 +239,98 @@ export function formatOrdinalPosition(rank: number): string {
     default:
       return `${rank}th`;
   }
+}
+
+export interface LiveCohortMeritRow {
+  student: Student;
+  formRank: StudentClassRank;
+  overallRank: number;
+  overallOrdinal: string;
+  summary: TermReportCardSummary;
+}
+
+/**
+ * Produces a live auto-ranked merit leaderboard of graded students for a term
+ * (and optional Form filter), updating immediately as grades are added/edited.
+ */
+export function buildLiveCohortMeritStandings(params: {
+  students: Student[];
+  assessments: Assessment[];
+  term: TermName;
+  academicYear?: string;
+  formFilter?: 'all' | FormLevel;
+}): LiveCohortMeritRow[] {
+  const { students, assessments, term, academicYear, formFilter = 'all' } = params;
+  const scopedStudents =
+    formFilter === 'all' ? students : students.filter((s) => s.formLevel === formFilter);
+
+  const formRanks = computeFormRankings({
+    students: scopedStudents,
+    assessments,
+    term,
+    academicYear,
+  });
+
+  const assessmentsByStudent = new Map<string, Assessment[]>();
+  for (const a of assessments) {
+    if (a.term !== term) continue;
+    if (academicYear && a.academicYear && a.academicYear !== academicYear) continue;
+    const list = assessmentsByStudent.get(a.studentId) || [];
+    list.push(a);
+    assessmentsByStudent.set(a.studentId, list);
+  }
+  if (assessmentsByStudent.size === 0 && academicYear) {
+    for (const a of assessments) {
+      if (a.term !== term) continue;
+      const list = assessmentsByStudent.get(a.studentId) || [];
+      list.push(a);
+      assessmentsByStudent.set(a.studentId, list);
+    }
+  }
+
+  const rows: Omit<LiveCohortMeritRow, 'overallRank' | 'overallOrdinal'>[] = [];
+  for (const stu of scopedStudents) {
+    const formRank = formRanks.get(stu.id);
+    const stuMarks = assessmentsByStudent.get(stu.id);
+    if (!formRank || !stuMarks || stuMarks.length === 0) continue;
+    const summary = calculateTermReportSummary(stu.formLevel, stuMarks);
+    rows.push({
+      student: stu,
+      formRank,
+      summary,
+    });
+  }
+
+  rows.sort((a, b) => {
+    const avgDiff = b.summary.weightedAverage - a.summary.weightedAverage;
+    if (Math.abs(avgDiff) >= 0.05) return avgDiff;
+    const b6A = a.summary.standing.bestSixPoints ?? 999;
+    const b6B = b.summary.standing.bestSixPoints ?? 999;
+    if (b6A !== b6B) return b6A - b6B;
+    const passDiff = b.summary.passedSubjectCount - a.summary.passedSubjectCount;
+    if (passDiff !== 0) return passDiff;
+    return compareStudentsRegisterOrder(a.student, b.student);
+  });
+
+  let currentRank = 1;
+  return rows.map((row, idx) => {
+    if (idx > 0) {
+      const prev = rows[idx - 1];
+      const isTie =
+        Math.abs(prev.summary.weightedAverage - row.summary.weightedAverage) < 0.05 &&
+        (prev.summary.standing.bestSixPoints ?? 999) ===
+          (row.summary.standing.bestSixPoints ?? 999) &&
+        prev.summary.passedSubjectCount === row.summary.passedSubjectCount;
+      if (!isTie) {
+        currentRank = idx + 1;
+      }
+    }
+    return {
+      ...row,
+      overallRank: currentRank,
+      overallOrdinal: formatOrdinalPosition(currentRank),
+    };
+  });
 }
 
 export function computeStudentAttendanceStats(
@@ -327,6 +422,8 @@ export function buildStudentReportCardPayload(params: {
   attendanceStats?: StudentReportAttendanceStats | null;
   formTeacherRemark?: string;
   headTeacherRemark?: string;
+  formTeacherName?: string;
+  headTeacherName?: string;
   nextTermOpens?: string;
 }): BuiltStudentReportCard {
   const defaults = generateDefaultTeacherRemarks(params.summary, params.student, params.classRank);
@@ -345,6 +442,8 @@ export function buildStudentReportCardPayload(params: {
       params.headTeacherRemark !== undefined && params.headTeacherRemark.trim() !== ''
         ? params.headTeacherRemark.trim()
         : defaults.headTeacherRemark,
+    formTeacherName: params.formTeacherName?.trim() || undefined,
+    headTeacherName: params.headTeacherName?.trim() || undefined,
     nextTermOpens: (params.nextTermOpens || '').trim(),
   };
 }
