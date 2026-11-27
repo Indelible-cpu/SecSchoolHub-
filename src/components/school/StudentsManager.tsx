@@ -47,6 +47,7 @@ import {
   downloadCSV,
   FORM_LEVELS,
   formatMalawiSmsPhone,
+  getPhoneValidationError,
   formatMWK,
   generateStudentRegistrationCode,
   getDefaultEntryYear,

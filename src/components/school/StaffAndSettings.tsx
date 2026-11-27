@@ -463,6 +463,13 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
       setTeacherFormError('Enter a valid Google email for staff portal access, or leave it blank.');
       return;
     }
+    if (tForm.phone?.trim()) {
+      const staffPhoneErr = getPhoneValidationError(tForm.phone, 'Staff Phone Number', false);
+      if (staffPhoneErr) {
+        setTeacherFormError(staffPhoneErr);
+        return;
+      }
+    }
     setTeacherFormError('');
     setSavingTeacher(true);
     try {

@@ -91,7 +91,7 @@ import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
 
 const NAV_ITEMS: { id: SchoolSection; label: string; shortLabel: string; icon: typeof LayoutDashboard }[] = [
-  { id: 'overview', label: 'Home Dashboard', shortLabel: 'Home', icon: LayoutDashboard },
+  { id: 'overview', label: 'Dashboard', shortLabel: 'Dashboard', icon: LayoutDashboard },
   { id: 'students', label: 'Students (Form 1–4)', shortLabel: 'Students', icon: Users },
   { id: 'marks', label: 'Exam Marks', shortLabel: 'Marks', icon: Award },
   { id: 'fees', label: 'Fees & Bursar (MK)', shortLabel: 'Fees', icon: Banknote },
@@ -1460,7 +1460,7 @@ export default function App() {
   }
 
   const currentNavLabel =
-    visibleNavItems.find((n) => n.id === activeSection)?.label || 'Home Dashboard';
+    visibleNavItems.find((n) => n.id === activeSection)?.label || 'Dashboard';
   const mobileGridClass = MOBILE_GRID_COLS[visibleNavItems.length] || 'grid-cols-4';
 
   return (

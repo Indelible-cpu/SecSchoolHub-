@@ -8,6 +8,7 @@ import {
 } from './types';
 import {
   formatMalawiSmsPhone,
+  getPhoneValidationError,
   inferStudentEntryYear,
   normalizeRegistrationCode,
   STUDENT_STATUSES,

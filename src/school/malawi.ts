@@ -367,7 +367,7 @@ export function getRolePermissions(role: WorkspaceRole): RolePermissions {
       ? 'HOD Department Dashboard'
       : isFormTeacher
       ? 'Form Teacher Dashboard'
-      : 'Teacher Home Dashboard';
+      : 'Teacher Dashboard';
 
   return {
     role,
@@ -1063,6 +1063,53 @@ export function downloadCSV(filename: string, headers: string[], rows: (string |
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+}
+
+/**
+ * Validates a Malawi phone number string according to institutional standards:
+ * - 10 digits if starting with 0 (e.g. 09XXXXXXXX, 08XXXXXXXX)
+ * - 13 characters/digits if starting with +265 or 265 (e.g. +265XXXXXXXXX or 12-13 digits)
+ * Returns null if valid (or empty when optional), or a friendly validation error string.
+ */
+export function getPhoneValidationError(
+  phone: string | undefined | null,
+  fieldLabel = 'Phone number',
+  required = false
+): string | null {
+  const trimmed = String(phone ?? '').trim();
+  if (!trimmed) {
+    return required ? `${fieldLabel} is required.` : null;
+  }
+
+  // Remove common separators like spaces, dashes, parentheses
+  const cleaned = trimmed.replace(/[\s\-()]/g, '');
+
+  if (cleaned.startsWith('0')) {
+    if (cleaned.length !== 10 || !/^\d{10}$/.test(cleaned)) {
+      return `${fieldLabel} starting with 0 must be exactly 10 digits (e.g., 09XXXXXXXX or 08XXXXXXXX).`;
+    }
+    return null;
+  }
+
+  if (cleaned.startsWith('+265')) {
+    if (cleaned.length !== 13 || !/^\+265\d{9}$/.test(cleaned)) {
+      return `${fieldLabel} starting with +265 must be exactly 13 characters (e.g., +265XXXXXXXXX).`;
+    }
+    return null;
+  }
+
+  if (cleaned.startsWith('265')) {
+    if ((cleaned.length !== 12 && cleaned.length !== 13) || !/^\d+$/.test(cleaned)) {
+      return `${fieldLabel} starting with 265 must be 12 to 13 digits (e.g., 265XXXXXXXXX).`;
+    }
+    return null;
+  }
+
+  return `${fieldLabel} must be 10 digits (starting with 09.. or 08..) or 13 characters with country code (+265..).`;
+}
+
+export function isValidMalawiPhoneNumber(phone: string | undefined | null, required = false): boolean {
+  return getPhoneValidationError(phone, 'Phone number', required) === null;
 }
 
 export function formatMalawiSmsPhone(rawPhone?: string): string | null {
