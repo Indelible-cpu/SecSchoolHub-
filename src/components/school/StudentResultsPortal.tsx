@@ -1473,7 +1473,10 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                 />
               </div>
             ) : (
-              <div className="h-9 w-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 flex items-center justify-center text-emerald-700 dark:text-emerald-400 shrink-0">
+              <div className="h-9 w-9 rounded-full border border-sky-400/30 bg-white dark:bg-slate-900 overflow-hidden flex items-center justify-center shrink-0 shadow-xs">
+                <img src="/brand-logo.png" alt="SecSchoolHub" className="h-full w-full object-contain" />
+              </div>
+              <div className="hidden">
                 <GraduationCap className="w-5 h-5" aria-hidden="true" />
               </div>
             )}

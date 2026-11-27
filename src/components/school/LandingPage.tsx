@@ -106,9 +106,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       {/* Minimal Single-Row Header */}
       <header className="h-16 w-full border-b border-slate-200/80 dark:border-slate-800/80 bg-white/90 dark:bg-[#161B22]/90">
         <div className="w-full h-full px-4 sm:px-8 flex items-center justify-between gap-8">
-          <span className="text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0">
-            SecSchoolHub
-          </span>
+          <div className="flex items-center gap-2.5 shrink-0">
+            <img
+              src="/brand-logo.png"
+              alt="SecSchoolHub logo"
+              className="h-8 w-8 object-contain rounded-full border border-sky-400/30 shadow-xs"
+            />
+            <span className="text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0">
+              SecSchoolHub
+            </span>
+          </div>
 
           <div className="flex items-center gap-2.5 shrink-0">
             <PWAInstallButton variant="header" />

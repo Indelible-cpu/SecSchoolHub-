@@ -1498,8 +1498,12 @@ export default function App() {
               />
             </div>
           ) : (
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-800 text-white shrink-0 flex items-center justify-center shadow-xs ring-2 ring-emerald-500/20">
-              <GraduationCap className="w-5 h-5" aria-hidden="true" />
+            <div className="h-10 w-10 rounded-full border border-sky-400/30 bg-white dark:bg-slate-900 overflow-hidden shrink-0 flex items-center justify-center shadow-xs">
+              <img
+                src="/brand-logo.png"
+                alt="SecSchoolHub logo"
+                className="h-full w-full object-contain"
+              />
             </div>
           )}
           <div className="min-w-0 flex-1">
