@@ -110,10 +110,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               Student records, JCE &amp; MSCE exam grading, MWK fee ledgers, and school library
               circulation for administrators, staff, and students.
             </p>
-
-            <div className="pt-2 text-xs text-slate-500 dark:text-slate-400">
-              Head Teachers · Teachers &amp; HODs · Librarians · Bursars · Students
-            </div>
           </div>
 
           <div className="lg:col-span-6 lg:pl-6">
@@ -213,7 +209,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                       htmlFor="identifier-input"
                       className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
                     >
-                      Email Address or Student Code
+                      Email Address
                     </label>
                     <div className="relative">
                       <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" aria-hidden="true" />
@@ -224,7 +220,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                         autoComplete="username"
                         value={identifierInput}
                         onChange={(e) => setIdentifierInput(e.target.value)}
-                        placeholder="e.g. name@school.edu or F1A-2026-001"
+                        placeholder="e.g. name@school.edu"
                         className="w-full min-h-[44px] pl-9.5 pr-3.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-slate-900 dark:focus:border-slate-100"
                       />
                     </div>
@@ -236,7 +232,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                         htmlFor="password-input"
                         className="block text-xs font-medium text-slate-700 dark:text-slate-300"
                       >
-                        Password / PIN
+                        Password
                       </label>
                       <button
                         type="button"
