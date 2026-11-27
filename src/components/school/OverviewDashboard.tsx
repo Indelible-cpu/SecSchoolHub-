@@ -514,44 +514,19 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
     };
   }, [libraryLoans, todayIso]);
 
-  // Role Header Strip (spacious across all roles)
-  const RoleHeaderBanner = (
-    <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
-      <div className="flex items-center gap-3.5 sm:gap-4 min-w-0 flex-1">
-        {school.logoDataUrl && (
-          <div className="h-12 w-12 sm:h-14 sm:w-14 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-hidden shrink-0 flex items-center justify-center">
-            <img
-              src={school.logoDataUrl}
-              alt={`${school.name} logo`}
-              className="h-full w-full object-contain p-1"
-            />
-          </div>
-        )}
-        <div className="min-w-0 flex-1">
-          <h1 className="text-lg sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
-            {rolePermissions.homeTitle}
-          </h1>
-          <p className="mt-0.5 text-xs sm:text-sm text-slate-600 dark:text-slate-300 font-medium">
-            {activeStaffLink
-              ? `${activeStaffLink.staffName} (${activeStaffLink.staffCode}) · ${activeStaffLink.assignedForm} · ${school.name} · ${school.currentTerm}`
-              : `${school.name} · ${school.currentTerm} (${school.academicYear})`}
-          </p>
-        </div>
-      </div>
-      <div className="flex items-center gap-2 shrink-0">
-        {rolePermissions.canReadMarks && (
-          <button
-            type="button"
-            onClick={() => setShowBoardExportModal(true)}
-            className="inline-flex items-center gap-2 min-h-[40px] px-4 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 cursor-pointer transition-colors"
-          >
-            <FileDown className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
-            <span>Export Board PDF</span>
-          </button>
-        )}
-      </div>
+  // Compact top utility action (removes redundant header card with Head Teacher Dashboard / LIWONDE CDSS)
+  const RoleHeaderBanner = rolePermissions.canReadMarks ? (
+    <div className="flex items-center justify-end">
+      <button
+        type="button"
+        onClick={() => setShowBoardExportModal(true)}
+        className="inline-flex items-center gap-2 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 cursor-pointer transition-colors shadow-xs"
+      >
+        <FileDown className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+        <span>Export Board PDF</span>
+      </button>
     </div>
-  );
+  ) : null;
 
   const boardExportModal = rolePermissions.canReadMarks ? (
     <BoardReportExportModal
