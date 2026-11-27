@@ -163,7 +163,6 @@ export default function App() {
     audience?: 'all' | 'teaching' | 'student';
     nonce: number;
   } | null>(null);
-  const [loginIntent, setLoginIntent] = useState<'admin' | 'staff' | 'student'>('admin');
   const [portalOverride, setPortalOverride] = useState<'auto' | 'workspace' | 'student'>('auto');
 
   const [studentSessionCode, setStudentSessionCode] = useState<string>(() => {
@@ -455,16 +454,10 @@ export default function App() {
 
   const activeEntry = useMemo(() => {
     if (workspaceEntries.length === 0) return null;
-    if (loginIntent === 'staff' && portalOverride === 'auto') {
-      const staffMatch =
-        workspaceEntries.find((e) => e.staffLink && e.school.id === activeSchoolId) ||
-        workspaceEntries.find((e) => e.staffLink);
-      if (staffMatch) return staffMatch;
-    }
     return (
       workspaceEntries.find((e) => e.school.id === activeSchoolId) || workspaceEntries[0]
     );
-  }, [activeSchoolId, loginIntent, portalOverride, workspaceEntries]);
+  }, [activeSchoolId, workspaceEntries]);
 
   const activeSchool = activeEntry?.school || null;
   const activeRole: WorkspaceRole = activeEntry?.role || 'Owner';
@@ -1216,6 +1209,97 @@ export default function App() {
     }
   };
 
+  const handleUnifiedSignIn = async (identifier: string, pass: string) => {
+    const trimmed = identifier.trim();
+    if (trimmed.includes('@')) {
+      await handleEmailSignIn(trimmed, pass);
+    } else {
+      const normalized = normalizeRegistrationCode(trimmed);
+      if (normalized.length < 6) {
+        setAuthError(
+          'Enter the registration code given by your school administrator (at least 6 characters).'
+        );
+        return;
+      }
+
+      setAuthError('');
+      const enteredPassword = pass.trim();
+      if (!enteredPassword) {
+        setAuthError(
+          'Please enter your Student Password or PIN. Default password is your school Admission Number (e.g. 2026/001).'
+        );
+        return;
+      }
+
+      setVerifyingStudentCode(true);
+      try {
+        const portalSnap = await getDoc(doc(db, 'studentPortals', normalized));
+        if (!portalSnap.exists()) {
+          setAuthError(
+            'Registration code not found. Check the code with your school administrator or form teacher.'
+          );
+          return;
+        }
+        const portalData = portalSnap.data() as StudentPortal;
+        const expectedPassword = (portalData.portalPassword || portalData.admissionNo || '').trim();
+        const isPasswordMatch = portalData.portalPassword
+          ? portalData.portalPassword.trim() === enteredPassword
+          : expectedPassword.toLowerCase() === enteredPassword.toLowerCase();
+        if (!isPasswordMatch) {
+          setAuthError(
+            'Incorrect password or PIN. The default password is your school Admission Number (e.g. 2026/001). Contact your school administrator or form teacher if you need assistance.'
+          );
+          return;
+        }
+        try {
+          window.localStorage.setItem('malawisec_student_code', normalized);
+        } catch {
+          // Ignore storage error
+        }
+        setStudentSessionCode(normalized);
+        setStudentPasswordInput('');
+        setPortalOverride('student');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        if (msg.toLowerCase().includes('offline') || msg.toLowerCase().includes('unavailable')) {
+          let hasOfflinePortal = false;
+          try {
+            const cached = window.localStorage.getItem(`malawisec_student_portal_${normalized}`);
+            if (cached) {
+              const parsed = JSON.parse(cached) as StudentPortal;
+              const expectedPassword = (parsed.portalPassword || parsed.admissionNo || '').trim();
+              const isPasswordMatch = parsed.portalPassword
+                ? parsed.portalPassword.trim() === enteredPassword
+                : expectedPassword.toLowerCase() === enteredPassword.toLowerCase();
+              if (isPasswordMatch) {
+                hasOfflinePortal = true;
+              }
+            }
+          } catch {
+            hasOfflinePortal = false;
+          }
+          if (hasOfflinePortal) {
+            try {
+              window.localStorage.setItem('malawisec_student_code', normalized);
+            } catch {
+              // Ignore storage error
+            }
+            setStudentSessionCode(normalized);
+            setPortalOverride('student');
+            return;
+          }
+          setAuthError(
+            'Unable to reach the school database right now. Connect to the internet once to sync your portal and offline library.'
+          );
+        } else {
+          setAuthError(msg || 'Unable to verify registration code right now.');
+        }
+      } finally {
+        setVerifyingStudentCode(false);
+      }
+    }
+  };
+
   const handleStudentCodeSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     const normalized = normalizeRegistrationCode(studentCodeInput);
@@ -1357,27 +1441,14 @@ export default function App() {
     );
   }
 
-  // Unauthenticated Landing / Role-Based Sign-In Gate
+  // Unauthenticated Landing / Portal Sign-In Gate
   if (!user) {
     return (
       <>
         <LandingPage
-          loginIntent={loginIntent}
-          onChangeLoginIntent={(intent) => {
-            setLoginIntent(intent);
-            setAuthError('');
-          }}
-          studentCodeInput={studentCodeInput}
-          onChangeStudentCodeInput={setStudentCodeInput}
-          studentPasswordInput={studentPasswordInput}
-          onChangeStudentPasswordInput={setStudentPasswordInput}
-          verifyingStudentCode={verifyingStudentCode}
-          signingIn={signingIn}
+          signingIn={signingIn || verifyingStudentCode}
           authError={authError}
-          onGoogleSignIn={handleGoogleSignIn}
-          onEmailSignIn={handleEmailSignIn}
-          onEmailRegister={handleEmailRegister}
-          onStudentCodeSignIn={handleStudentCodeSignIn}
+          onSignIn={handleUnifiedSignIn}
           theme={theme}
           onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
         />
@@ -1391,9 +1462,8 @@ export default function App() {
     return <SecSchoolHubLoader message="Loading school workspace..." />;
   }
 
-  // Strict authorization gate: unlinked or unauthorized Google accounts only see Sign Out (no school creation bypass)
-  if (!activeSchool && (loginIntent === 'staff' || !isPlatformAdmin)) {
-    const isStaffIntent = loginIntent === 'staff';
+  // Strict authorization gate: unlinked or unauthorized accounts only see Sign Out (no school creation bypass)
+  if (!activeSchool && !isPlatformAdmin) {
     return (
       <div className="min-h-[100dvh] w-full flex flex-col bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100">
         <header className="h-14 w-full border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#161B22]">
@@ -1418,14 +1488,12 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-lg font-bold text-slate-900 dark:text-white">
-                {isStaffIntent ? 'Staff Account Not Linked Yet' : 'Account Not Authorized Yet'}
+                Account Not Authorized Yet
               </h1>
               <p className="mt-1.5 text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
                 Signed in as{' '}
                 <strong className="text-slate-900 dark:text-slate-200">{user.email}</strong>.{' '}
-                {isStaffIntent
-                  ? 'Ask your Head Teacher or School Owner to add this exact Google email to your staff profile in Staff & Settings with your role (Teacher, Form Teacher, HOD, School Librarian, Bursar, or Deputy Head).'
-                  : 'Access to institutional records is restricted to authorized school administrators and pre-linked staff accounts. Ask your Head Teacher or School Owner to add this exact Google email in Staff & Settings.'}
+                Access to institutional records is restricted to authorized school administrators and pre-linked staff accounts. Ask your Head Teacher or School Administrator to add this email in Staff &amp; Settings.
               </p>
             </div>
             <div className="pt-2">
