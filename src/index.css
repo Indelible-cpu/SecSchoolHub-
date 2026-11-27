@@ -53,3 +53,23 @@
   max-width: none !important;
   max-height: none !important;
 }
+
+
+@keyframes forthAndBack {
+  0% {
+    left: 0%;
+    width: 28%;
+  }
+  50% {
+    left: 65%;
+    width: 35%;
+  }
+  100% {
+    left: 0%;
+    width: 28%;
+  }
+}
+
+.animate-forth-and-back {
+  animation: forthAndBack 1.4s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+}

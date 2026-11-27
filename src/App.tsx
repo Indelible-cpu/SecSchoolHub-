@@ -88,6 +88,7 @@ import { StudentResultsPortal } from './components/school/StudentResultsPortal';
 import { StudentPhotoCaptureModal } from './components/school/StudentPhotoCaptureModal';
 import { LandingPage } from './components/school/LandingPage';
 import { PWAInstallButton } from './components/PWAInstallButton';
+import { SecSchoolHubLoader } from './components/SecSchoolHubLoader';
 import { OfflineIndicator } from './components/OfflineIndicator';
 
 const NAV_ITEMS: { id: SchoolSection; label: string; shortLabel: string; icon: typeof LayoutDashboard }[] = [
@@ -1309,13 +1310,7 @@ export default function App() {
   };
 
   if (!authReady) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#F7F8FA] dark:bg-[#0D1117]">
-        <div className="text-sm font-medium text-slate-500 dark:text-slate-400">
-          Connecting to school portal...
-        </div>
-      </div>
-    );
+    return <SecSchoolHubLoader message="Connecting to school portal..." />;
   }
 
   // Student Registration Code Portal (does not require Google email sign-in)
@@ -1359,16 +1354,9 @@ export default function App() {
     );
   }
 
-  // Loading schools / staff links / admin authorization skeleton
+  // Loading schools / staff links / admin authorization
   if (schoolsLoading || staffLinksLoading || waitingForStaffSchoolDoc || adminCheckLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#F7F8FA] dark:bg-[#0D1117]">
-        <div className="w-full max-w-md px-6 space-y-3">
-          <div className="h-5 w-48 bg-slate-200 dark:bg-slate-800 rounded animate-pulse" />
-          <div className="h-24 w-full bg-slate-200 dark:bg-slate-800 rounded-2xl animate-pulse" />
-        </div>
-      </div>
-    );
+    return <SecSchoolHubLoader message="Loading school workspace..." />;
   }
 
   // Strict authorization gate: unlinked or unauthorized Google accounts only see Sign Out (no school creation bypass)
