@@ -14,6 +14,7 @@ import {
   ShieldAlert,
   Clock,
   Camera,
+  GraduationCap,
 } from 'lucide-react';
 import {
   auth,
@@ -1454,20 +1455,29 @@ export default function App() {
   return (
     <div className="min-h-[100dvh] w-full flex bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100">
       {/* Desktop Left Sidebar */}
-      <aside className="hidden lg:flex lg:flex-col lg:w-64 shrink-0 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-[#161B22] sticky top-0 h-screen overflow-hidden z-20">
-        <div className="h-16 px-5 flex items-center gap-2.5 border-b border-slate-200 dark:border-slate-800 shrink-0">
-          {activeSchool.logoDataUrl && (
-            <div className="h-9 w-9 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-hidden shrink-0 flex items-center justify-center">
+      <aside className="hidden lg:flex lg:flex-col lg:w-68 shrink-0 border-r border-slate-200/80 dark:border-slate-800 bg-white dark:bg-[#161B22] sticky top-0 h-screen overflow-hidden z-20 shadow-[2px_0_12px_rgba(0,0,0,0.02)] dark:shadow-[2px_0_16px_rgba(0,0,0,0.25)]">
+        <div className="h-18 px-4 sm:px-5 flex items-center gap-3 border-b border-slate-200/80 dark:border-slate-800 shrink-0 bg-slate-50/50 dark:bg-slate-900/40">
+          {activeSchool.logoDataUrl ? (
+            <div className="h-10 w-10 rounded-xl border border-emerald-600/20 dark:border-emerald-500/30 bg-white dark:bg-slate-900 overflow-hidden shrink-0 flex items-center justify-center shadow-xs ring-2 ring-emerald-500/10">
               <img
                 src={activeSchool.logoDataUrl}
                 alt={`${activeSchool.name} logo`}
                 className="h-full w-full object-contain p-0.5"
               />
             </div>
+          ) : (
+            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-800 text-white shrink-0 flex items-center justify-center shadow-xs ring-2 ring-emerald-500/20">
+              <GraduationCap className="w-5 h-5" aria-hidden="true" />
+            </div>
           )}
-          <span className="text-base font-bold tracking-tight text-slate-900 dark:text-white truncate">
-            {activeSchool.name}
-          </span>
+          <div className="min-w-0 flex-1">
+            <span className="block text-sm font-bold tracking-tight text-slate-900 dark:text-white truncate">
+              {activeSchool.name}
+            </span>
+            <span className="block text-[11px] font-medium text-emerald-700 dark:text-emerald-400 font-mono truncate">
+              SecSchoolHub
+            </span>
+          </div>
         </div>
 
         {workspaceEntries.length > 1 && (
@@ -1487,7 +1497,7 @@ export default function App() {
           </div>
         )}
 
-        <nav className="flex-1 p-3 space-y-1 overflow-y-auto" aria-label="School management modules">
+        <nav className="flex-1 p-3 space-y-1.5 overflow-y-auto" aria-label="School management modules">
           {visibleNavItems.map((item) => {
             const Icon = item.icon;
             const active = activeSection === item.id;
@@ -1496,27 +1506,41 @@ export default function App() {
                 key={item.id}
                 type="button"
                 onClick={() => setActiveSection(item.id)}
-                className={`w-full min-h-[42px] px-3.5 py-2 rounded-xl flex items-center gap-3 text-sm font-medium transition-colors cursor-pointer ${
+                className={`relative group w-full min-h-[44px] px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs sm:text-sm font-medium transition-all duration-150 cursor-pointer ${
                   active
-                    ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 font-semibold'
-                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-slate-900 dark:hover:text-slate-100'
+                    ? 'bg-emerald-50/90 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 font-semibold shadow-xs border border-emerald-600/15 dark:border-emerald-500/20'
+                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100/70 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-100'
                 }`}
               >
-                <Icon className="w-4 h-4 shrink-0" aria-hidden="true" />
+                {active && (
+                  <span
+                    className="absolute left-0 top-2 bottom-2 w-1 rounded-r-full bg-emerald-600 dark:bg-emerald-400 shadow-[0_0_8px_rgba(5,150,105,0.4)]"
+                    aria-hidden="true"
+                  />
+                )}
+                <div
+                  className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
+                    active
+                      ? 'bg-emerald-700 dark:bg-emerald-600 text-white shadow-xs'
+                      : 'text-slate-500 dark:text-slate-400 group-hover:bg-slate-200/60 dark:group-hover:bg-slate-700/60 group-hover:text-slate-800 dark:group-hover:text-slate-200'
+                  }`}
+                >
+                  <Icon className="w-4 h-4" aria-hidden="true" />
+                </div>
                 <span className="truncate">{item.label}</span>
               </button>
             );
           })}
         </nav>
 
-        <div className="p-4 border-t border-slate-200 dark:border-slate-800 space-y-3 shrink-0">
+        <div className="p-3.5 border-t border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/40 shrink-0 space-y-3">
           {isTrueOwner && (
             <div>
               <label
                 htmlFor="admin-role-switcher"
-                className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1"
+                className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1"
               >
-                Role Mode
+                Acting Role Mode
               </label>
               <select
                 id="admin-role-switcher"
@@ -1526,7 +1550,7 @@ export default function App() {
                   const val = e.target.value as WorkspaceRole;
                   setAdminActingRole(val === 'Owner' ? null : val);
                 }}
-                className="w-full min-h-[36px] px-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-800 dark:text-slate-200"
+                className="w-full min-h-[34px] px-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-800 dark:text-slate-200 shadow-xs"
               >
                 {ADMIN_ROLE_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
@@ -1536,60 +1560,79 @@ export default function App() {
               </select>
             </div>
           )}
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => {
-                setUserPhotoError('');
-                setUserPhotoModalOpen(true);
-              }}
-              title="Set or update your profile photo"
-              aria-label="Set or update your profile photo"
-              className="relative shrink-0 w-10 h-10 rounded-full border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 overflow-hidden flex items-center justify-center cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-600"
-            >
-              {userPhotoDataUrl && !userPhotoFailed ? (
-                <img
-                  src={userPhotoDataUrl}
-                  alt={activeStaffLink?.staffName || user.displayName || 'User profile'}
-                  referrerPolicy="no-referrer"
-                  onError={() => setUserPhotoFailed(true)}
-                  className="w-full h-full object-cover rounded-full"
+
+          {/* Profile Card with Avatar & Live Online Dot */}
+          <div className="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-[#161B22] p-3 shadow-xs space-y-2.5">
+            <div className="flex items-center gap-3">
+              <div className="relative shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserPhotoError('');
+                    setUserPhotoModalOpen(true);
+                  }}
+                  title="Update profile photo"
+                  aria-label="Update profile photo"
+                  className="w-10 h-10 rounded-full border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 overflow-hidden flex items-center justify-center cursor-pointer shadow-xs focus:outline-none focus:ring-2 focus:ring-emerald-600 transition-transform hover:scale-105"
+                >
+                  {userPhotoDataUrl && !userPhotoFailed ? (
+                    <img
+                      src={userPhotoDataUrl}
+                      alt={activeStaffLink?.staffName || user.displayName || 'User profile'}
+                      referrerPolicy="no-referrer"
+                      onError={() => setUserPhotoFailed(true)}
+                      className="w-full h-full object-cover rounded-full"
+                    />
+                  ) : (
+                    <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                      {getStudentInitials(activeStaffLink?.staffName || user.displayName || user.email || 'U')}
+                    </span>
+                  )}
+                </button>
+                <span
+                  className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-[#161B22]"
+                  title="Signed In"
+                  aria-hidden="true"
                 />
-              ) : (
-                <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
-                  {getStudentInitials(activeStaffLink?.staffName || user.displayName || user.email || 'U')}
+              </div>
+              <div className="min-w-0 flex-1 text-xs">
+                <span className="inline-block px-1.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-emerald-100/80 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/50 truncate max-w-full">
+                  {rolePermissions.roleLabel}
                 </span>
-              )}
-            </button>
-            <div className="text-xs min-w-0 flex-1">
-              <div className="font-semibold text-emerald-700 dark:text-emerald-400 truncate">
-                {rolePermissions.roleLabel}
+                <div className="font-semibold text-slate-900 dark:text-slate-100 truncate mt-0.5">
+                  {activeStaffLink?.staffName || user.displayName || 'Administrator'}
+                </div>
+                <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate font-mono">
+                  {user.email}
+                </div>
               </div>
-              <div className="font-semibold text-slate-900 dark:text-slate-100 truncate mt-0.5">
-                {activeStaffLink?.staffName || user.displayName || 'Administrator'}
-              </div>
-              <div className="text-slate-500 dark:text-slate-400 truncate">{user.email}</div>
+            </div>
+
+            {/* Compact Action Buttons */}
+            <div className="grid grid-cols-2 gap-1.5 pt-1 border-t border-slate-100 dark:border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => {
+                  setUserPhotoError('');
+                  setUserPhotoModalOpen(true);
+                }}
+                className="min-h-[32px] px-2 rounded-lg border border-slate-200 dark:border-slate-700/80 flex items-center justify-center gap-1.5 text-[11px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer transition-colors"
+                title="Change Profile Photo"
+              >
+                <Camera className="w-3 h-3 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+                <span>Photo</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => signOutUser()}
+                className="min-h-[32px] px-2 rounded-lg border border-slate-200 dark:border-slate-700/80 flex items-center justify-center gap-1.5 text-[11px] font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 cursor-pointer transition-colors"
+                title="Sign Out"
+              >
+                <LogOut className="w-3 h-3" aria-hidden="true" />
+                <span>Sign Out</span>
+              </button>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              setUserPhotoError('');
-              setUserPhotoModalOpen(true);
-            }}
-            className="w-full min-h-[36px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
-          >
-            <Camera className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
-            <span>{userPhotoDataUrl ? 'Change Profile Photo' : 'Set Profile Photo'}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => signOutUser()}
-            className="w-full min-h-[38px] px-3 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
-          >
-            <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>Sign Out</span>
-          </button>
         </div>
       </aside>
 
