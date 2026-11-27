@@ -185,7 +185,7 @@ service cloud.firestore {
         && isValidId(data.ownerId)
         && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
         && data.district is string && data.district.size() >= 2 && data.district.size() <= 60
-        && data.schoolType in ['Government Day', 'Government Boarding', 'Grant-Aided', 'Private']
+        && data.schoolType in ['Government Day', 'Government Boarding', 'Grant-Aided', 'Private', 'Community Day', 'CDSS']
         && data.motto is string && data.motto.size() <= 140
         && data.academicYear is string && data.academicYear.size() >= 4 && data.academicYear.size() <= 20
         && data.currentTerm in ['Term 1', 'Term 2', 'Term 3']
@@ -297,7 +297,7 @@ service cloud.firestore {
         && isValidId(data.schoolId)
         && data.schoolName is string && data.schoolName.size() >= 2 && data.schoolName.size() <= 120
         && data.schoolDistrict is string && data.schoolDistrict.size() >= 2 && data.schoolDistrict.size() <= 60
-        && data.schoolType in ['Government Day', 'Government Boarding', 'Grant-Aided', 'Private']
+        && data.schoolType in ['Government Day', 'Government Boarding', 'Grant-Aided', 'Private', 'Community Day', 'CDSS']
         && data.academicYear is string && data.academicYear.size() >= 4 && data.academicYear.size() <= 20
         && data.currentTerm in ['Term 1', 'Term 2', 'Term 3']
         && isValidId(data.teacherId)
@@ -381,7 +381,7 @@ service cloud.firestore {
         && isValidId(data.schoolId)
         && data.schoolName is string && data.schoolName.size() >= 2 && data.schoolName.size() <= 120
         && data.schoolDistrict is string && data.schoolDistrict.size() >= 2 && data.schoolDistrict.size() <= 60
-        && data.schoolType in ['Government Day', 'Government Boarding', 'Grant-Aided', 'Private']
+        && data.schoolType in ['Government Day', 'Government Boarding', 'Grant-Aided', 'Private', 'Community Day', 'CDSS']
         && data.motto is string && data.motto.size() <= 140
         && data.academicYear is string && data.academicYear.size() >= 4 && data.academicYear.size() <= 20
         && data.currentTerm in ['Term 1', 'Term 2', 'Term 3']
@@ -414,7 +414,7 @@ service cloud.firestore {
         && isValidId(data.schoolId)
         && data.schoolName is string && data.schoolName.size() >= 2 && data.schoolName.size() <= 120
         && data.schoolDistrict is string && data.schoolDistrict.size() >= 2 && data.schoolDistrict.size() <= 60
-        && data.schoolType in ['Government Day', 'Government Boarding', 'Grant-Aided', 'Private']
+        && data.schoolType in ['Government Day', 'Government Boarding', 'Grant-Aided', 'Private', 'Community Day', 'CDSS']
         && data.motto is string && data.motto.size() <= 140
         && data.academicYear is string && data.academicYear.size() >= 4 && data.academicYear.size() <= 20
         && data.currentTerm in ['Term 1', 'Term 2', 'Term 3']
@@ -1920,7 +1920,7 @@ service cloud.firestore {
       );
       allow list: if isVerified() && (existing().ownerId == request.auth.uid || isAdmin());
       allow create: if isVerified() && isValidId(schoolId)
-        && isAdmin()
+        && (isAdmin() || incoming().ownerId == request.auth.uid)
         && isValidSchool(incoming())
         && incoming().ownerId == request.auth.uid
         && incoming().createdAt == request.time
