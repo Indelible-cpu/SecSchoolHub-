@@ -1,10 +1,8 @@
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
-  getRedirectResult,
   GoogleAuthProvider,
   signInWithPopup,
-  signInWithRedirect,
   signOut,
 } from 'firebase/auth';
 import { doc, getDocFromServer, initializeFirestore } from 'firebase/firestore';
@@ -125,23 +123,28 @@ export function testConnection(): Promise<void> {
 export async function signInWithGoogle(): Promise<void> {
   try {
     await signInWithPopup(auth, googleProvider);
-  } catch (error) {
+  } catch (error: unknown) {
+    const errCode = (error as { code?: string })?.code;
+    const errMsg = error instanceof Error ? error.message : '';
+    // User simply closed the popup or cancelled: do not show an error
     if (
-      error instanceof Error &&
-      (error.message.includes('Cross-Origin-Opener-Policy') ||
-        error.message.includes('popup') ||
-        (error as { code?: string }).code === 'auth/popup-blocked')
+      errCode === 'auth/popup-closed-by-user' ||
+      errCode === 'auth/cancelled-popup-request'
     ) {
-      await signInWithRedirect(auth, googleProvider);
+      return;
+    }
+    // Browser popup blocker triggered: give clear, actionable instructions
+    if (errCode === 'auth/popup-blocked') {
+      throw new Error(
+        'The Google sign-in window was blocked by your browser. Please allow popups for this site in your browser settings and try again.'
+      );
+    }
+    if (errMsg.includes('Cross-Origin-Opener-Policy')) {
+      console.warn('COOP notice ignored during popup flow:', errMsg);
       return;
     }
     throw error;
   }
-}
-
-// Automatically resolve redirect credentials if returning from a COOP redirect flow
-if (typeof window !== 'undefined') {
-  getRedirectResult(auth).catch(() => {});
 }
 
 export async function signOutUser(): Promise<void> {
