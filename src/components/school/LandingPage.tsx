@@ -77,7 +77,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               className="h-8 w-8 object-contain rounded-full border border-sky-400/30 shadow-xs"
             />
             <span className="text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0">
-              SecSchoolHub
+              SecSchool<span className="text-sky-500 dark:text-sky-400">Hub</span>
             </span>
           </div>
 
@@ -195,7 +195,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                         setResetSuccess('');
                         setResetError('');
                       }}
-                      className="text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
+                      className="text-xs font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300 transition-colors cursor-pointer"
                     >
                       ← Back to Sign In
                     </button>
@@ -242,7 +242,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                           setResetError('');
                           setIsResetMode(true);
                         }}
-                        className="text-[11px] text-slate-500 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
+                        className="text-[11px] font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300 transition-colors cursor-pointer"
                       >
                         Forgot password?
                       </button>

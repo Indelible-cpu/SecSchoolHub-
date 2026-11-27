@@ -1468,7 +1468,7 @@ export default function App() {
       <div className="min-h-[100dvh] w-full flex flex-col bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100">
         <header className="h-14 w-full border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#161B22]">
           <div className="w-full h-full px-4 sm:px-6 flex items-center justify-between">
-            <span className="text-base font-bold text-slate-900 dark:text-white">SecSchoolHub</span>
+            <span className="text-base font-bold text-slate-900 dark:text-white">SecSchool<span className="text-sky-500 dark:text-sky-400">Hub</span></span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -1519,7 +1519,7 @@ export default function App() {
       <div className="min-h-[100dvh] w-full bg-[#F7F8FA] dark:bg-[#0D1117]">
         <header className="h-14 w-full border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#161B22]">
           <div className="w-full h-full px-4 sm:px-6 flex items-center justify-between">
-            <span className="text-base font-bold text-slate-900 dark:text-white">SecSchoolHub</span>
+            <span className="text-base font-bold text-slate-900 dark:text-white">SecSchool<span className="text-sky-500 dark:text-sky-400">Hub</span></span>
             <div className="flex items-center gap-3">
               <button
                 type="button"
@@ -1577,8 +1577,8 @@ export default function App() {
             <span className="block text-sm font-bold tracking-tight text-slate-900 dark:text-white truncate">
               {activeSchool.name}
             </span>
-            <span className="block text-[11px] font-medium text-emerald-700 dark:text-emerald-400 font-mono truncate">
-              SecSchoolHub
+            <span className="block text-[11px] font-medium text-slate-500 dark:text-slate-400 font-mono truncate">
+              SecSchool<span className="text-sky-500 dark:text-sky-400 font-bold">Hub</span>
             </span>
           </div>
         </div>
@@ -1713,7 +1713,7 @@ export default function App() {
           {/* Brand & Copyright Footer */}
           <div className="pt-0.5 text-center text-[10px] text-slate-400 dark:text-slate-500 select-none">
             <span className="block font-medium text-slate-600 dark:text-slate-400">
-              © {new Date().getFullYear()} SecSchoolHub
+              © {new Date().getFullYear()} SecSchool<span className="text-sky-500 dark:text-sky-400 font-semibold">Hub</span>
             </span>
             <span className="block text-[9.5px] mt-0.5 text-slate-400 dark:text-slate-500">
               Powered by{' '}
