@@ -10,6 +10,7 @@ export type SchoolSection =
   | 'staff';
 
 export type SchoolType =
+  | 'Community Day'
   | 'Government Day'
   | 'Government Boarding'
   | 'Grant-Aided'

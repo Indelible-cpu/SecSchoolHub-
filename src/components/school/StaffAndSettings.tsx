@@ -1206,7 +1206,7 @@ export const StaffAndSettings: React.FC<StaffAndSettingsProps> = ({
                 className="w-full min-h-[42px] px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm disabled:opacity-60"
               >
                 {SCHOOL_TYPES.map((t) => (
-                  <option key={t} value={t}>{t}</option>
+                  <option key={t} value={t}>{t === 'Community Day' ? 'Community Day (CDSS)' : t}</option>
                 ))}
               </select>
             </div>

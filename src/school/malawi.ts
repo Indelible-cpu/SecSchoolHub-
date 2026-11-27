@@ -105,7 +105,7 @@ export function getSubjectsForForm(
 }
 
 export const SCHOOL_TYPES: SchoolType[] = [
-  'Government Day',
+  'Community Day',
   'Government Boarding',
   'Grant-Aided',
   'Private',
@@ -118,7 +118,7 @@ export const FORM_LEVELS: FormLevel[] = [1, 2, 3, 4];
 export const STREAMS = ['A', 'B', 'C', 'North', 'South'];
 
 export function isGovernmentSchool(schoolType: SchoolType): boolean {
-  return schoolType === 'Government Day' || schoolType === 'Government Boarding';
+  return schoolType === 'Community Day' || schoolType === 'Government Day' || schoolType === 'Government Boarding';
 }
 
 export function getAcademicBaseYear(academicYear?: string): number {

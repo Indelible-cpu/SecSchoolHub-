@@ -26,7 +26,7 @@ export const SchoolOnboarding: React.FC<SchoolOnboardingProps> = ({
 }) => {
   const [name, setName] = useState('');
   const [district, setDistrict] = useState('Lilongwe');
-  const [schoolType, setSchoolType] = useState<SchoolType>('Government Day');
+  const [schoolType, setSchoolType] = useState<SchoolType>('Community Day');
   const [motto, setMotto] = useState('Knowledge and Service');
   const [academicYear, setAcademicYear] = useState('2026/2027');
   const [currentTerm, setCurrentTerm] = useState<TermName>('Term 2');
@@ -39,13 +39,13 @@ export const SchoolOnboarding: React.FC<SchoolOnboardingProps> = ({
   const [submitting, setSubmitting] = useState<'none' | 'create' | 'demo'>('none');
   const [formError, setFormError] = useState('');
 
-  const isGovDay = schoolType === 'Government Day';
+  const isGovDay = schoolType === 'Community Day' || schoolType === 'Government Day';
   const isGovBoarding = schoolType === 'Government Boarding';
   const isPublicSchool = isGovDay || isGovBoarding;
 
   const handleSchoolTypeChange = (nextType: SchoolType) => {
     setSchoolType(nextType);
-    if (nextType === 'Government Day') {
+    if (nextType === 'Community Day' || nextType === 'Government Day') {
       // Community Day Sec Schools (CDSS) and Govt Day are completely free
       setTuitionStr('0');
       setGpfStr('0');
@@ -230,7 +230,7 @@ export const SchoolOnboarding: React.FC<SchoolOnboardingProps> = ({
             >
               {SCHOOL_TYPES.map((t) => (
                 <option key={t} value={t}>
-                  {t === 'Government Day' ? 'Government Day (CDSS)' : t}
+                  {t === 'Community Day' ? 'Community Day (CDSS)' : t}
                 </option>
               ))}
             </select>
