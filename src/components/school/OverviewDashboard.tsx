@@ -16,6 +16,7 @@ import {
   Settings,
   ShieldAlert,
   Database,
+  Plus,
 } from 'lucide-react';
 import {
   Assessment,
@@ -118,6 +119,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
   onOpenLibrary,
 }) => {
   const [showBoardExportModal, setShowBoardExportModal] = useState(false);
+  const [createAnnouncementTrigger, setCreateAnnouncementTrigger] = useState(0);
   const dashboardRootRef = useRef<HTMLDivElement>(null);
   const govTuitionOnly = isGovernmentSchool(school.schoolType);
   const isTeachingRole =
@@ -514,10 +516,67 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
     };
   }, [libraryLoans, todayIso]);
 
-  // Compact top utility action (removes redundant header card with Head Teacher Dashboard / LIWONDE CDSS)
-  const RoleHeaderBanner = rolePermissions.canReadMarks ? (
-    <div className="flex items-center justify-end gap-2.5">
-      {rolePermissions.canWriteMarks && (
+  const canManageAnnouncements = rolePermissions.canManageStaff;
+  const canRollCall = rolePermissions.canWriteAttendance || rolePermissions.canReadAttendance;
+  const canReadMarks = rolePermissions.canReadMarks;
+  const canWriteMarks = rolePermissions.canWriteMarks;
+  const canManageBackups =
+    (rolePermissions.role === 'Owner' || rolePermissions.isPlatformAdmin) &&
+    Boolean(onOpenStaff || onNavigate);
+
+  const hasAnyTopAction =
+    canManageAnnouncements || canRollCall || canReadMarks || canWriteMarks || canManageBackups;
+
+  // Executive Top Quick Actions Row
+  const RoleHeaderBanner = hasAnyTopAction ? (
+    <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-2.5">
+      {canManageAnnouncements && (
+        <button
+          type="button"
+          onClick={() => setCreateAnnouncementTrigger((prev) => prev + 1)}
+          className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-emerald-600/30 dark:border-emerald-500/30 bg-emerald-50/70 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-xs font-semibold cursor-pointer transition-colors shadow-xs"
+        >
+          <Plus className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+          <span>New Announcement</span>
+        </button>
+      )}
+
+      {canRollCall && (
+        <button
+          type="button"
+          onClick={() =>
+            onOpenStudents ? onOpenStudents('attendance') : onNavigate('students')
+          }
+          className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-semibold cursor-pointer transition-colors shadow-xs"
+        >
+          <CalendarCheck className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+          <span>Take Roll Call</span>
+        </button>
+      )}
+
+      {canReadMarks && (
+        <button
+          type="button"
+          onClick={() => onNavigate('marks')}
+          className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-semibold cursor-pointer transition-colors shadow-xs"
+        >
+          <BookOpen className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+          <span>Review in Gradebook</span>
+        </button>
+      )}
+
+      {canManageBackups && (
+        <button
+          type="button"
+          onClick={() => (onOpenStaff ? onOpenStaff('backups') : onNavigate('staff'))}
+          className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-semibold cursor-pointer transition-colors shadow-xs"
+        >
+          <Database className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+          <span>Database Backups</span>
+        </button>
+      )}
+
+      {canWriteMarks && (
         <button
           type="button"
           onClick={() => onNavigate('marks')}
@@ -527,14 +586,17 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
           <span>Enter CA Marks</span>
         </button>
       )}
-      <button
-        type="button"
-        onClick={() => setShowBoardExportModal(true)}
-        className="inline-flex items-center gap-2 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 cursor-pointer transition-colors shadow-xs"
-      >
-        <FileDown className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
-        <span>Export Board PDF</span>
-      </button>
+
+      {canReadMarks && (
+        <button
+          type="button"
+          onClick={() => setShowBoardExportModal(true)}
+          className="inline-flex items-center gap-2 min-h-[38px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 cursor-pointer transition-colors shadow-xs"
+        >
+          <FileDown className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+          <span>Export Board PDF</span>
+        </button>
+      )}
     </div>
   ) : null;
 
@@ -634,6 +696,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
           rolePermissions={rolePermissions}
           announcements={announcements}
           authorDisplayName={authorDisplayName}
+          openCreateTrigger={createAnnouncementTrigger}
         />
 
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -925,6 +988,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
           rolePermissions={rolePermissions}
           announcements={announcements}
           authorDisplayName={authorDisplayName}
+          openCreateTrigger={createAnnouncementTrigger}
         />
 
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -1151,6 +1215,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
           rolePermissions={rolePermissions}
           announcements={announcements}
           authorDisplayName={authorDisplayName}
+          openCreateTrigger={createAnnouncementTrigger}
         />
 
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -1501,6 +1566,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
           rolePermissions={rolePermissions}
           announcements={announcements}
           authorDisplayName={authorDisplayName}
+          openCreateTrigger={createAnnouncementTrigger}
         />
 
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -1712,6 +1778,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
         rolePermissions={rolePermissions}
         announcements={announcements}
         authorDisplayName={authorDisplayName}
+        openCreateTrigger={createAnnouncementTrigger}
       />
 
       {/* 4-Column KPI Summary Strip */}

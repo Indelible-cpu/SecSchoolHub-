@@ -36,6 +36,7 @@ interface AnnouncementsPanelProps {
   rolePermissions: RolePermissions;
   announcements: SchoolAnnouncement[];
   authorDisplayName?: string;
+  openCreateTrigger?: number;
 }
 
 const AUDIENCE_LABELS: Record<AnnouncementAudience, string> = {
@@ -307,6 +308,7 @@ export const AnnouncementsPanel: React.FC<AnnouncementsPanelProps> = ({
   rolePermissions,
   announcements,
   authorDisplayName = 'School Admin',
+  openCreateTrigger,
 }) => {
   const todayIso = new Date().toISOString().slice(0, 10);
   const canManage = rolePermissions.canManageStaff;
@@ -417,6 +419,12 @@ export const AnnouncementsPanel: React.FC<AnnouncementsPanelProps> = ({
     setFormError('');
     setModalOpen(true);
   };
+
+  useEffect(() => {
+    if (openCreateTrigger && openCreateTrigger > 0 && canManage) {
+      openCreateModal();
+    }
+  }, [openCreateTrigger]);
 
   const openEditModal = (item: SchoolAnnouncement) => {
     setEditing(item);
