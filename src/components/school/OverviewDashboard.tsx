@@ -1896,38 +1896,6 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
         </div>
       </div>
 
-      {rolePermissions.role === 'Owner' && onOpenStaff && (
-        <div className="bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
-              <Database className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" aria-hidden="true" />
-              <span>Owner Database Backups &amp; Storage Bucket</span>
-            </div>
-            <div className="mt-1.5 text-sm font-semibold text-slate-900 dark:text-slate-100 font-mono tabular-nums">
-              {backupLogs.find((b) => b.status === 'Completed')?.completedAtIso
-                ? `Last snapshot: ${backupLogs
-                    .find((b) => b.status === 'Completed')!
-                    .completedAtIso.replace('T', ' ')
-                    .slice(0, 16)} UTC (${backupLogs.find((b) => b.status === 'Completed')!.totalDocuments} docs)`
-                : 'No cloud snapshot exported yet'}
-            </div>
-            <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-              {backupSettings?.autoBackupEnabled
-                ? `Automated ${backupSettings.cadence} snapshots enabled (${backupSettings.storageTarget})`
-                : 'Manual & scheduled full Firestore export to secure storage bucket'}
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => onOpenStaff('backups')}
-            className="inline-flex items-center gap-1.5 min-h-[38px] px-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <span>Database Backups</span>
-            <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
-          </button>
-        </div>
-      )}
-
       {/* Term-over-Term Student Aggregate Performance Trends (Recharts) */}
       <TermPerformanceTrendChart
         assessments={assessments}
