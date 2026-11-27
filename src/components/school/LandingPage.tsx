@@ -103,7 +103,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               >
                 {(
                   [
-                    { id: 'admin', label: 'Admin' },
+                    { id: 'admin', label: 'Head Teacher' },
                     { id: 'staff', label: 'Staff' },
                     { id: 'student', label: 'Student' },
                   ] as const
@@ -135,10 +135,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     : isRegisterMode
                     ? loginIntent === 'staff'
                       ? 'Staff Account Registration'
-                      : 'School Admin Registration'
+                      : 'Head Teacher / Admin Registration'
                     : loginIntent === 'staff'
                     ? 'Staff & Librarian Sign In'
-                    : 'School Admin Sign In'}
+                    : 'Head Teacher Sign In'}
                 </h2>
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                   {loginIntent === 'student'
@@ -147,7 +147,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     ? 'Create your password to manage your school workspace.'
                     : loginIntent === 'staff'
                     ? 'Teachers, Form Teachers, HODs, Librarians, and Bursars.'
-                    : 'School administration and role oversight workspace.'}
+                    : 'School administration, Head Teacher oversight, and staff workspace.'}
                 </p>
               </div>
 

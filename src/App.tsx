@@ -109,8 +109,7 @@ const MOBILE_GRID_COLS: Record<number, string> = {
 };
 
 const ADMIN_ROLE_OPTIONS: { value: WorkspaceRole; label: string }[] = [
-  { value: 'Owner', label: 'School Admin' },
-  { value: 'Head Teacher', label: 'Act as Head Teacher' },
+  { value: 'Owner', label: 'Head Teacher (School Admin)' },
   { value: 'Deputy Head', label: 'Act as Deputy Head' },
   { value: 'Head of Department', label: 'Act as Head of Department' },
   { value: 'Form Teacher', label: 'Act as Form Teacher' },
