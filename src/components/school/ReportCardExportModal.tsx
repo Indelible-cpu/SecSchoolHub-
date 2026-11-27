@@ -22,6 +22,7 @@ import {
   calculateTermReportSummary,
   findStudentTermRemark,
   FORM_LEVELS,
+  formatSchoolTypeLabel,
   matchesStudentSearchQuery,
   sortStudentsForRegister,
   TERMS,

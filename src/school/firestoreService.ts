@@ -1565,7 +1565,7 @@ export async function saveAssessment(
   const ca2Raw = Math.min(ca2Max, Math.max(0, Number(data.ca2Raw) || 0));
   const ca2Score = calculateWeightedComponent(ca2Raw, ca2Max, 20);
 
-  const ca = Math.min(40, Math.round((ca1Score + ca2Score) * 10) / 10);
+  const ca = Math.min(40, Math.round(ca1Score + ca2Score));
 
   const examMax = Math.min(1000, Math.max(0, Number(data.examMax) || 0));
   const examRaw = Math.min(examMax, Math.max(0, Number(data.examRaw) || 0));

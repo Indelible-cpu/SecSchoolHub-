@@ -234,9 +234,9 @@ export function downloadMarksPdfReport(params: {
         a.studentName,
         `Form ${a.formLevel}${a.stream}`,
         a.subject,
-        b.hasCa1 ? b.ca1Score.toFixed(1) : '—',
-        b.hasCa2 ? b.ca2Score.toFixed(1) : '—',
-        b.hasExam ? b.examScore.toFixed(1) : '—',
+        b.hasCa1 ? String(Math.round(b.ca1Score)) : '—',
+        b.hasCa2 ? String(Math.round(b.ca2Score)) : '—',
+        b.hasExam ? String(Math.round(b.examScore)) : '—',
         `${a.totalScore}%`,
         a.grade,
         a.remark,
@@ -669,9 +669,9 @@ function renderReportCardPage(
     if (isCompact) {
       return [
         r.assessment.subject,
-        (r.ca1Score + r.ca2Score).toFixed(1),
-        r.hasExam ? r.examScore.toFixed(1) : '—',
-        `${r.totalScore.toFixed(1)}%`,
+        String(Math.round(r.ca1Score + r.ca2Score)),
+        r.hasExam ? String(Math.round(r.examScore)) : '—',
+        `${Math.round(r.totalScore)}%`,
         r.grade,
         r.remark,
       ];
@@ -681,11 +681,11 @@ function renderReportCardPage(
       const deltaStr = delta === null ? '—' : `${delta >= 0 ? '+' : ''}${delta.toFixed(0)}%`;
       return [
         r.assessment.subject,
-        r.hasCa1 ? r.ca1Score.toFixed(1) : '—',
-        r.hasCa2 ? r.ca2Score.toFixed(1) : '—',
+        r.hasCa1 ? String(Math.round(r.ca1Score)) : '—',
+        r.hasCa2 ? String(Math.round(r.ca2Score)) : '—',
         deltaStr,
-        r.hasExam ? r.examScore.toFixed(1) : '—',
-        `${r.totalScore.toFixed(1)}%`,
+        r.hasExam ? String(Math.round(r.examScore)) : '—',
+        `${Math.round(r.totalScore)}%`,
         String(r.gradePoint),
         r.grade,
         r.remark,
@@ -693,10 +693,10 @@ function renderReportCardPage(
     }
     return [
       r.assessment.subject,
-      r.hasCa1 ? r.ca1Score.toFixed(1) : '—',
-      r.hasCa2 ? r.ca2Score.toFixed(1) : '—',
-      r.hasExam ? r.examScore.toFixed(1) : '—',
-      `${r.totalScore.toFixed(1)}%`,
+      r.hasCa1 ? String(Math.round(r.ca1Score)) : '—',
+      r.hasCa2 ? String(Math.round(r.ca2Score)) : '—',
+      r.hasExam ? String(Math.round(r.examScore)) : '—',
+      `${Math.round(r.totalScore)}%`,
       String(r.gradePoint),
       r.grade,
       r.remark,

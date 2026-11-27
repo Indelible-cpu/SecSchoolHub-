@@ -524,7 +524,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
 
     const ca1Score = calculateWeightedComponent(ca1.raw, ca1.max, 20);
     const ca2Score = calculateWeightedComponent(ca2.raw, ca2.max, 20);
-    const caTotal = Math.round((ca1Score + ca2Score) * 10) / 10;
+    const caTotal = Math.min(40, Math.round(ca1Score + ca2Score));
     const examScore = calculateWeightedComponent(exam.raw, exam.max, 60);
 
     const level: FormLevel = selectedStudent?.formLevel || matchedAssessment?.formLevel || 4;
@@ -1340,7 +1340,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
                           <td className="py-3 px-3 text-right font-mono tabular-nums">
                             {b.hasCa1 ? (
                               <div>
-                                <div className="text-slate-900 dark:text-slate-100">{b.ca1Score.toFixed(1)}</div>
+                                <div className="text-slate-900 dark:text-slate-100">{Math.round(b.ca1Score)}</div>
                                 <div className="text-[10px] text-slate-400">
                                   {b.ca1Raw}/{b.ca1Max}
                                 </div>
@@ -1352,7 +1352,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
                           <td className="py-3 px-3 text-right font-mono tabular-nums">
                             {b.hasCa2 ? (
                               <div>
-                                <div className="text-slate-900 dark:text-slate-100">{b.ca2Score.toFixed(1)}</div>
+                                <div className="text-slate-900 dark:text-slate-100">{Math.round(b.ca2Score)}</div>
                                 <div className="text-[10px] text-slate-400">
                                   {b.ca2Raw}/{b.ca2Max}
                                 </div>
@@ -1375,7 +1375,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
                           <td className="py-3 px-3 text-right font-mono tabular-nums">
                             {b.hasExam ? (
                               <div>
-                                <div className="text-slate-900 dark:text-slate-100">{b.examScore.toFixed(1)}</div>
+                                <div className="text-slate-900 dark:text-slate-100">{Math.round(b.examScore)}</div>
                                 <div className="text-[10px] text-slate-400">
                                   {b.examRaw}/{b.examMax}
                                 </div>
@@ -1608,17 +1608,17 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
                     )}
                     {autoDetectedStage === 'ca2' && matchedBreakdown && (
                       <span>
-                        <strong>Auto-detected: CA 2 (20%)</strong> — CA 1 already recorded ({matchedBreakdown.ca1Raw}/{matchedBreakdown.ca1Max} → {matchedBreakdown.ca1Score.toFixed(1)}%). Entering second continuous assessment.
+                        <strong>Auto-detected: CA 2 (20%)</strong> — CA 1 already recorded ({matchedBreakdown.ca1Raw}/{matchedBreakdown.ca1Max} → {Math.round(matchedBreakdown.ca1Score)}%). Entering second continuous assessment.
                       </span>
                     )}
                     {autoDetectedStage === 'exam' && !allThreeSaved && matchedBreakdown && (
                       <span>
-                        <strong>Auto-detected: Summative (60%)</strong> — Both CA 1 &amp; CA 2 recorded ({matchedBreakdown.caScore.toFixed(1)}/40). Entering final 60% exam score.
+                        <strong>Auto-detected: Summative (60%)</strong> — Both CA 1 &amp; CA 2 recorded ({Math.round(matchedBreakdown.caScore)}/40). Entering final 60% exam score.
                       </span>
                     )}
                     {allThreeSaved && matchedBreakdown && (
                       <span>
-                        <strong>All 3 assessments recorded</strong> — CA 1 ({matchedBreakdown.ca1Score.toFixed(1)}%), CA 2 ({matchedBreakdown.ca2Score.toFixed(1)}%), Summative ({matchedBreakdown.examScore.toFixed(1)}%). Select any tab below to edit.
+                        <strong>All 3 assessments recorded</strong> — CA 1 ({Math.round(matchedBreakdown.ca1Score)}%), CA 2 ({Math.round(matchedBreakdown.ca2Score)}%), Summative ({Math.round(matchedBreakdown.examScore)}%). Select any tab below to edit.
                       </span>
                     )}
                   </div>
@@ -1733,7 +1733,7 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
                     {activeConfig.weight}%
                   </span>
                   <span className="font-mono font-bold text-sm text-emerald-700 dark:text-emerald-400">
-                    = {activeConfig.weightedScore.toFixed(1)} / {activeConfig.weight}
+                    = {Math.round(activeConfig.weightedScore)} / {activeConfig.weight}
                   </span>
                 </div>
               </div>
@@ -1744,19 +1744,19 @@ export const MarksGradebook: React.FC<MarksGradebookProps> = ({
                   <div>
                     <div className="text-slate-500 dark:text-slate-400">CA 1 (20%)</div>
                     <div className="font-mono font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                      {liveCalc.ca1Score.toFixed(1)}
+                      {Math.round(liveCalc.ca1Score)}
                     </div>
                   </div>
                   <div>
                     <div className="text-slate-500 dark:text-slate-400">CA 2 (20%)</div>
                     <div className="font-mono font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                      {liveCalc.ca2Score.toFixed(1)}
+                      {Math.round(liveCalc.ca2Score)}
                     </div>
                   </div>
                   <div>
                     <div className="text-slate-500 dark:text-slate-400">Summative (60%)</div>
                     <div className="font-mono font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                      {liveCalc.examScore.toFixed(1)}
+                      {Math.round(liveCalc.examScore)}
                     </div>
                   </div>
                 </div>

@@ -1865,7 +1865,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                             <td className="py-3 px-3 text-right font-mono tabular-nums">
                               {r.hasCa1 ? (
                                 <div>
-                                  <div>{r.ca1Score.toFixed(1)}</div>
+                                  <div>{Math.round(r.ca1Score)}</div>
                                   {typeof a.ca1Raw === 'number' && typeof a.ca1Max === 'number' && a.ca1Max > 0 && (
                                     <div className="text-[10px] text-slate-400">
                                       {a.ca1Raw}/{a.ca1Max}
@@ -1879,7 +1879,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                             <td className="py-3 px-3 text-right font-mono tabular-nums">
                               {r.hasCa2 ? (
                                 <div>
-                                  <div>{r.ca2Score.toFixed(1)}</div>
+                                  <div>{Math.round(r.ca2Score)}</div>
                                   {typeof a.ca2Raw === 'number' && typeof a.ca2Max === 'number' && a.ca2Max > 0 && (
                                     <div className="text-[10px] text-slate-400">
                                       {a.ca2Raw}/{a.ca2Max}
@@ -1893,7 +1893,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                             <td className="py-3 px-3 text-right font-mono tabular-nums">
                               {r.hasExam ? (
                                 <div>
-                                  <div>{r.examScore.toFixed(1)}</div>
+                                  <div>{Math.round(r.examScore)}</div>
                                   {typeof a.examRaw === 'number' && typeof a.examMax === 'number' && a.examMax > 0 && (
                                     <div className="text-[10px] text-slate-400">
                                       {a.examRaw}/{a.examMax}
@@ -1905,7 +1905,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
                               )}
                             </td>
                             <td className="py-3 px-3 text-right font-mono tabular-nums font-semibold">
-                              {r.totalScore.toFixed(1)}%
+                              {Math.round(r.totalScore)}%
                             </td>
                             <td className="py-3 px-3 text-right font-mono tabular-nums text-slate-600 dark:text-slate-300">
                               {r.gradePoint}

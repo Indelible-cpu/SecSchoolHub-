@@ -722,7 +722,7 @@ export function calculateWeightedComponent(
     return 0;
   }
   const clamped = Math.min(totalMarks, Math.max(0, rawScore));
-  return Math.round(((clamped / totalMarks) * weightPercent) * 10) / 10;
+  return Math.round((clamped / totalMarks) * weightPercent);
 }
 
 export interface NormalizedAssessmentBreakdown {
@@ -747,14 +747,14 @@ export function normalizeAssessmentComponents(a: Assessment): NormalizedAssessme
     const ca1Raw = Math.min(ca1Max, Math.max(0, Number(a.ca1Raw) || 0));
     const ca1Score =
       typeof a.ca1Score === 'number'
-        ? Math.min(20, Math.max(0, a.ca1Score))
+        ? Math.min(20, Math.max(0, Math.round(a.ca1Score)))
         : calculateWeightedComponent(ca1Raw, ca1Max, 20);
 
     const ca2Max = Math.max(0, Number(a.ca2Max) || 0);
     const ca2Raw = Math.min(ca2Max, Math.max(0, Number(a.ca2Raw) || 0));
     const ca2Score =
       typeof a.ca2Score === 'number'
-        ? Math.min(20, Math.max(0, a.ca2Score))
+        ? Math.min(20, Math.max(0, Math.round(a.ca2Score)))
         : calculateWeightedComponent(ca2Raw, ca2Max, 20);
 
     const examMax = Math.max(0, Number(a.examMax) || 0);
@@ -762,7 +762,7 @@ export function normalizeAssessmentComponents(a: Assessment): NormalizedAssessme
     const examScore =
       examMax > 0
         ? calculateWeightedComponent(examRaw, examMax, 60)
-        : Math.min(60, Math.max(0, Number(a.examScore) || 0));
+        : Math.min(60, Math.max(0, Math.round(Number(a.examScore) || 0)));
 
     return {
       ca1Raw,
@@ -773,7 +773,7 @@ export function normalizeAssessmentComponents(a: Assessment): NormalizedAssessme
       ca2Max,
       ca2Score,
       hasCa2: ca2Max > 0,
-      caScore: Math.round((ca1Score + ca2Score) * 10) / 10,
+      caScore: Math.min(40, Math.round(ca1Score + ca2Score)),
       examRaw,
       examMax,
       examScore,
@@ -782,10 +782,10 @@ export function normalizeAssessmentComponents(a: Assessment): NormalizedAssessme
   }
 
   // Legacy fallback (pre-CA1/CA2 split documents)
-  const legacyCa = Math.min(40, Math.max(0, Number(a.caScore) || 0));
-  const legacyExam = Math.min(60, Math.max(0, Number(a.examScore) || 0));
-  const ca1Score = Math.round((legacyCa / 2) * 10) / 10;
-  const ca2Score = Math.round((legacyCa - ca1Score) * 10) / 10;
+  const legacyCa = Math.min(40, Math.max(0, Math.round(Number(a.caScore) || 0)));
+  const legacyExam = Math.min(60, Math.max(0, Math.round(Number(a.examScore) || 0)));
+  const ca1Score = Math.round(legacyCa / 2);
+  const ca2Score = Math.round(legacyCa - ca1Score);
 
   return {
     ca1Raw: ca1Score,
@@ -827,9 +827,9 @@ export function calculateManebGrade(
   caScore: number,
   examScore: number
 ): ManebGradeResult {
-  const clampedCa = Math.min(40, Math.max(0, Number(caScore) || 0));
-  const clampedExam = Math.min(60, Math.max(0, Number(examScore) || 0));
-  const total = Math.round((clampedCa + clampedExam) * 10) / 10;
+  const clampedCa = Math.min(40, Math.max(0, Math.round(Number(caScore) || 0)));
+  const clampedExam = Math.min(60, Math.max(0, Math.round(Number(examScore) || 0)));
+  const total = Math.min(100, Math.max(0, Math.round(clampedCa + clampedExam)));
 
   if (formLevel <= 2) {
     // JCE (Form 1 & Form 2) Letter Scale
@@ -978,7 +978,7 @@ export function calculateTermReportSummary(
   const sorted = [...studentTermAssessments].sort((a, b) => a.subject.localeCompare(b.subject));
   const rows: TermReportSubjectRow[] = sorted.map((a) => {
     const b = normalizeAssessmentComponents(a);
-    const totalScore = Math.round((b.ca1Score + b.ca2Score + b.examScore) * 10) / 10;
+    const totalScore = Math.min(100, Math.max(0, Math.round(b.ca1Score + b.ca2Score + b.examScore)));
     const maneb = calculateManebGrade(formLevel, b.caScore, b.examScore);
     return {
       assessment: a,
