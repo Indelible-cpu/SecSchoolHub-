@@ -1465,8 +1465,8 @@ export default function App() {
   return (
     <div className="min-h-[100dvh] w-full flex bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100">
       {/* Desktop Left Sidebar */}
-      <aside className="hidden lg:flex lg:flex-col lg:w-64 shrink-0 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-[#161B22]">
-        <div className="h-16 px-5 flex items-center gap-2.5 border-b border-slate-200 dark:border-slate-800">
+      <aside className="hidden lg:flex lg:flex-col lg:w-64 shrink-0 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-[#161B22] sticky top-0 h-screen overflow-hidden z-20">
+        <div className="h-16 px-5 flex items-center gap-2.5 border-b border-slate-200 dark:border-slate-800 shrink-0">
           {activeSchool.logoDataUrl && (
             <div className="h-9 w-9 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-hidden shrink-0 flex items-center justify-center">
               <img
@@ -1481,7 +1481,7 @@ export default function App() {
           </span>
         </div>
 
-        <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800/80 text-xs text-slate-500 dark:text-slate-400 space-y-1.5">
+        <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800/80 text-xs text-slate-500 dark:text-slate-400 space-y-1.5 shrink-0">
           <div>{activeSchool.district} District · {activeSchool.schoolType}</div>
           <div className="font-mono text-slate-700 dark:text-slate-300">
             {activeSchool.currentTerm} · {activeSchool.academicYear}
@@ -1502,7 +1502,7 @@ export default function App() {
           )}
         </div>
 
-        <nav className="flex-1 p-3 space-y-1" aria-label="School management modules">
+        <nav className="flex-1 p-3 space-y-1 overflow-y-auto" aria-label="School management modules">
           {visibleNavItems.map((item) => {
             const Icon = item.icon;
             const active = activeSection === item.id;
@@ -1524,7 +1524,7 @@ export default function App() {
           })}
         </nav>
 
-        <div className="p-4 border-t border-slate-200 dark:border-slate-800 space-y-3">
+        <div className="p-4 border-t border-slate-200 dark:border-slate-800 space-y-3 shrink-0">
           {isTrueOwner && (
             <div>
               <label
