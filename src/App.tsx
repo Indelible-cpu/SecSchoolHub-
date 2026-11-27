@@ -21,6 +21,8 @@ import {
   handleFirestoreError,
   OperationType,
   signInWithGoogle,
+  signInWithEmail,
+  registerWithEmail,
   signOutUser,
   testConnection,
 } from './firebase';
@@ -1127,20 +1129,85 @@ export default function App() {
     students,
   ]);
 
-  const handleGoogleSignIn = async () => {
+  const handleGoogleSignIn = () => {
+    let authPromise: ReturnType<typeof signInWithGoogle>;
+    try {
+      authPromise = signInWithGoogle();
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Sign-in cancelled or failed.');
+      return;
+    }
+
+    setAuthError('');
+    setSigningIn(true);
+
+    authPromise
+      .then(() => {
+        setStudentSessionCode('');
+        setPortalOverride('workspace');
+        try {
+          window.localStorage.removeItem('malawisec_student_code');
+        } catch {}
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : 'Sign-in cancelled or failed.';
+        if (msg.includes('closed-by-user') || msg.includes('cancelled-popup')) {
+          return;
+        }
+        setAuthError(msg);
+      })
+      .finally(() => {
+        setSigningIn(false);
+      });
+  };
+
+  const handleEmailSignIn = async (email: string, pass: string) => {
     setAuthError('');
     setSigningIn(true);
     try {
-      await signInWithGoogle();
+      await signInWithEmail(email, pass);
       setStudentSessionCode('');
       setPortalOverride('workspace');
       try {
         window.localStorage.removeItem('malawisec_student_code');
-      } catch {
-        // Ignore storage error
+      } catch {}
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code;
+      if (
+        code === 'auth/invalid-credential' ||
+        code === 'auth/wrong-password' ||
+        code === 'auth/user-not-found'
+      ) {
+        setAuthError('Incorrect email or password. Please try again.');
+      } else if (code === 'auth/too-many-requests') {
+        setAuthError('Too many failed attempts. Please try again in a few moments.');
+      } else {
+        setAuthError(err instanceof Error ? err.message : 'Sign-in failed.');
       }
-    } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Sign-in cancelled or failed.');
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const handleEmailRegister = async (email: string, pass: string) => {
+    setAuthError('');
+    setSigningIn(true);
+    try {
+      await registerWithEmail(email, pass);
+      setStudentSessionCode('');
+      setPortalOverride('workspace');
+      try {
+        window.localStorage.removeItem('malawisec_student_code');
+      } catch {}
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code;
+      if (code === 'auth/email-already-in-use') {
+        setAuthError('An account with this email already exists. Please sign in instead.');
+      } else if (code === 'auth/weak-password') {
+        setAuthError('Password must be at least 6 characters long.');
+      } else {
+        setAuthError(err instanceof Error ? err.message : 'Registration failed.');
+      }
     } finally {
       setSigningIn(false);
     }
@@ -1280,6 +1347,8 @@ export default function App() {
           signingIn={signingIn}
           authError={authError}
           onGoogleSignIn={handleGoogleSignIn}
+          onEmailSignIn={handleEmailSignIn}
+          onEmailRegister={handleEmailRegister}
           onStudentCodeSignIn={handleStudentCodeSignIn}
           theme={theme}
           onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}

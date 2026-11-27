@@ -1,15 +1,19 @@
 import { initializeApp } from 'firebase/app';
 import {
+  createUserWithEmailAndPassword,
   getAuth,
   GoogleAuthProvider,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
+  UserCredential,
 } from 'firebase/auth';
 import { doc, getDocFromServer, initializeFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import firebaseConfig from '../firebase-applet-config.json';
 
-// Use same-origin auth domain when hosted on Firebase to prevent browser storage partitioning and missing-initial-state errors
+// Use same-origin auth domain when hosted on Firebase to prevent browser storage partitioning
 const effectiveConfig = {
   ...firebaseConfig,
   authDomain:
@@ -120,31 +124,22 @@ export function testConnection(): Promise<void> {
   return connectionCheckPromise;
 }
 
-export async function signInWithGoogle(): Promise<void> {
-  try {
-    await signInWithPopup(auth, googleProvider);
-  } catch (error: unknown) {
-    const errCode = (error as { code?: string })?.code;
-    const errMsg = error instanceof Error ? error.message : '';
-    // User simply closed the popup or cancelled: do not show an error
-    if (
-      errCode === 'auth/popup-closed-by-user' ||
-      errCode === 'auth/cancelled-popup-request'
-    ) {
-      return;
-    }
-    // Browser popup blocker triggered: give clear, actionable instructions
-    if (errCode === 'auth/popup-blocked') {
-      throw new Error(
-        'The Google sign-in window was blocked by your browser. Please allow popups for this site in your browser settings and try again.'
-      );
-    }
-    if (errMsg.includes('Cross-Origin-Opener-Policy')) {
-      console.warn('COOP notice ignored during popup flow:', errMsg);
-      return;
-    }
-    throw error;
-  }
+// Direct synchronous invocation inside click ticks guarantees the browser treats it as a trusted user gesture (no popup blocking)
+export function signInWithGoogle(): Promise<UserCredential> {
+  return signInWithPopup(auth, googleProvider);
+}
+
+// Standard email/password authentication (works everywhere, zero popups, zero redirects)
+export function signInWithEmail(email: string, pass: string): Promise<UserCredential> {
+  return signInWithEmailAndPassword(auth, email.trim(), pass);
+}
+
+export function registerWithEmail(email: string, pass: string): Promise<UserCredential> {
+  return createUserWithEmailAndPassword(auth, email.trim(), pass);
+}
+
+export function resetUserPassword(email: string): Promise<void> {
+  return sendPasswordResetEmail(auth, email.trim());
 }
 
 export async function signOutUser(): Promise<void> {
