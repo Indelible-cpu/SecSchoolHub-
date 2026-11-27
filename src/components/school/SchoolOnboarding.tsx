@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
-import { Building2, Sparkles, ArrowRight } from 'lucide-react';
+import { Building2, Sparkles, ArrowRight, CheckCircle2 } from 'lucide-react';
 import {
   MALAWI_DISTRICTS,
   SCHOOL_TYPES,
   TERMS,
   formatMWK,
-  isGovernmentSchool,
 } from '../../school/malawi';
 import { SchoolType, TermName } from '../../school/types';
 import { createSchoolWorkspace, seedDemoMalawiSchool } from '../../school/firestoreService';
@@ -31,23 +30,40 @@ export const SchoolOnboarding: React.FC<SchoolOnboardingProps> = ({
   const [motto, setMotto] = useState('Knowledge and Service');
   const [academicYear, setAcademicYear] = useState('2026/2027');
   const [currentTerm, setCurrentTerm] = useState<TermName>('Term 2');
-  const [tuitionStr, setTuitionStr] = useState('65000');
+
+  // Malawi Policy: Community Day Secondary Schools (CDSS) & Government Day schools are 100% tuition-free & exam-free
+  const [tuitionStr, setTuitionStr] = useState('0');
   const [gpfStr, setGpfStr] = useState('0');
   const [examFeeStr, setExamFeeStr] = useState('0');
 
   const [submitting, setSubmitting] = useState<'none' | 'create' | 'demo'>('none');
   const [formError, setFormError] = useState('');
 
-  const govTuitionOnly = isGovernmentSchool(schoolType);
+  const isGovDay = schoolType === 'Government Day';
+  const isGovBoarding = schoolType === 'Government Boarding';
+  const isPublicSchool = isGovDay || isGovBoarding;
 
   const handleSchoolTypeChange = (nextType: SchoolType) => {
     setSchoolType(nextType);
-    if (isGovernmentSchool(nextType)) {
+    if (nextType === 'Government Day') {
+      // Community Day Sec Schools (CDSS) and Govt Day are completely free
+      setTuitionStr('0');
       setGpfStr('0');
       setExamFeeStr('0');
-    } else if (gpfStr === '0' && examFeeStr === '0') {
-      setGpfStr('10000');
-      setExamFeeStr('12000');
+    } else if (nextType === 'Government Boarding') {
+      // Tuition and exams are free; boarding upkeep fee applies
+      setTuitionStr('0');
+      setGpfStr('65000'); // Boarding / Catering Upkeep Fee
+      setExamFeeStr('0'); // National exams free
+    } else if (nextType === 'Grant-Aided') {
+      setTuitionStr('35000');
+      setGpfStr('15000');
+      setExamFeeStr('0');
+    } else {
+      // Private Secondary School
+      setTuitionStr('95000');
+      setGpfStr('20000');
+      setExamFeeStr('15000');
     }
   };
 
@@ -70,6 +86,10 @@ export const SchoolOnboarding: React.FC<SchoolOnboardingProps> = ({
       setFormError('Please enter the secondary school name.');
       return;
     }
+    if (!district) {
+      setFormError('Please select a district for your school.');
+      return;
+    }
     setFormError('');
     setSubmitting('create');
     try {
@@ -83,9 +103,9 @@ export const SchoolOnboarding: React.FC<SchoolOnboardingProps> = ({
         motto: motto.trim(),
         academicYear: academicYear.trim() || '2026/2027',
         currentTerm,
-        defaultTuitionMWK: Number(tuitionStr) || 0,
-        defaultGpfMWK: govTuitionOnly ? 0 : Number(gpfStr) || 0,
-        defaultExamFeeMWK: govTuitionOnly ? 0 : Number(examFeeStr) || 0,
+        defaultTuitionMWK: isPublicSchool ? 0 : Number(tuitionStr) || 0,
+        defaultGpfMWK: isGovDay ? 0 : Number(gpfStr) || 0,
+        defaultExamFeeMWK: isPublicSchool ? 0 : Number(examFeeStr) || 0,
       });
       await onSchoolReady(schoolId);
     } catch (err) {
@@ -96,8 +116,9 @@ export const SchoolOnboarding: React.FC<SchoolOnboardingProps> = ({
   };
 
   const previewTotal =
-    (Number(tuitionStr) || 0) +
-    (govTuitionOnly ? 0 : (Number(gpfStr) || 0) + (Number(examFeeStr) || 0));
+    (isPublicSchool ? 0 : Number(tuitionStr) || 0) +
+    (isGovDay ? 0 : Number(gpfStr) || 0) +
+    (isPublicSchool ? 0 : Number(examFeeStr) || 0);
 
   return (
     <div className="w-full py-6 sm:py-8 px-4 sm:px-8">
@@ -174,21 +195,23 @@ export const SchoolOnboarding: React.FC<SchoolOnboardingProps> = ({
               maxLength={120}
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Dedza Secondary School"
+              placeholder="e.g. Dedza Secondary School, Nkhotakota CDSS"
               className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600"
             />
           </div>
 
           <div>
             <label htmlFor="sch-district" className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
-              District
+              District (All 28 Districts of Malawi)
             </label>
             <select
               id="sch-district"
+              required
               value={district}
               onChange={(e) => setDistrict(e.target.value)}
-              className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+              className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600 cursor-pointer"
             >
+              <option value="" disabled>-- Select School District --</option>
               {MALAWI_DISTRICTS.map((d) => (
                 <option key={d} value={d}>{d}</option>
               ))}
@@ -203,10 +226,12 @@ export const SchoolOnboarding: React.FC<SchoolOnboardingProps> = ({
               id="sch-type"
               value={schoolType}
               onChange={(e) => handleSchoolTypeChange(e.target.value as SchoolType)}
-              className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+              className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600 cursor-pointer"
             >
               {SCHOOL_TYPES.map((t) => (
-                <option key={t} value={t}>{t}</option>
+                <option key={t} value={t}>
+                  {t === 'Government Day' ? 'Government Day (CDSS)' : t}
+                </option>
               ))}
             </select>
           </div>
@@ -233,7 +258,7 @@ export const SchoolOnboarding: React.FC<SchoolOnboardingProps> = ({
               id="sch-term"
               value={currentTerm}
               onChange={(e) => setCurrentTerm(e.target.value as TermName)}
-              className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600"
+              className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-600 cursor-pointer"
             >
               {TERMS.map((t) => (
                 <option key={t} value={t}>{t}</option>
@@ -265,49 +290,72 @@ export const SchoolOnboarding: React.FC<SchoolOnboardingProps> = ({
               Total / Term: {formatMWK(previewTotal)}
             </span>
           </div>
-          {govTuitionOnly && (
-            <div className="mb-3 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/35 border border-emerald-200/80 dark:border-emerald-900/60 px-3.5 py-2.5 text-xs text-emerald-900 dark:text-emerald-200">
-              <strong>Malawi Government School Fee Policy:</strong> Government Day &amp; Boarding schools charge Tuition Fee only. GPF / Development and Exam / Lab fees are automatically waived at MK 0.
+
+          {/* Malawi Secondary School Free Education Policy Banner */}
+          {isGovDay && (
+            <div className="mb-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 p-3.5 space-y-1">
+              <div className="flex items-center gap-2 text-xs font-bold text-emerald-900 dark:text-emerald-200">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" aria-hidden="true" />
+                <span>Malawi Government Policy: 100% Free Secondary Education</span>
+              </div>
+              <p className="text-xs text-emerald-800 dark:text-emerald-300 leading-relaxed">
+                In all Community Day Secondary Schools (CDSS) and Government Day secondary schools, <strong>Tuition Fee</strong>, <strong>National Examinations (MANEB)</strong>, <strong>Science Lab &amp; Library</strong>, and <strong>GPF</strong> are completely <strong>FREE (MK 0)</strong>.
+              </p>
             </div>
           )}
+
+          {isGovBoarding && (
+            <div className="mb-4 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/60 p-3.5 space-y-1">
+              <div className="flex items-center gap-2 text-xs font-bold text-blue-900 dark:text-blue-200">
+                <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" aria-hidden="true" />
+                <span>Malawi Government Boarding School Policy</span>
+              </div>
+              <p className="text-xs text-blue-800 dark:text-blue-300 leading-relaxed">
+                Tuition, national exams, library, and GPF are <strong>FREE (MK 0)</strong>. Only the <strong>Boarding &amp; Catering Upkeep Fee</strong> is payable by boarding students.
+              </p>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label htmlFor="sch-tuition" className="block text-xs text-slate-600 dark:text-slate-400 mb-1">
-                Tuition Fee (MK)
+                Tuition Fee (MK){isPublicSchool ? ' · Free (Govt)' : ''}
               </label>
               <input
                 id="sch-tuition"
                 type="number"
                 min="0"
-                value={tuitionStr}
+                disabled={isPublicSchool}
+                value={isPublicSchool ? '0' : tuitionStr}
                 onChange={(e) => setTuitionStr(e.target.value)}
-                className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono tabular-nums text-sm text-slate-900 dark:text-slate-100"
+                className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono tabular-nums text-sm text-slate-900 dark:text-slate-100 disabled:opacity-55 disabled:cursor-not-allowed"
               />
             </div>
             <div>
               <label htmlFor="sch-gpf" className="block text-xs text-slate-600 dark:text-slate-400 mb-1">
-                GPF / Development (MK){govTuitionOnly ? ' · Waived' : ''}
+                {isGovBoarding ? 'Boarding Fee (MK)' : isGovDay ? 'GPF / Lab / Library (Free)' : 'GPF / Development (MK)'}
               </label>
               <input
                 id="sch-gpf"
                 type="number"
                 min="0"
-                disabled={govTuitionOnly}
-                value={govTuitionOnly ? '0' : gpfStr}
+                disabled={isGovDay}
+                value={isGovDay ? '0' : gpfStr}
                 onChange={(e) => setGpfStr(e.target.value)}
+                placeholder={isGovBoarding ? '65000' : '0'}
                 className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono tabular-nums text-sm text-slate-900 dark:text-slate-100 disabled:opacity-55 disabled:cursor-not-allowed"
               />
             </div>
             <div>
               <label htmlFor="sch-exam" className="block text-xs text-slate-600 dark:text-slate-400 mb-1">
-                Exam / Lab Fee (MK){govTuitionOnly ? ' · Waived' : ''}
+                Exam Fee (MK){isPublicSchool ? ' · Free (Govt)' : ''}
               </label>
               <input
                 id="sch-exam"
                 type="number"
                 min="0"
-                disabled={govTuitionOnly}
-                value={govTuitionOnly ? '0' : examFeeStr}
+                disabled={isPublicSchool}
+                value={isPublicSchool ? '0' : examFeeStr}
                 onChange={(e) => setExamFeeStr(e.target.value)}
                 className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono tabular-nums text-sm text-slate-900 dark:text-slate-100 disabled:opacity-55 disabled:cursor-not-allowed"
               />
