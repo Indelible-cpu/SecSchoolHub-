@@ -11,7 +11,19 @@ import { doc, getDocFromServer, initializeFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import firebaseConfig from '../firebase-applet-config.json';
 
-const app = initializeApp(firebaseConfig);
+// Use same-origin auth domain when hosted on Firebase to prevent browser storage partitioning and missing-initial-state errors
+const effectiveConfig = {
+  ...firebaseConfig,
+  authDomain:
+    typeof window !== 'undefined' &&
+    window.location.hostname &&
+    !window.location.hostname.includes('localhost') &&
+    !window.location.hostname.includes('127.0.0.1')
+      ? window.location.hostname
+      : firebaseConfig.authDomain,
+};
+
+const app = initializeApp(effectiveConfig);
 const rawDbId = (firebaseConfig as { firestoreDatabaseId?: string }).firestoreDatabaseId?.trim();
 const databaseId =
   rawDbId && rawDbId !== '(default)' && !rawDbId.startsWith('ai-studio-ledgercalc')
