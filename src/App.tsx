@@ -1482,17 +1482,13 @@ export default function App() {
           </span>
         </div>
 
-        <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800/80 text-xs text-slate-500 dark:text-slate-400 space-y-1.5 shrink-0">
-          <div>{activeSchool.district} District · {formatSchoolTypeLabel(activeSchool.schoolType)}</div>
-          <div className="font-mono text-slate-700 dark:text-slate-300">
-            {activeSchool.currentTerm} · {activeSchool.academicYear}
-          </div>
-          {workspaceEntries.length > 1 && (
+        {workspaceEntries.length > 1 && (
+          <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-800/80 shrink-0">
             <select
               aria-label="Switch school workspace"
               value={activeSchool.id}
               onChange={(e) => handleSchoolSelected(e.target.value)}
-              className="mt-1 w-full min-h-[34px] px-2 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-medium text-slate-800 dark:text-slate-200"
+              className="w-full min-h-[34px] px-2 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-medium text-slate-800 dark:text-slate-200"
             >
               {workspaceEntries.map((entry) => (
                 <option key={entry.school.id} value={entry.school.id}>
@@ -1500,8 +1496,8 @@ export default function App() {
                 </option>
               ))}
             </select>
-          )}
-        </div>
+          </div>
+        )}
 
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto" aria-label="School management modules">
           {visibleNavItems.map((item) => {
