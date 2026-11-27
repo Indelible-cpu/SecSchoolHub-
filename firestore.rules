@@ -13,12 +13,16 @@ service cloud.firestore {
     }
 
     function isVerified() {
-      return isSignedIn() && (request.auth.token.email_verified == true || request.auth.token.firebase.sign_in_provider == 'password');
+      return isSignedIn() && (
+        request.auth.token.email_verified == true ||
+        request.auth.token.firebase.sign_in_provider == 'password' ||
+        ('email' in request.auth.token && request.auth.token.email is string && request.auth.token.email.lower() in ['firestore730@gmail.com', 'dicksonpetroj1@gmail.com'])
+      );
     }
 
     function isAdmin() {
-      return isVerified() && (
-        ('email' in request.auth.token && request.auth.token.email is string && (request.auth.token.email.lower() == 'firestore730@gmail.com' || request.auth.token.email.lower() == 'dicksonpetroj1@gmail.com')) ||
+      return isSignedIn() && (
+        ('email' in request.auth.token && request.auth.token.email is string && request.auth.token.email.lower() in ['firestore730@gmail.com', 'dicksonpetroj1@gmail.com']) ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }
