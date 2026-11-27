@@ -3470,7 +3470,7 @@ export const StudentResultsPortal: React.FC<StudentResultsPortalProps> = ({
 
       {/* Student Change Password / PIN Modal */}
       <ModalBackdrop
-        isOpen={showPasswordModal}
+        open={showPasswordModal}
         onClose={() => {
           if (!passwordModalSaving) {
             setShowPasswordModal(false);

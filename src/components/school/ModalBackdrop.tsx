@@ -3,6 +3,7 @@ import { RotateCcw } from 'lucide-react';
 
 interface ModalBackdropProps {
   open?: boolean;
+  isOpen?: boolean;
   onClose: () => void;
   disabled?: boolean;
   className?: string;
@@ -18,7 +19,8 @@ interface ModalBackdropProps {
  * never trigger an accidental close) or pressing Escape.
  */
 export const ModalBackdrop: React.FC<ModalBackdropProps> = ({
-  open = true,
+  open,
+  isOpen,
   onClose,
   disabled = false,
   className = 'fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4',
@@ -27,8 +29,10 @@ export const ModalBackdrop: React.FC<ModalBackdropProps> = ({
   ariaLabel,
   children,
 }) => {
+  const isModalOpen = open ?? isOpen ?? true;
+
   useEffect(() => {
-    if (!open || disabled) return;
+    if (!isModalOpen || disabled) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
@@ -37,9 +41,9 @@ export const ModalBackdrop: React.FC<ModalBackdropProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [open, disabled, onClose]);
+  }, [isModalOpen, disabled, onClose]);
 
-  if (!open) return null;
+  if (!isModalOpen) return null;
 
   return (
     <div
