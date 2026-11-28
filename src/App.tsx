@@ -88,6 +88,7 @@ import { StaffTimebookStaffView } from './components/school/StaffTimebookStaffVi
 import { StudentResultsPortal } from './components/school/StudentResultsPortal';
 import { StudentPhotoCaptureModal } from './components/school/StudentPhotoCaptureModal';
 import { LandingPage } from './components/school/LandingPage';
+import { LoginPage } from './components/school/LoginPage';
 import { SecSchoolHubLoader } from './components/SecSchoolHubLoader';
 import { OfflineIndicator } from './components/OfflineIndicator';
 
@@ -126,6 +127,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [signingIn, setSigningIn] = useState(false);
   const [authError, setAuthError] = useState('');
+  const [viewMode, setViewMode] = useState<'landing' | 'login'>('landing');
 
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     try {
@@ -1387,19 +1389,133 @@ export default function App() {
     }
   };
 
-  const handleStudentSignOut = () => {
+  const handleUniversalSignOut = async () => {
     try {
       window.localStorage.removeItem('malawisec_student_code');
+      window.sessionStorage.clear();
     } catch {
       // Ignore storage error
     }
+    setViewMode('landing');
     setStudentSessionCode('');
     setStudentCodeInput('');
     setStudentPasswordInput('');
     setAuthError('');
     setPortalOverride('auto');
     setLoginIntent('student');
+
+    try {
+      window.history.replaceState(null, '', window.location.pathname);
+      window.history.pushState(null, '', window.location.pathname);
+    } catch {
+      // Ignore
+    }
+
+    try {
+      await signOutUser();
+    } catch {
+      // Ignore
+    }
   };
+
+  const handleStudentSignOut = () => {
+    handleUniversalSignOut();
+  };
+
+    // Enforce session clearing & prevent accessing protected dashboard using browser back button
+  useEffect(() => {
+    const handlePopState = () => {
+      if (!user && !studentSessionCode) {
+        setViewMode('landing');
+        try {
+          window.history.pushState(null, '', window.location.pathname);
+        } catch {
+          // Ignore
+        }
+      }
+    };
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted && !auth.currentUser && !window.localStorage.getItem('malawisec_student_code')) {
+        setViewMode('landing');
+        window.location.reload();
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    window.addEventListener('pageshow', handlePageShow);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('pageshow', handlePageShow);
+    };
+  }, [user, studentSessionCode]);
+
+  // Restrict screen capture, printing, and screenshot shortcuts for security reasons
+  useEffect(() => {
+    // 1. Prevent screenshot & print shortcuts (PrintScreen, Ctrl+P, Ctrl+S, Ctrl+Shift+S, Mac Cmd+Shift+3/4/5)
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'PrintScreen') {
+        e.preventDefault();
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText('').catch(() => {});
+        }
+        return false;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault();
+        return false;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S') && !e.shiftKey) {
+        e.preventDefault();
+        return false;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        return false;
+      }
+      if (e.metaKey && e.shiftKey && ['3', '4', '5'].includes(e.key)) {
+        e.preventDefault();
+        return false;
+      }
+    };
+
+    // 2. Prevent right-click context menu on protected workspace
+    const handleContextMenu = (e: MouseEvent) => {
+      if (user || studentSessionCode) {
+        e.preventDefault();
+      }
+    };
+
+    // 3. Obfuscate view on blur / visibilitychange (protects against snipping tools & background capture)
+    const handleWindowBlur = () => {
+      if (user || studentSessionCode) {
+        document.body.classList.add('window-obscured');
+      }
+    };
+    const handleWindowFocus = () => {
+      document.body.classList.remove('window-obscured');
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden' && (user || studentSessionCode)) {
+        document.body.classList.add('window-obscured');
+      } else {
+        document.body.classList.remove('window-obscured');
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('contextmenu', handleContextMenu);
+    window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('focus', handleWindowFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('contextmenu', handleContextMenu);
+      window.removeEventListener('blur', handleWindowBlur);
+      window.removeEventListener('focus', handleWindowFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.body.classList.remove('window-obscured');
+    };
+  }, [user, studentSessionCode]);
 
   const handleSchoolSelected = async (schoolId: string) => {
     setActiveSchoolId(schoolId);
@@ -1472,7 +1588,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => signOutUser()}
+                onClick={handleUniversalSignOut}
                 className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white cursor-pointer"
               >
                 <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
@@ -1499,7 +1615,7 @@ export default function App() {
             <div className="pt-2">
               <button
                 type="button"
-                onClick={() => signOutUser()}
+                onClick={handleUniversalSignOut}
                 className="w-full min-h-[42px] px-4 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold inline-flex items-center justify-center gap-2 hover:opacity-90 transition-opacity cursor-pointer"
               >
                 <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
@@ -1523,7 +1639,7 @@ export default function App() {
             <div className="flex items-center gap-3">
               <button
                 type="button"
-                onClick={() => signOutUser()}
+                onClick={handleUniversalSignOut}
                 className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-slate-900 cursor-pointer"
               >
                 <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
@@ -1700,7 +1816,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                onClick={() => signOutUser()}
+                onClick={handleUniversalSignOut}
                 className="min-h-[32px] px-2 rounded-lg border border-rose-200/60 dark:border-rose-900/40 bg-white/60 dark:bg-rose-950/20 backdrop-blur-md flex items-center justify-center gap-1.5 text-[11px] font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer transition-colors"
                 title="Sign Out"
               >
@@ -1811,7 +1927,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                onClick={() => signOutUser()}
+                onClick={handleUniversalSignOut}
                 aria-label="Sign out"
                 className="lg:hidden min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 cursor-pointer"
               >

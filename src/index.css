@@ -73,3 +73,27 @@
 .animate-forth-and-back {
   animation: forthAndBack 1.4s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
 }
+
+/* Security & Screenshot / Print Prevention */
+@media print {
+  html, body, #root, * {
+    display: none !important;
+    visibility: hidden !important;
+  }
+}
+
+.security-protected {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.window-obscured {
+  filter: blur(28px) grayscale(90%) !important;
+  pointer-events: none !important;
+  user-select: none !important;
+  transition: filter 0.08s ease-out;
+}
+

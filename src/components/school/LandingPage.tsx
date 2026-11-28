@@ -1,92 +1,61 @@
-import React, { useState } from 'react';
-import { ArrowRight, Eye, EyeOff, Lock, Mail, Moon, Sun } from 'lucide-react';
-import { resetUserPassword } from '../../firebase';
+import React from 'react';
+import {
+  ArrowRight,
+  Award,
+  Banknote,
+  BookOpen,
+  GraduationCap,
+  LogIn,
+  Moon,
+  ShieldCheck,
+  Sun,
+  Users,
+} from 'lucide-react';
 
 interface LandingPageProps {
-  signingIn: boolean;
-  authError: string;
-  onSignIn: (identifier: string, pass: string) => void;
+  onNavigateToLogin: () => void;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
 }
 
+const PLATFORM_MODULES = [
+  { id: 'students', label: 'Students', icon: Users },
+  { id: 'staff', label: 'Staff', icon: GraduationCap },
+  { id: 'grading', label: 'Grading', icon: Award },
+  { id: 'fees', label: 'Fees', icon: Banknote },
+  { id: 'library', label: 'Library', icon: BookOpen },
+  { id: 'administration', label: 'Administration', icon: ShieldCheck },
+] as const;
+
 export const LandingPage: React.FC<LandingPageProps> = ({
-  signingIn,
-  authError,
-  onSignIn,
+  onNavigateToLogin,
   theme,
   onToggleTheme,
 }) => {
-  const [identifierInput, setIdentifierInput] = useState('');
-  const [passwordInput, setPasswordInput] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-
-  // Password Reset Flow
-  const [isResetMode, setIsResetMode] = useState(false);
-  const [resetEmail, setResetEmail] = useState('');
-  const [resetLoading, setResetLoading] = useState(false);
-  const [resetSuccess, setResetSuccess] = useState('');
-  const [resetError, setResetError] = useState('');
-
-  const handleFormSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!identifierInput.trim() || !passwordInput.trim()) return;
-    onSignIn(identifierInput.trim(), passwordInput.trim());
-  };
-
-  const handlePasswordResetSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const targetEmail = resetEmail.trim() || (identifierInput.includes('@') ? identifierInput.trim() : '');
-    if (!targetEmail) {
-      setResetError('Please enter your registered school email address.');
-      return;
-    }
-    setResetLoading(true);
-    setResetError('');
-    setResetSuccess('');
-    try {
-      await resetUserPassword(targetEmail);
-      setResetSuccess(
-        `A password reset link has been sent to ${targetEmail}. Please check your inbox and follow the instructions.`
-      );
-    } catch (err: unknown) {
-      const code = (err as { code?: string })?.code;
-      if (code === 'auth/user-not-found') {
-        setResetError('No registered account was found with this email address.');
-      } else if (code === 'auth/invalid-email') {
-        setResetError('Please enter a valid email address.');
-      } else {
-        setResetError(
-          err instanceof Error ? err.message : 'Unable to send password reset link right now.'
-        );
-      }
-    } finally {
-      setResetLoading(false);
-    }
-  };
-
   return (
-    <div className="min-h-[100dvh] w-full flex flex-col bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100">
-      {/* Minimal Header */}
-      <header className="h-16 w-full border-b border-slate-200/80 dark:border-slate-800/80 bg-white/90 dark:bg-[#161B22]/90">
-        <div className="w-full h-full px-4 sm:px-8 flex items-center justify-between gap-8">
+    <div className="min-h-[100dvh] w-full flex flex-col bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100 transition-colors">
+      {/* Header */}
+      <header className="h-16 w-full border-b border-slate-200/80 dark:border-slate-800/80 bg-white/90 dark:bg-[#161B22]/90 sticky top-0 z-20 backdrop-blur-md">
+        <div className="w-full max-w-7xl mx-auto h-full px-4 sm:px-8 flex items-center justify-between gap-4">
+          {/* Brand Logo & Name */}
           <div className="flex items-center gap-2.5 shrink-0">
             <img
               src="/brand-logo.png"
               alt="SecSchoolHub logo"
               className="h-8 w-8 object-contain rounded-full border border-sky-400/30 shadow-xs"
             />
-            <span className="text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0">
+            <span className="text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap">
               SecSchool<span className="text-sky-500 dark:text-sky-400">Hub</span>
             </span>
           </div>
 
-          <div className="flex items-center gap-2.5 shrink-0">
+          {/* Top-Right Corner Actions: Theme Toggle & Single Sign In Button */}
+          <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
             <button
               type="button"
               onClick={onToggleTheme}
               aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-              className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
             >
               {theme === 'dark' ? (
                 <Sun className="w-4 h-4" aria-hidden="true" />
@@ -94,202 +63,130 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 <Moon className="w-4 h-4" aria-hidden="true" />
               )}
             </button>
+
+            <button
+              type="button"
+              onClick={onNavigateToLogin}
+              className="min-h-[38px] px-4 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs sm:text-sm font-semibold inline-flex items-center gap-2 hover:opacity-90 transition-opacity cursor-pointer whitespace-nowrap shadow-xs"
+            >
+              <LogIn className="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
+              <span>Sign In</span>
+            </button>
           </div>
         </div>
       </header>
 
-      {/* Centered Split */}
-      <main className="flex-1 w-full flex items-center justify-center px-4 sm:px-8 py-10">
-        <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14 items-center">
-          <div className="lg:col-span-6 space-y-5 text-center">
-            <h1 className="text-3xl sm:text-4xl lg:text-[2.65rem] font-bold tracking-tight leading-[1.12] text-slate-900 dark:text-white text-balance">
-              Manage your school in one place.
-            </h1>
+      {/* Main Hero & Showcase */}
+      <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-8 py-8 sm:py-12 flex flex-col justify-between gap-10">
+        {/* Hero Header Area */}
+        <div className="max-w-3xl mx-auto text-center space-y-4">
+          <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold tracking-tight text-slate-900 dark:text-white leading-[1.15] text-balance">
+            Manage your school in one place.
+          </h1>
+          <p className="text-base sm:text-lg text-slate-600 dark:text-slate-300 leading-relaxed max-w-2xl mx-auto text-balance">
+            One platform for student records, exam results, school finances and library management.
+          </p>
 
-            <p className="text-sm sm:text-base text-slate-600 dark:text-slate-400 leading-relaxed max-w-md mx-auto">
-              Student records, JCE &amp; MSCE exam grading, MWK fee ledgers, and school library
-              circulation for administrators, staff, and students.
-            </p>
-          </div>
-
-          <div className="lg:col-span-6 lg:pl-6">
-            <div className="w-full max-w-md lg:mx-auto bg-white dark:bg-[#161B22] border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-7 space-y-5 shadow-xs">
-              {/* Clean Title & Subtitle */}
-              <div className="text-center space-y-1">
-                <h2 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">
-                  {isResetMode ? 'Reset Password' : 'Sign In'}
-                </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  {isResetMode
-                    ? 'Enter your institutional email to receive a password reset link.'
-                    : 'Enter your school credentials to access your portal.'}
-                </p>
-              </div>
-
-              {authError && !isResetMode && (
-                <div
-                  role="alert"
-                  className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200"
-                >
-                  {authError}
-                </div>
-              )}
-
-              {/* Reset Password Form Mode */}
-              {isResetMode ? (
-                <form onSubmit={handlePasswordResetSubmit} className="space-y-4">
-                  {resetSuccess && (
-                    <div
-                      role="status"
-                      className="rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-900 px-3.5 py-2.5 text-xs text-emerald-800 dark:text-emerald-200 leading-relaxed"
-                    >
-                      {resetSuccess}
-                    </div>
-                  )}
-
-                  {resetError && (
-                    <div
-                      role="alert"
-                      className="rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200"
-                    >
-                      {resetError}
-                    </div>
-                  )}
-
-                  <div>
-                    <label
-                      htmlFor="reset-email-input"
-                      className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
-                    >
-                      Registered Email Address
-                    </label>
-                    <div className="relative">
-                      <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" aria-hidden="true" />
-                      <input
-                        id="reset-email-input"
-                        type="email"
-                        required
-                        autoComplete="email"
-                        value={resetEmail}
-                        onChange={(e) => setResetEmail(e.target.value)}
-                        placeholder="e.g. name@school.edu"
-                        className="w-full min-h-[44px] pl-9.5 pr-3.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-slate-900 dark:focus:border-slate-100"
-                      />
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={resetLoading}
-                    className="w-full min-h-[44px] px-4 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-sm font-semibold inline-flex items-center justify-center gap-2 hover:opacity-90 disabled:opacity-50 transition-opacity cursor-pointer whitespace-nowrap"
-                  >
-                    <span>{resetLoading ? 'Sending Link...' : 'Send Password Reset Link'}</span>
-                    {!resetLoading && <ArrowRight className="w-4 h-4" aria-hidden="true" />}
-                  </button>
-
-                  <div className="text-center pt-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsResetMode(false);
-                        setResetSuccess('');
-                        setResetError('');
-                      }}
-                      className="text-xs font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300 transition-colors cursor-pointer"
-                    >
-                      ← Back to Sign In
-                    </button>
-                  </div>
-                </form>
-              ) : (
-                /* Unified Portal Sign-In Form */
-                <form onSubmit={handleFormSubmit} className="space-y-4">
-                  <div>
-                    <label
-                      htmlFor="identifier-input"
-                      className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
-                    >
-                      Email Address
-                    </label>
-                    <div className="relative">
-                      <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" aria-hidden="true" />
-                      <input
-                        id="identifier-input"
-                        type="text"
-                        required
-                        autoComplete="username"
-                        value={identifierInput}
-                        onChange={(e) => setIdentifierInput(e.target.value)}
-                        placeholder="e.g. name@school.edu"
-                        className="w-full min-h-[44px] pl-9.5 pr-3.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-slate-900 dark:focus:border-slate-100"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label
-                        htmlFor="password-input"
-                        className="block text-xs font-medium text-slate-700 dark:text-slate-300"
-                      >
-                        Password
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setResetEmail(identifierInput.includes('@') ? identifierInput.trim() : '');
-                          setResetSuccess('');
-                          setResetError('');
-                          setIsResetMode(true);
-                        }}
-                        className="text-[11px] font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300 transition-colors cursor-pointer"
-                      >
-                        Forgot password?
-                      </button>
-                    </div>
-                    <div className="relative">
-                      <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" aria-hidden="true" />
-                      <input
-                        id="password-input"
-                        type={showPassword ? 'text' : 'password'}
-                        required
-                        autoComplete="current-password"
-                        value={passwordInput}
-                        onChange={(e) => setPasswordInput(e.target.value)}
-                        placeholder="••••••••"
-                        className="w-full min-h-[44px] pl-9.5 pr-10 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-slate-900 dark:focus:border-slate-100"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword((prev) => !prev)}
-                        className="absolute right-3 top-3 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
-                        aria-label={showPassword ? 'Hide password' : 'Show password'}
-                      >
-                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={signingIn}
-                    className="w-full min-h-[44px] px-4 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-sm font-semibold inline-flex items-center justify-center gap-2 hover:opacity-90 disabled:opacity-50 transition-opacity cursor-pointer whitespace-nowrap shadow-xs"
-                  >
-                    <span>{signingIn ? 'Signing in...' : 'Sign In'}</span>
-                    {!signingIn && <ArrowRight className="w-4 h-4" aria-hidden="true" />}
-                  </button>
-
-                  <div className="pt-2 text-center">
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-normal">
-                      Credentials are secure and provisioned by your school administration.
-                    </p>
-                  </div>
-                </form>
-              )}
-            </div>
+          <div className="pt-2 flex items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={onNavigateToLogin}
+              className="min-h-[44px] px-6 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-sm font-semibold inline-flex items-center gap-2 hover:opacity-90 transition-opacity cursor-pointer shadow-sm"
+            >
+              <span>Access School Portal</span>
+              <ArrowRight className="w-4 h-4" aria-hidden="true" />
+            </button>
           </div>
         </div>
+
+        {/* African School Photography Showcase Grid (5 Distinct Scenes) */}
+        <section aria-label="School Life & Operations" className="w-full space-y-4 sm:space-y-5">
+          {/* Top Row: Headteacher & Teacher */}
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 sm:gap-5">
+            {/* Scene 1: Headteacher in executive office */}
+            <div className="md:col-span-7 group relative overflow-hidden rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 shadow-xs">
+              <img
+                src="/landing/headteacher.jpg"
+                alt="Headteacher overseeing school operations from executive office"
+                loading="eager"
+                className="w-full h-56 sm:h-72 md:h-80 object-cover object-center group-hover:scale-[1.01] transition-transform duration-500 ease-out"
+              />
+            </div>
+
+            {/* Scene 2: Teacher in office reviewing exam marks */}
+            <div className="md:col-span-5 group relative overflow-hidden rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 shadow-xs">
+              <img
+                src="/landing/teacher.jpg"
+                alt="Teacher reviewing student examination papers and marksheet"
+                loading="eager"
+                className="w-full h-56 sm:h-72 md:h-80 object-cover object-center group-hover:scale-[1.01] transition-transform duration-500 ease-out"
+              />
+            </div>
+          </div>
+
+          {/* Bottom Row: Librarian, Digital Library Student, Physical Library Student */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-5">
+            {/* Scene 3: Librarian organizing books */}
+            <div className="group relative overflow-hidden rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 shadow-xs">
+              <img
+                src="/landing/librarian.jpg"
+                alt="School librarian organizing and managing books in library"
+                loading="lazy"
+                className="w-full h-52 sm:h-60 md:h-64 object-cover object-center group-hover:scale-[1.01] transition-transform duration-500 ease-out"
+              />
+            </div>
+
+            {/* Scene 4: Digital library student using smartphone */}
+            <div className="group relative overflow-hidden rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 shadow-xs">
+              <img
+                src="/landing/student-digital.jpg"
+                alt="Secondary school student using smartphone to browse digital online library"
+                loading="lazy"
+                className="w-full h-52 sm:h-60 md:h-64 object-cover object-center group-hover:scale-[1.01] transition-transform duration-500 ease-out"
+              />
+            </div>
+
+            {/* Scene 5: Physical library student reading book */}
+            <div className="group relative overflow-hidden rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 shadow-xs sm:col-span-2 md:col-span-1">
+              <img
+                src="/landing/student-reading.jpg"
+                alt="Secondary school student reading physical book at study desk in school library"
+                loading="lazy"
+                className="w-full h-52 sm:h-60 md:h-64 object-cover object-center group-hover:scale-[1.01] transition-transform duration-500 ease-out"
+              />
+            </div>
+          </div>
+        </section>
+
+        {/* Six Platform Modules - Slim Elegant Feature Strip */}
+        <section aria-label="Platform Core Modules" className="w-full">
+          <div className="w-full bg-white dark:bg-[#161B22] border border-slate-200/90 dark:border-slate-800 rounded-2xl p-3 sm:px-6 sm:py-4 shadow-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4 items-center">
+              {PLATFORM_MODULES.map((item) => {
+                const IconComponent = item.icon;
+                return (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-center sm:justify-start gap-2.5 px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800 text-slate-700 dark:text-slate-300"
+                  >
+                    <IconComponent className="w-4 h-4 text-sky-500 dark:text-sky-400 shrink-0" aria-hidden="true" />
+                    <span className="text-xs sm:text-sm font-semibold tracking-tight whitespace-nowrap">
+                      {item.label}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </section>
       </main>
+
+      {/* Minimal Footer */}
+      <footer className="w-full border-t border-slate-200/80 dark:border-slate-800/80 bg-white/70 dark:bg-[#161B22]/70 py-6 px-4 sm:px-8 text-center">
+        <p className="text-xs text-slate-500 dark:text-slate-400">
+          &copy; {new Date().getFullYear()} SecSchoolHub. All rights reserved. Provisioned for secondary school administration, academic excellence, and student access.
+        </p>
+      </footer>
     </div>
   );
 };
