@@ -1,6 +1,5 @@
 import React from 'react';
 import {
-  ArrowRight,
   Award,
   Banknote,
   BookOpen,
@@ -86,17 +85,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           <p className="text-base sm:text-lg text-slate-600 dark:text-slate-300 leading-relaxed max-w-2xl mx-auto text-balance">
             One platform for student records, exam results, school finances and library management.
           </p>
-
-          <div className="pt-2 flex items-center justify-center gap-3">
-            <button
-              type="button"
-              onClick={onNavigateToLogin}
-              className="min-h-[44px] px-6 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-sm font-semibold inline-flex items-center gap-2 hover:opacity-90 transition-opacity cursor-pointer shadow-sm"
-            >
-              <span>Access School Portal</span>
-              <ArrowRight className="w-4 h-4" aria-hidden="true" />
-            </button>
-          </div>
         </div>
 
         {/* African School Photography Showcase Grid (5 Distinct Scenes) */}
