@@ -18,12 +18,12 @@ interface LandingPageProps {
 }
 
 const PLATFORM_MODULES = [
-  { id: 'students', label: 'Students', icon: Users },
-  { id: 'staff', label: 'Staff', icon: GraduationCap },
-  { id: 'grading', label: 'Grading', icon: Award },
-  { id: 'fees', label: 'Fees', icon: Banknote },
-  { id: 'library', label: 'Library', icon: BookOpen },
-  { id: 'administration', label: 'Administration', icon: ShieldCheck },
+  { id: 'students', label: 'Students', icon: Users, desc: 'Enrolment & Profiles' },
+  { id: 'staff', label: 'Staff', icon: GraduationCap, desc: 'Teachers & Timebook' },
+  { id: 'grading', label: 'Grading', icon: Award, desc: 'CA & Exam Marksheets' },
+  { id: 'fees', label: 'Fees', icon: Banknote, desc: 'Ledgers & Invoicing' },
+  { id: 'library', label: 'Library', icon: BookOpen, desc: 'Circulation & E-Books' },
+  { id: 'administration', label: 'Administration', icon: ShieldCheck, desc: 'Security & Oversight' },
 ] as const;
 
 export const LandingPage: React.FC<LandingPageProps> = ({
@@ -32,9 +32,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onToggleTheme,
 }) => {
   return (
-    <div className="min-h-[100dvh] w-full flex flex-col bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100 transition-colors">
-      {/* Header */}
-      <header className="h-16 w-full border-b border-slate-200/80 dark:border-slate-800/80 bg-white/90 dark:bg-[#161B22]/90 sticky top-0 z-20 backdrop-blur-md">
+    <div className="h-[100dvh] w-full flex flex-col justify-between bg-[#F7F8FA] dark:bg-[#0D1117] text-slate-900 dark:text-slate-100 overflow-hidden select-none">
+      {/* Top Header */}
+      <header className="h-16 w-full border-b border-slate-200/80 dark:border-slate-800/80 bg-white/90 dark:bg-[#161B22]/90 shrink-0 backdrop-blur-md">
         <div className="w-full max-w-7xl mx-auto h-full px-4 sm:px-8 flex items-center justify-between gap-4">
           {/* Brand Logo & Name */}
           <div className="flex items-center gap-2.5 shrink-0">
@@ -75,104 +75,51 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         </div>
       </header>
 
-      {/* Main Hero & Showcase */}
-      <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-8 py-8 sm:py-12 flex flex-col justify-between gap-10">
-        {/* Hero Header Area */}
+      {/* Main Single-Page Content Area */}
+      <main className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-8 flex flex-col justify-center items-center gap-8 md:gap-12 py-4">
+        {/* Hero Section */}
         <div className="max-w-3xl mx-auto text-center space-y-4">
-          <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold tracking-tight text-slate-900 dark:text-white leading-[1.15] text-balance">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-sky-200 dark:border-sky-900/60 bg-sky-50 dark:bg-sky-950/40 text-[11px] font-semibold text-sky-700 dark:text-sky-300 tracking-wide uppercase">
+            Secondary School Management Portal
+          </div>
+          <h1 className="text-3xl sm:text-5xl md:text-6xl font-bold tracking-tight text-slate-900 dark:text-white leading-[1.12] text-balance">
             Manage your school in one place.
           </h1>
-          <p className="text-base sm:text-lg text-slate-600 dark:text-slate-300 leading-relaxed max-w-2xl mx-auto text-balance">
-            One platform for student records, exam results, school finances and library management.
+          <p className="text-sm sm:text-base md:text-lg text-slate-600 dark:text-slate-300 leading-relaxed max-w-2xl mx-auto text-balance">
+            One platform for student records, exam results, school finances, library management and administration.
           </p>
         </div>
 
-        {/* African School Photography Showcase Grid (5 Distinct Scenes) */}
-        <section aria-label="School Life & Operations" className="w-full space-y-4 sm:space-y-5">
-          {/* Top Row: Headteacher & Teacher */}
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 sm:gap-5">
-            {/* Scene 1: Headteacher in executive office */}
-            <div className="md:col-span-7 group relative overflow-hidden rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 shadow-xs">
-              <img
-                src="/landing/headteacher.jpg"
-                alt="Headteacher overseeing school operations from executive office"
-                loading="eager"
-                className="w-full h-56 sm:h-72 md:h-80 object-cover object-center group-hover:scale-[1.01] transition-transform duration-500 ease-out"
-              />
-            </div>
-
-            {/* Scene 2: Teacher in office reviewing exam marks */}
-            <div className="md:col-span-5 group relative overflow-hidden rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 shadow-xs">
-              <img
-                src="/landing/teacher.jpg"
-                alt="Teacher reviewing student examination papers and marksheet"
-                loading="eager"
-                className="w-full h-56 sm:h-72 md:h-80 object-cover object-center group-hover:scale-[1.01] transition-transform duration-500 ease-out"
-              />
-            </div>
-          </div>
-
-          {/* Bottom Row: Librarian, Digital Library Student, Physical Library Student */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-5">
-            {/* Scene 3: Librarian organizing books */}
-            <div className="group relative overflow-hidden rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 shadow-xs">
-              <img
-                src="/landing/librarian.jpg"
-                alt="School librarian organizing and managing books in library"
-                loading="lazy"
-                className="w-full h-52 sm:h-60 md:h-64 object-cover object-center group-hover:scale-[1.01] transition-transform duration-500 ease-out"
-              />
-            </div>
-
-            {/* Scene 4: Digital library student using smartphone */}
-            <div className="group relative overflow-hidden rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 shadow-xs">
-              <img
-                src="/landing/student-digital.jpg"
-                alt="Secondary school student using smartphone to browse digital online library"
-                loading="lazy"
-                className="w-full h-52 sm:h-60 md:h-64 object-cover object-center group-hover:scale-[1.01] transition-transform duration-500 ease-out"
-              />
-            </div>
-
-            {/* Scene 5: Physical library student reading book */}
-            <div className="group relative overflow-hidden rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 shadow-xs sm:col-span-2 md:col-span-1">
-              <img
-                src="/landing/student-reading.jpg"
-                alt="Secondary school student reading physical book at study desk in school library"
-                loading="lazy"
-                className="w-full h-52 sm:h-60 md:h-64 object-cover object-center group-hover:scale-[1.01] transition-transform duration-500 ease-out"
-              />
-            </div>
-          </div>
-        </section>
-
-        {/* Six Platform Modules - Slim Elegant Feature Strip */}
-        <section aria-label="Platform Core Modules" className="w-full">
-          <div className="w-full bg-white dark:bg-[#161B22] border border-slate-200/90 dark:border-slate-800 rounded-2xl p-3 sm:px-6 sm:py-4 shadow-xs">
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4 items-center">
-              {PLATFORM_MODULES.map((item) => {
-                const IconComponent = item.icon;
-                return (
-                  <div
-                    key={item.id}
-                    className="flex items-center justify-center sm:justify-start gap-2.5 px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800 text-slate-700 dark:text-slate-300"
-                  >
-                    <IconComponent className="w-4 h-4 text-sky-500 dark:text-sky-400 shrink-0" aria-hidden="true" />
-                    <span className="text-xs sm:text-sm font-semibold tracking-tight whitespace-nowrap">
-                      {item.label}
-                    </span>
+        {/* Six Platform Modules Strip */}
+        <div className="w-full max-w-4xl">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-3.5">
+            {PLATFORM_MODULES.map((item) => {
+              const IconComponent = item.icon;
+              return (
+                <div
+                  key={item.id}
+                  className="flex flex-col items-center text-center p-3 sm:p-4 rounded-2xl bg-white dark:bg-[#161B22] border border-slate-200/90 dark:border-slate-800 shadow-xs hover:border-sky-300 dark:hover:border-sky-700/60 transition-colors"
+                >
+                  <div className="h-9 w-9 rounded-xl bg-sky-50 dark:bg-sky-950/50 flex items-center justify-center text-sky-600 dark:text-sky-400 mb-2">
+                    <IconComponent className="w-4 h-4" aria-hidden="true" />
                   </div>
-                );
-              })}
-            </div>
+                  <span className="text-xs sm:text-sm font-bold tracking-tight text-slate-900 dark:text-white">
+                    {item.label}
+                  </span>
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 hidden sm:block">
+                    {item.desc}
+                  </span>
+                </div>
+              );
+            })}
           </div>
-        </section>
+        </div>
       </main>
 
-      {/* Minimal Footer */}
-      <footer className="w-full border-t border-slate-200/80 dark:border-slate-800/80 bg-white/70 dark:bg-[#161B22]/70 py-6 px-4 sm:px-8 text-center">
+      {/* Footer */}
+      <footer className="w-full border-t border-slate-200/80 dark:border-slate-800/80 bg-white/70 dark:bg-[#161B22]/70 py-4 px-4 sm:px-8 text-center shrink-0">
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          &copy; {new Date().getFullYear()} SecSchoolHub. All rights reserved. Provisioned for secondary school administration, academic excellence, and student access.
+          Powered by <span className="font-semibold text-slate-800 dark:text-slate-200">Indelible Technologies</span>
         </p>
       </footer>
     </div>

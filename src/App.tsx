@@ -1561,13 +1561,22 @@ export default function App() {
   if (!user) {
     return (
       <>
-        <LandingPage
-          signingIn={signingIn || verifyingStudentCode}
-          authError={authError}
-          onSignIn={handleUnifiedSignIn}
-          theme={theme}
-          onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
-        />
+        {viewMode === 'landing' ? (
+          <LandingPage
+            onNavigateToLogin={() => setViewMode('login')}
+            theme={theme}
+            onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+          />
+        ) : (
+          <LoginPage
+            signingIn={signingIn || verifyingStudentCode}
+            authError={authError}
+            onSignIn={handleUnifiedSignIn}
+            onNavigateToLanding={() => setViewMode('landing')}
+            theme={theme}
+            onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+          />
+        )}
         <OfflineIndicator />
       </>
     );
