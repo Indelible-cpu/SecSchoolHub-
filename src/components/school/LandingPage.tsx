@@ -79,9 +79,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       <main className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-8 flex flex-col justify-center items-center gap-8 md:gap-12 py-4">
         {/* Hero Section */}
         <div className="max-w-3xl mx-auto text-center space-y-4">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-sky-200 dark:border-sky-900/60 bg-sky-50 dark:bg-sky-950/40 text-[11px] font-semibold text-sky-700 dark:text-sky-300 tracking-wide uppercase">
-            Secondary School Management Portal
-          </div>
           <h1 className="text-3xl sm:text-5xl md:text-6xl font-bold tracking-tight text-slate-900 dark:text-white leading-[1.12] text-balance">
             Manage your school in one place.
           </h1>
@@ -119,7 +116,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       {/* Footer */}
       <footer className="w-full border-t border-slate-200/80 dark:border-slate-800/80 bg-white/70 dark:bg-[#161B22]/70 py-4 px-4 sm:px-8 text-center shrink-0">
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          Powered by <span className="font-semibold text-slate-800 dark:text-slate-200">Indelible Technologies</span>
+          &copy; {new Date().getFullYear()} SecSchoolHub. All rights reserved. &bull; Powered by{' '}
+          <span className="font-semibold text-slate-800 dark:text-slate-200">Indelible Technologies</span>
         </p>
       </footer>
     </div>

@@ -297,7 +297,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({
       {/* Footer */}
       <footer className="w-full border-t border-slate-200/80 dark:border-slate-800/80 bg-white/70 dark:bg-[#161B22]/70 py-4 px-4 sm:px-8 text-center shrink-0">
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          Powered by <span className="font-semibold text-slate-800 dark:text-slate-200">Indelible Technologies</span>
+          &copy; {new Date().getFullYear()} SecSchoolHub. All rights reserved. &bull; Powered by{' '}
+          <span className="font-semibold text-slate-800 dark:text-slate-200">Indelible Technologies</span>
         </p>
       </footer>
     </div>
